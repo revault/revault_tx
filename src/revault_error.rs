@@ -1,6 +1,6 @@
 use std::{error, fmt};
 
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum RevaultError {
     TransactionCreation(String),
 }
