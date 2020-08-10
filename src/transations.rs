@@ -1,3 +1,7 @@
+///! Revault transactions
+///!
+///! Typesafe routines to create bare revault transactions.
+///!
 use super::revault_error::RevaultError;
 
 #[allow(clippy::all)]
@@ -5,46 +9,71 @@ use bitcoin::{OutPoint, Transaction, TxIn, TxOut};
 
 const RBF_SEQUENCE: u32 = u32::MAX - 2;
 
+/// A transaction output created by a Revault transaction.
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum RevaultTxOut {
+    /// A vault transaction output. Used by the funding / deposit transactions, the cancel
+    /// transactions, and the spend transactions (for the change).
     VaultTxOut(TxOut),
+    /// *The* unvault transaction output.
     UnvaultTxOut(TxOut),
+    /// A spend transaction output. As Revault is flexible by default with regard to the
+    /// destination of the spend transaction funds, any number of these can be present in a spend
+    /// transaction (use a VaultTxOut for the change output however).
     SpendTxOut(TxOut),
+    /// The Emergency Deep Vault, the destination of the emergency transactions fund.
     EmergencyTxOut(TxOut),
-    FeeBumpTxOut(TxOut),
+    /// The "fee bumping" output, attached to the unvault transaction so that the fund managers can
+    /// CPFP.
+    CpfpTxOut(TxOut),
 }
 
+/// A transaction output spent by a Revault transaction.
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash, PartialOrd, Ord)]
 pub enum RevaultPrevout {
+    /// A vault txo spent by the unvault transaction and the emergency transaction.
     VaultPrevout(OutPoint),
+    /// An unvault txo spent by the cancel transaction, an emergency transaction, and
+    /// the spend transaction.
     UnvaultPrevout(OutPoint),
-    SpendPrevout(OutPoint),
-    CancelPrevout(OutPoint),
-    EmergencyPrevout(OutPoint),
-    FeeBumpPrevout(OutPoint),
-}
-
-#[derive(PartialEq, Eq, Debug)]
-pub enum RevaultTransaction {
-    UnvaultTransaction(Transaction),
-    SpendTransaction(Transaction),
-    CancelTransaction(Transaction),
-    EmergencyTransaction(Transaction),
+    /// A wallet txo possibly spent by the cancel transaction and the emergency transactions to
+    /// bump the transaction feerate.
+    WalletPrevout(OutPoint),
+    /// The unvault CPFP txo spent to accelerate the confirmation of the unvault transaction.
+    CpfpPrevout(OutPoint),
 }
 
 // Using a struct wrapper around the enum wrapper to create an encapsulation behaviour would be
 // quite verbose..
+
+/// A Revault transaction. Must be instanciated using the new_*() methods.
+#[derive(PartialEq, Eq, Debug)]
+pub enum RevaultTransaction {
+    /// The unvaulting transaction, spending a vault and being eventually spent by a spend
+    /// transaction (if not revaulted).
+    UnvaultTransaction(Transaction),
+    /// The transaction spending the unvaulting transaction, paying to one or multiple
+    /// externally-controlled addresses, and possibly to a new vault txo for the change.
+    SpendTransaction(Transaction),
+    /// The transaction "revaulting" a spend attempt, i.e. spending the unvaulting transaction back
+    /// to a vault txo.
+    CancelTransaction(Transaction),
+    /// The transaction spending either a vault or unvault txo to The Emergency Deep Vault.
+    EmergencyTransaction(Transaction),
+}
+
 impl RevaultTransaction {
+    /// Create an unvault transaction.
+    /// An unvault transaction always spends one vault txout and contains one CPFP txout in
+    /// addition to the unvault one.
     pub fn new_unvault(
         prevouts: &[RevaultPrevout; 1],
         txouts: &[RevaultTxOut; 2],
-    ) -> Result<Self, RevaultError> {
-        // An unvault transaction always spends one vault txout and contains one CPFP txout
-        // in addition to the unvault one.
+    ) -> Result<RevaultTransaction, RevaultError> {
         match (prevouts, txouts) {
             (
                 [RevaultPrevout::VaultPrevout(ref vault_prevout)],
-                [RevaultTxOut::UnvaultTxOut(ref unvault_txout), RevaultTxOut::FeeBumpTxOut(ref cpfp_txout)],
+                [RevaultTxOut::UnvaultTxOut(ref unvault_txout), RevaultTxOut::CpfpTxOut(ref cpfp_txout)],
             ) => {
                 let vault_input = TxIn {
                     previous_output: *vault_prevout,
@@ -64,13 +93,14 @@ impl RevaultTransaction {
         }
     }
 
+    /// Create a new spend transaction.
+    /// A spend transaction can batch multiple unvault txouts, and may have any number of
+    /// txouts (including, but not restricted to, change).
     pub fn new_spend(
         prevouts: &[RevaultPrevout],
         outputs: &[RevaultTxOut],
         csv_value: u32,
-    ) -> Result<Self, RevaultError> {
-        // A spend transaction can batch multiple unvault txouts, and may have any number of
-        // txouts (including, but not restricted to, change).
+    ) -> Result<RevaultTransaction, RevaultError> {
         let mut txins = Vec::<TxIn>::with_capacity(prevouts.len());
         for prevout in prevouts {
             if let RevaultPrevout::UnvaultPrevout(ref prev) = prevout {
@@ -110,12 +140,13 @@ impl RevaultTransaction {
         }))
     }
 
+    /// Create a new cancel transaction.
+    /// A cancel transaction always pays to a vault output and spend the unvault output, and
+    /// may have a fee-bumping input.
     pub fn new_cancel(
         prevouts: &[RevaultPrevout],
         txouts: &[RevaultTxOut],
     ) -> Result<RevaultTransaction, RevaultError> {
-        // A cancel transaction always pays to a vault output and spend the unvault output
-        // but may have a fee-bumping input.
         match (prevouts, txouts) {
             // FIXME: Use https://github.com/rust-lang/rust/issues/54883 once stabilized ..
             (
@@ -123,7 +154,7 @@ impl RevaultTransaction {
                 &[RevaultTxOut::VaultTxOut(ref vault_txout)],
             )
             | (
-                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
+                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::WalletPrevout(_)],
                 &[RevaultTxOut::VaultTxOut(ref vault_txout)],
             ) => {
                 let inputs = prevouts
@@ -131,7 +162,7 @@ impl RevaultTransaction {
                     .map(|prevout| TxIn {
                         previous_output: match prevout {
                             RevaultPrevout::UnvaultPrevout(ref prev)
-                            | RevaultPrevout::FeeBumpPrevout(ref prev) => *prev,
+                            | RevaultPrevout::WalletPrevout(ref prev) => *prev,
                             _ => unreachable!(),
                         },
                         sequence: RBF_SEQUENCE,
@@ -153,19 +184,21 @@ impl RevaultTransaction {
         }
     }
 
+    /// Create an emergency transaction.
+    /// There are two emergency transactions, one spending the vault output and one spending
+    /// the unvault output. Both may have a fee-bumping input.
     pub fn new_emergency(
         prevouts: &[RevaultPrevout],
         txouts: &[RevaultTxOut],
     ) -> Result<RevaultTransaction, RevaultError> {
-        // There are two emergency transactions, one spending the vault output and one spending
-        // the unvault output. Both may have a fee-bumping input.
+        // FIXME: Use https://github.com/rust-lang/rust/issues/54883 once stabilized ..
         match (prevouts, txouts) {
             (
                 &[RevaultPrevout::VaultPrevout(_)],
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             )
             | (
-                &[RevaultPrevout::VaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
+                &[RevaultPrevout::VaultPrevout(_), RevaultPrevout::WalletPrevout(_)],
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             )
             | (
@@ -173,7 +206,7 @@ impl RevaultTransaction {
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             )
             | (
-                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
+                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::WalletPrevout(_)],
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             ) => {
                 let inputs = prevouts
@@ -182,7 +215,7 @@ impl RevaultTransaction {
                         previous_output: match prevout {
                             RevaultPrevout::VaultPrevout(ref prev)
                             | RevaultPrevout::UnvaultPrevout(ref prev)
-                            | RevaultPrevout::FeeBumpPrevout(ref prev) => *prev,
+                            | RevaultPrevout::WalletPrevout(ref prev) => *prev,
                             _ => unreachable!(),
                         },
                         sequence: RBF_SEQUENCE,
@@ -227,14 +260,14 @@ mod tests {
 
         let vault_prevout = RevaultPrevout::VaultPrevout(outpoint);
         let unvault_prevout = RevaultPrevout::UnvaultPrevout(outpoint);
-        let feebump_prevout = RevaultPrevout::FeeBumpPrevout(feebump_outpoint);
+        let feebump_prevout = RevaultPrevout::WalletPrevout(feebump_outpoint);
 
         let txout = TxOut {
             value: 18,
             ..TxOut::default()
         };
         let unvault_txout = RevaultTxOut::UnvaultTxOut(txout.clone());
-        let feebump_txout = RevaultTxOut::FeeBumpTxOut(txout.clone());
+        let feebump_txout = RevaultTxOut::CpfpTxOut(txout.clone());
         let spend_txout = RevaultTxOut::SpendTxOut(txout.clone());
         let vault_txout = RevaultTxOut::VaultTxOut(txout.clone());
         let emer_txout = RevaultTxOut::EmergencyTxOut(txout.clone());
