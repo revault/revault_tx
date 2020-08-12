@@ -101,7 +101,7 @@ pub fn get_default_unvault_descriptors(
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
         Err(compile_err) => Err(RevaultError::ScriptCreation(format!(
-            "Vault policy compilation error: {}",
+            "Unvault policy compilation error: {}",
             compile_err
         ))),
         Ok(miniscript) => Ok((Descriptor::<PublicKey>::Wsh(miniscript.clone()), miniscript)),
@@ -112,20 +112,24 @@ pub fn get_default_unvault_descriptors(
 mod tests {
     use rand::RngCore;
 
-    use super::{get_default_unvault_descriptors, get_default_vault_descriptors};
+    use super::{get_default_unvault_descriptors, get_default_vault_descriptors, RevaultError};
 
     use bitcoin::PublicKey;
 
     fn get_random_pubkey() -> PublicKey {
         let secp = secp256k1::Secp256k1::new();
         let mut rand_bytes = [0u8; 32];
+        // Make rustc happy..
+        let mut secret_key = Err(secp256k1::Error::InvalidSecretKey);
 
-        rand::thread_rng().fill_bytes(&mut rand_bytes);
-        let secret_key = secp256k1::SecretKey::from_slice(&rand_bytes).expect("curve order");
+        while secret_key.is_err() {
+            rand::thread_rng().fill_bytes(&mut rand_bytes);
+            secret_key = secp256k1::SecretKey::from_slice(&rand_bytes);
+        }
 
         PublicKey {
             compressed: true,
-            key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
+            key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key.unwrap()),
         }
     }
 
@@ -179,4 +183,48 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn test_configuration_limits() {
+        assert_eq!(
+            get_default_vault_descriptors(&vec![get_random_pubkey()]),
+            Err(RevaultError::ScriptCreation(
+                "Vault: bad parameters. We need more than one participant.".to_string()
+            ))
+        );
+
+        assert_eq!(
+            get_default_unvault_descriptors(
+                &vec![get_random_pubkey()],
+                &vec![get_random_pubkey()],
+                &vec![get_random_pubkey(), get_random_pubkey()],
+                6
+            ),
+            Err(RevaultError::ScriptCreation(
+                "Unvault: bad parameters. There must be a non-zero \
+                number of managers and non_managers, and as many cosigners as non_managers"
+                    .to_string()
+            ))
+        );
+
+        // Maximum N-of-N (+ 1)
+        let participants = (0..68)
+            .map(|_| get_random_pubkey())
+            .collect::<Vec<PublicKey>>();
+        assert_eq!(get_default_vault_descriptors(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+
+        // Maximum non-managers for 2 managers (+ 1)
+        let managers = (0..2)
+            .map(|_| get_random_pubkey())
+            .collect::<Vec<PublicKey>>();
+        let non_managers = (0..21)
+            .map(|_| get_random_pubkey())
+            .collect::<Vec<PublicKey>>();
+        let cosigners = (0..21)
+            .map(|_| get_random_pubkey())
+            .collect::<Vec<PublicKey>>();
+        assert_eq!(get_default_unvault_descriptors(&non_managers, &managers, &cosigners, 32), Err(RevaultError::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+    }
+
+    // TODO: extensively test all possibilities before reaching the limit
 }
