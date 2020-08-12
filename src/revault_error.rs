@@ -3,6 +3,7 @@ use std::{error, fmt};
 #[derive(PartialEq, Eq, Debug)]
 pub enum RevaultError {
     TransactionCreation(String),
+    ScriptCreation(String),
 }
 
 impl fmt::Display for RevaultError {
@@ -10,6 +11,9 @@ impl fmt::Display for RevaultError {
         match *self {
             RevaultError::TransactionCreation(ref e) => {
                 write!(f, "Revault transaction creation error: {}", e)
+            }
+            RevaultError::ScriptCreation(ref e) => {
+                write!(f, "Revault script creation error: {}", e)
             }
         }
     }
