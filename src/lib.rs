@@ -12,7 +12,7 @@ mod tests {
         RevaultTransaction, RevaultTxOut,
     };
 
-    use bitcoin::{OutPoint, PublicKey, TxOut};
+    use bitcoin::{PublicKey, Transaction, TxIn, TxOut};
 
     use rand::RngCore;
 
@@ -56,13 +56,16 @@ mod tests {
         )
         .expect("Vault descriptor generation error");
 
-        let vault_txo = RevaultTxOut::VaultTxOut(TxOut {
-            value: 1,
-            script_pubkey: vault_descriptor.script_pubkey(),
+        let vault_tx = RevaultTransaction::VaultTransaction(Transaction {
+            version: 2,
+            lock_time: 0,
+            input: vec![TxIn { ..TxIn::default() }],
+            output: vec![TxOut {
+                value: 1,
+                script_pubkey: vault_descriptor.script_pubkey(),
+            }],
         });
-        let vault_prevout = RevaultPrevout::VaultPrevout(OutPoint {
-            ..OutPoint::default()
-        });
+        let vault_prevout = RevaultPrevout::VaultPrevout(vault_tx.prevout(0));
 
         let emer_txo = RevaultTxOut::EmergencyTxOut(TxOut {
             value: 1,
@@ -84,18 +87,13 @@ mod tests {
             RevaultTransaction::new_unvault(&[vault_prevout], &[unvault_txo, cpfp_txo])
                 .expect("Unvault transaction creation failure");
 
-        let unvault_prevout = match unvault_tx {
-            RevaultTransaction::UnvaultTransaction(ref tx) => {
-                RevaultPrevout::UnvaultPrevout(OutPoint {
-                    txid: tx.txid(),
-                    vout: 0,
-                })
-            }
-            _ => unreachable!(),
-        };
-        let _cancel_tx = RevaultTransaction::new_cancel(&[unvault_prevout], &[vault_txo])
+        let unvault_prevout = RevaultPrevout::UnvaultPrevout(unvault_tx.prevout(0));
+        let revault_txo = RevaultTxOut::VaultTxOut(TxOut {
+            value: 1,
+            script_pubkey: vault_descriptor.script_pubkey(),
+        });
+        let _cancel_tx = RevaultTransaction::new_cancel(&[unvault_prevout], &[revault_txo])
             .expect("Cancel transaction creation failure");
-
         let _unvault_emergency_tx =
             RevaultTransaction::new_emergency(&[unvault_prevout], &[emer_txo])
                 .expect("Unvault emergency transaction creation failure");
