@@ -52,7 +52,7 @@ mod tests {
             &managers
                 .into_iter()
                 .chain(non_managers.into_iter())
-                .collect(),
+                .collect::<Vec<PublicKey>>(),
         )
         .expect("Vault descriptor generation error");
 
