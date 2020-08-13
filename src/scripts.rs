@@ -10,16 +10,16 @@
 use super::revault_error::RevaultError;
 
 use bitcoin::PublicKey;
-use miniscript::{policy::concrete::Policy, Descriptor, Miniscript, Segwitv0};
+use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 
 // FIXME: use extended pubkeys everywhere after https://github.com/rust-bitcoin/rust-miniscript/pull/116
 
-/// Get the output and redeem script descriptors for the vault outputs.
+/// Get the miniscript descriptor for the vault outputs.
 ///
 /// The vault policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
 pub fn get_default_vault_descriptors(
     participants: &Vec<PublicKey>,
-) -> Result<(Descriptor<PublicKey>, Miniscript<PublicKey, Segwitv0>), RevaultError> {
+) -> Result<Descriptor<PublicKey>, RevaultError> {
     if participants.len() < 2 {
         return Err(RevaultError::ScriptCreation(
             "Vault: bad parameters. We need more than one participant.".to_string(),
@@ -41,11 +41,11 @@ pub fn get_default_vault_descriptors(
             "Vault policy compilation error: {}",
             compile_err
         ))),
-        Ok(miniscript) => Ok((Descriptor::<PublicKey>::Wsh(miniscript.clone()), miniscript)),
+        Ok(miniscript) => Ok(Descriptor::<PublicKey>::Wsh(miniscript)),
     }
 }
 
-/// Get the output and redeem script descriptors for the unvault outputs.
+/// Get the miniscript descriptors for the unvault outputs.
 ///
 /// The unvault policy allows either all the participants together to spend, or (the fund managers
 /// + the cosigners) after a timelock.
@@ -64,7 +64,7 @@ pub fn get_default_unvault_descriptors(
     managers: &Vec<PublicKey>,
     cosigners: &Vec<PublicKey>,
     csv_value: u32,
-) -> Result<(Descriptor<PublicKey>, Miniscript<PublicKey, Segwitv0>), RevaultError> {
+) -> Result<Descriptor<PublicKey>, RevaultError> {
     if non_managers.len() < 1 || managers.len() < 1 || cosigners.len() != non_managers.len() {
         return Err(RevaultError::ScriptCreation(
             "Unvault: bad parameters. There must be a non-zero \
@@ -104,7 +104,7 @@ pub fn get_default_unvault_descriptors(
             "Unvault policy compilation error: {}",
             compile_err
         ))),
-        Ok(miniscript) => Ok((Descriptor::<PublicKey>::Wsh(miniscript.clone()), miniscript)),
+        Ok(miniscript) => Ok(Descriptor::<PublicKey>::Wsh(miniscript)),
     }
 }
 
