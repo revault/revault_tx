@@ -36,9 +36,11 @@ pub enum RevaultPrevout {
     /// An unvault txo spent by the cancel transaction, an emergency transaction, and
     /// the spend transaction.
     UnvaultPrevout(OutPoint),
-    /// A wallet txo possibly spent by the cancel transaction and the emergency transactions to
-    /// bump the transaction feerate.
-    WalletPrevout(OutPoint),
+    /// A wallet txo spent by a revaulting (cancel, emergency) transaction to bump the
+    /// transaction feerate.
+    /// This output is often created by a first stage transaction, but may directly be a wallet
+    /// utxo.
+    FeeBumpPrevout(OutPoint),
     /// The unvault CPFP txo spent to accelerate the confirmation of the unvault transaction.
     CpfpPrevout(OutPoint),
 }
@@ -46,9 +48,12 @@ pub enum RevaultPrevout {
 // Using a struct wrapper around the enum wrapper to create an encapsulation behaviour would be
 // quite verbose..
 
-/// A Revault transaction. Must be instanciated using the new_*() methods.
+/// A Revault transaction. Apart from the VaultTransaction, all variants must be instanciated
+/// using the new_*() methods.
 #[derive(PartialEq, Eq, Debug)]
 pub enum RevaultTransaction {
+    /// The funding transaction, we don't create it but it's a handy wrapper.
+    VaultTransaction(Transaction),
     /// The unvaulting transaction, spending a vault and being eventually spent by a spend
     /// transaction (if not revaulted).
     UnvaultTransaction(Transaction),
@@ -154,7 +159,7 @@ impl RevaultTransaction {
                 &[RevaultTxOut::VaultTxOut(ref vault_txout)],
             )
             | (
-                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::WalletPrevout(_)],
+                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
                 &[RevaultTxOut::VaultTxOut(ref vault_txout)],
             ) => {
                 let inputs = prevouts
@@ -162,7 +167,7 @@ impl RevaultTransaction {
                     .map(|prevout| TxIn {
                         previous_output: match prevout {
                             RevaultPrevout::UnvaultPrevout(ref prev)
-                            | RevaultPrevout::WalletPrevout(ref prev) => *prev,
+                            | RevaultPrevout::FeeBumpPrevout(ref prev) => *prev,
                             _ => unreachable!(),
                         },
                         sequence: RBF_SEQUENCE,
@@ -198,7 +203,7 @@ impl RevaultTransaction {
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             )
             | (
-                &[RevaultPrevout::VaultPrevout(_), RevaultPrevout::WalletPrevout(_)],
+                &[RevaultPrevout::VaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             )
             | (
@@ -206,7 +211,7 @@ impl RevaultTransaction {
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             )
             | (
-                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::WalletPrevout(_)],
+                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
                 &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
             ) => {
                 let inputs = prevouts
@@ -215,7 +220,7 @@ impl RevaultTransaction {
                         previous_output: match prevout {
                             RevaultPrevout::VaultPrevout(ref prev)
                             | RevaultPrevout::UnvaultPrevout(ref prev)
-                            | RevaultPrevout::WalletPrevout(ref prev) => *prev,
+                            | RevaultPrevout::FeeBumpPrevout(ref prev) => *prev,
                             _ => unreachable!(),
                         },
                         sequence: RBF_SEQUENCE,
@@ -234,6 +239,22 @@ impl RevaultTransaction {
                 "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 prevouts, txouts,
             ))),
+        }
+    }
+
+    /// Get the specified output of this transaction as an OutPoint to be referenced
+    /// in a following transaction.
+    /// Mainly useful to avoid the destructuring boilerplate.
+    pub fn prevout(&self, vout: u32) -> OutPoint {
+        match *self {
+            RevaultTransaction::VaultTransaction(ref tx)
+            | RevaultTransaction::UnvaultTransaction(ref tx)
+            | RevaultTransaction::SpendTransaction(ref tx)
+            | RevaultTransaction::CancelTransaction(ref tx)
+            | RevaultTransaction::EmergencyTransaction(ref tx) => OutPoint {
+                txid: tx.txid(),
+                vout: vout,
+            },
         }
     }
 }
@@ -260,7 +281,7 @@ mod tests {
 
         let vault_prevout = RevaultPrevout::VaultPrevout(outpoint);
         let unvault_prevout = RevaultPrevout::UnvaultPrevout(outpoint);
-        let feebump_prevout = RevaultPrevout::WalletPrevout(feebump_outpoint);
+        let feebump_prevout = RevaultPrevout::FeeBumpPrevout(feebump_outpoint);
 
         let txout = TxOut {
             value: 18,
