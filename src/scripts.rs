@@ -18,7 +18,7 @@ use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 ///
 /// The vault policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
 pub fn get_default_vault_descriptors(
-    participants: &Vec<PublicKey>,
+    participants: &[PublicKey],
 ) -> Result<Descriptor<PublicKey>, RevaultError> {
     if participants.len() < 2 {
         return Err(RevaultError::ScriptCreation(
@@ -60,12 +60,12 @@ pub fn get_default_vault_descriptors(
 /// `and(thresh(len(managers), managers), or(1@thresh(len(non_managers), non_managers),
 /// 9@and(thresh(len(cosigners), cosigners), older(X))))`
 pub fn get_default_unvault_descriptors(
-    non_managers: &Vec<PublicKey>,
-    managers: &Vec<PublicKey>,
-    cosigners: &Vec<PublicKey>,
+    non_managers: &[PublicKey],
+    managers: &[PublicKey],
+    cosigners: &[PublicKey],
     csv_value: u32,
 ) -> Result<Descriptor<PublicKey>, RevaultError> {
-    if non_managers.len() < 1 || managers.len() < 1 || cosigners.len() != non_managers.len() {
+    if non_managers.is_empty() || managers.is_empty() || cosigners.len() != non_managers.len() {
         return Err(RevaultError::ScriptCreation(
             "Unvault: bad parameters. There must be a non-zero \
                 number of managers and non_managers, and as many cosigners as non_managers"
@@ -175,7 +175,7 @@ mod tests {
                 &managers
                     .into_iter()
                     .chain(non_managers.into_iter())
-                    .collect(),
+                    .collect::<Vec<PublicKey>>(),
             )
             .expect(&format!(
                 "Vault descriptors creation error with ({}, {})",

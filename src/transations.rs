@@ -253,7 +253,7 @@ impl RevaultTransaction {
             | RevaultTransaction::CancelTransaction(ref tx)
             | RevaultTransaction::EmergencyTransaction(ref tx) => OutPoint {
                 txid: tx.txid(),
-                vout: vout,
+                vout,
             },
         }
     }
