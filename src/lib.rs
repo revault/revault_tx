@@ -45,10 +45,10 @@ mod tests {
         let cosigners = (0..8)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        let (unvault_descriptor, _) =
+        let unvault_descriptor =
             get_default_unvault_descriptors(&non_managers, &managers, &cosigners, 42)
                 .expect("Unvault descriptor generation error");
-        let (vault_descriptor, _) = get_default_vault_descriptors(
+        let vault_descriptor = get_default_vault_descriptors(
             &managers
                 .into_iter()
                 .chain(non_managers.into_iter())
