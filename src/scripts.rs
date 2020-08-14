@@ -58,7 +58,7 @@ pub fn get_default_vault_descriptors(
 ///
 /// As we expect the usual operations to be far more likely, we further optimize the policy to:
 /// `and(thresh(len(managers), managers), or(1@thresh(len(non_managers), non_managers),
-/// 9@and(thresh(len(cosigners), cosigners), older(X))))`
+/// 10@and(thresh(len(cosigners), cosigners), older(X))))`
 pub fn get_default_unvault_descriptors(
     non_managers: &[PublicKey],
     managers: &[PublicKey],
@@ -91,10 +91,10 @@ pub fn get_default_unvault_descriptors(
         .collect::<Vec<Policy<PublicKey>>>();
     let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
-    let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older(csv_value)]);
+    let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::After(csv_value)]);
 
     let cosigners_or_non_spenders =
-        Policy::Or(vec![(9, cosigners_and_csv), (1, non_spenders_thres)]);
+        Policy::Or(vec![(10, cosigners_and_csv), (1, non_spenders_thres)]);
 
     let policy = Policy::And(vec![spenders_thres, cosigners_or_non_spenders]);
 
