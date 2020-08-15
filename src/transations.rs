@@ -417,7 +417,9 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
 #[cfg(test)]
 mod tests {
     use super::{
-        super::{get_default_unvault_descriptors, get_default_vault_descriptors},
+        super::{
+            get_default_unvault_descriptors, get_default_vault_descriptors, unvault_cpfp_descriptor,
+        },
         RevaultError, RevaultPrevout, RevaultSatisfier, RevaultTransaction, RevaultTxOut,
         RBF_SEQUENCE,
     };
@@ -824,11 +826,12 @@ mod tests {
             .cloned()
             .collect::<Vec<secp256k1::SecretKey>>();
 
-        // The two interesting outputs, which Scripts are "hard" to satisfy generalistically
-        const CSV_VALUE: u32 = 42;
+        // Get the script descriptors for the txo we're going to create
         let unvault_descriptor =
             get_default_unvault_descriptors(&non_managers, &managers, &cosigners, CSV_VALUE)
                 .expect("Unvault descriptor generation error");
+        let cpfp_descriptor =
+            unvault_cpfp_descriptor(&managers).expect("Unvault CPFP descriptor generation error");
         let vault_descriptor = get_default_vault_descriptors(
             &managers
                 .into_iter()
@@ -886,14 +889,17 @@ mod tests {
 
         // Create but *do not sign* the unvaulting transaction until all revaulting transactions
         // are
-        let unvault_scriptpubkey = unvault_descriptor.script_pubkey();
+        let (unvault_scriptpubkey, cpfp_scriptpubkey) = (
+            unvault_descriptor.script_pubkey(),
+            cpfp_descriptor.script_pubkey(),
+        );
         let unvault_txo = RevaultTxOut::UnvaultTxOut(TxOut {
             value: 1,
             script_pubkey: unvault_scriptpubkey.clone(),
         });
         let cpfp_txo = RevaultTxOut::CpfpTxOut(TxOut {
-            value: 1,
-            ..TxOut::default()
+            value: 330,
+            script_pubkey: cpfp_scriptpubkey,
         });
         let mut unvault_tx =
             RevaultTransaction::new_unvault(&[vault_prevout], &[unvault_txo, cpfp_txo])

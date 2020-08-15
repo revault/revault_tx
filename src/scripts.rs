@@ -108,11 +108,37 @@ pub fn get_default_unvault_descriptors(
     }
 }
 
+/// Get the miniscript descriptor for the unvault transaction CPFP output.
+///
+/// It's a basic N-of-N between the fund managers.
+pub fn unvault_cpfp_descriptor(
+    managers: &[PublicKey],
+) -> Result<Descriptor<PublicKey>, RevaultError> {
+    let pubkeys = managers
+        .iter()
+        .map(|pubkey| Policy::Key(*pubkey))
+        .collect::<Vec<Policy<PublicKey>>>();
+
+    let policy = Policy::Threshold(pubkeys.len(), pubkeys);
+
+    // This handles the non-safe or malleable cases.
+    match policy.compile::<Segwitv0>() {
+        Err(compile_err) => Err(RevaultError::ScriptCreation(format!(
+            "Unvault CPFP policy compilation error: {}",
+            compile_err
+        ))),
+        Ok(miniscript) => Ok(Descriptor::<PublicKey>::Wsh(miniscript)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::RngCore;
 
-    use super::{get_default_unvault_descriptors, get_default_vault_descriptors, RevaultError};
+    use super::{
+        get_default_unvault_descriptors, get_default_vault_descriptors, unvault_cpfp_descriptor,
+        RevaultError,
+    };
 
     use bitcoin::PublicKey;
 
@@ -173,12 +199,17 @@ mod tests {
             );
             get_default_vault_descriptors(
                 &managers
-                    .into_iter()
-                    .chain(non_managers.into_iter())
+                    .iter()
+                    .chain(non_managers.iter())
+                    .copied()
                     .collect::<Vec<PublicKey>>(),
             )
             .expect(&format!(
                 "Vault descriptors creation error with ({}, {})",
+                n_managers, n_non_managers
+            ));
+            unvault_cpfp_descriptor(&managers).expect(&format!(
+                "Unvault CPFP descriptors creation error with ({}, {})",
                 n_managers, n_non_managers
             ));
         }
