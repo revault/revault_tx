@@ -4,8 +4,11 @@
 ///!
 use super::revault_error::RevaultError;
 
-#[allow(clippy::all)]
-use bitcoin::{OutPoint, Transaction, TxIn, TxOut};
+use bitcoin::{OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut};
+use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
+use secp256k1::Signature;
+
+use std::collections::HashMap;
 
 const RBF_SEQUENCE: u32 = u32::MAX - 2;
 
@@ -112,7 +115,7 @@ impl RevaultTransaction {
                 txins.push(TxIn {
                     previous_output: *prev,
                     sequence: csv_value,
-                    ..Default::default()
+                    ..TxIn::default()
                 })
             } else {
                 return Err(RevaultError::TransactionCreation(format!(
@@ -256,6 +259,158 @@ impl RevaultTransaction {
                 vout,
             },
         }
+    }
+
+    /// Get the sighash for any RevaultTransaction input.
+    /// This is a wrapper around rust-bitcoin's `signature_hash()` but as we only ever sign
+    /// transaction with ALL or ALL|ANYONECANPAY we don't need to be generalistic with choosing
+    /// the type.
+    pub fn signature_hash(
+        &self,
+        input_index: usize,
+        script_pubkey: &Script,
+        anyonecanpay: bool,
+    ) -> SigHash {
+        match *self {
+            RevaultTransaction::VaultTransaction(ref tx)
+            | RevaultTransaction::UnvaultTransaction(ref tx)
+            | RevaultTransaction::SpendTransaction(ref tx)
+            | RevaultTransaction::CancelTransaction(ref tx)
+            | RevaultTransaction::EmergencyTransaction(ref tx) => {
+                if anyonecanpay {
+                    return tx.signature_hash(input_index, script_pubkey, 0x81);
+                }
+                tx.signature_hash(input_index, script_pubkey, 0x01)
+            }
+        }
+    }
+}
+
+/// A small wrapper around what is needed to implement the Satisfier trait for Revault
+/// transactions.
+struct RevaultInputSatisfier<Pk: MiniscriptKey> {
+    pkhashmap: HashMap<Pk::Hash, Pk>,
+    sigmap: HashMap<Pk, BitcoinSig>,
+    sequence: u32,
+}
+
+impl<Pk: MiniscriptKey + ToPublicKey> RevaultInputSatisfier<Pk> {
+    fn new(sequence: u32) -> RevaultInputSatisfier<Pk> {
+        RevaultInputSatisfier::<Pk> {
+            sequence,
+            pkhashmap: HashMap::<Pk::Hash, Pk>::new(),
+            sigmap: HashMap::<Pk, BitcoinSig>::new(),
+        }
+    }
+
+    fn insert_sig(
+        &mut self,
+        pubkey: Pk,
+        sig: Signature,
+        is_anyonecanpay: bool,
+    ) -> Option<BitcoinSig> {
+        self.pkhashmap
+            .insert(pubkey.to_pubkeyhash(), pubkey.clone());
+        self.sigmap.insert(
+            pubkey,
+            (
+                sig,
+                if is_anyonecanpay {
+                    SigHashType::AllPlusAnyoneCanPay
+                } else {
+                    SigHashType::All
+                },
+            ),
+        )
+    }
+}
+
+impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for RevaultInputSatisfier<Pk> {
+    fn lookup_sig(&self, key: &Pk) -> Option<BitcoinSig> {
+        self.sigmap.get(key).copied()
+    }
+
+    // The policy compiler will often optimize the Script to use pkH, so we need this method to be
+    // implemented *both* for satisfaction and disatisfaction !
+    fn lookup_pkh_sig(&self, keyhash: &Pk::Hash) -> Option<(PublicKey, BitcoinSig)> {
+        if let Some(key) = self.pkhashmap.get(keyhash) {
+            if let Some((sig, sig_type)) = self.lookup_sig(key) {
+                return Some((key.to_public_key(), (sig, sig_type)));
+            }
+        }
+        None
+    }
+
+    fn check_after(&self, csv: u32) -> bool {
+        self.sequence == csv
+    }
+}
+
+/// A wrapper handling the satisfaction of a RevaultTransaction input given the input's index
+/// and the previous output's script descriptor
+pub struct RevaultSatisfier<'a, Pk: MiniscriptKey + ToPublicKey> {
+    txin: &'a mut TxIn,
+    descriptor: &'a Descriptor<Pk>,
+    satisfier: RevaultInputSatisfier<Pk>,
+}
+
+impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
+    /// Create a satisfier for a RevaultTransaction from the actual transaction, the input's index,
+    /// and the descriptor of the output spent by this input.
+    /// Errors on OOB.
+    pub fn new(
+        transaction: &'a mut RevaultTransaction,
+        input_index: usize,
+        descriptor: &'a Descriptor<Pk>,
+    ) -> Result<RevaultSatisfier<'a, Pk>, RevaultError> {
+        let txin = match transaction {
+            RevaultTransaction::VaultTransaction(ref mut tx)
+            | RevaultTransaction::UnvaultTransaction(ref mut tx)
+            | RevaultTransaction::SpendTransaction(ref mut tx)
+            | RevaultTransaction::CancelTransaction(ref mut tx)
+            | RevaultTransaction::EmergencyTransaction(ref mut tx) => {
+                if input_index >= tx.input.len() {
+                    return Err(RevaultError::InputSatisfaction(format!(
+                        "Input index '{}' out of bonds of the transaction '{:?}'.",
+                        input_index, tx.input
+                    )));
+                }
+                &mut tx.input[input_index]
+            }
+        };
+
+        Ok(RevaultSatisfier::<Pk> {
+            satisfier: RevaultInputSatisfier::new(txin.sequence),
+            txin,
+            descriptor,
+        })
+    }
+
+    /// Insert a signature for a given pubkey to eventually satisfy the spending conditions of the
+    /// referenced utxo.
+    /// This is a wrapper around the mapping from a public key to signature used by the Miniscript
+    /// satisfier, and as we only ever use ALL or ALL|ANYONECANPAY signatures, this restrics the
+    /// signature type using a boolean.
+    pub fn insert_sig(
+        &mut self,
+        pubkey: Pk,
+        sig: Signature,
+        is_anyonecanpay: bool,
+    ) -> Option<BitcoinSig> {
+        self.satisfier.insert_sig(pubkey, sig, is_anyonecanpay)
+    }
+
+    /// Fulfill the txin's witness. Errors if we can't provide a valid one out of the previously
+    /// given signatures.
+    pub fn satisfy(&mut self) -> Result<(), RevaultError> {
+        if let Err(e) = self.descriptor.satisfy(&mut self.txin, &self.satisfier) {
+            return Err(RevaultError::InputSatisfaction(format!(
+                "Script satisfaction error: {}.",
+                e
+            )));
+        }
+
+        Ok(())
     }
 }
 

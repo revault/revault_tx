@@ -4,6 +4,7 @@ use std::{error, fmt};
 pub enum RevaultError {
     TransactionCreation(String),
     ScriptCreation(String),
+    InputSatisfaction(String),
 }
 
 impl fmt::Display for RevaultError {
@@ -14,6 +15,9 @@ impl fmt::Display for RevaultError {
             }
             RevaultError::ScriptCreation(ref e) => {
                 write!(f, "Revault script creation error: {}", e)
+            }
+            RevaultError::InputSatisfaction(ref e) => {
+                write!(f, "Revault input satisfaction error: {}", e)
             }
         }
     }
