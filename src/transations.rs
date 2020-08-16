@@ -4,11 +4,16 @@
 ///!
 use super::revault_error::RevaultError;
 
-use bitcoin::{OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut};
+use bitcoin::{
+    consensus::encode,
+    consensus::encode::{serialize, Encodable},
+    OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
+};
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
 use secp256k1::Signature;
 
 use std::collections::HashMap;
+use std::io;
 
 const RBF_SEQUENCE: u32 = u32::MAX - 2;
 
@@ -282,6 +287,31 @@ impl RevaultTransaction {
                 }
                 tx.signature_hash(input_index, script_pubkey, 0x01)
             }
+        }
+    }
+
+    /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
+    pub fn hex(&self) -> String {
+        let mut buff = Vec::<u8>::new();
+        let mut as_hex = String::new();
+
+        self.consensus_encode(&mut buff);
+        for byte in buff.into_iter() {
+            as_hex.push_str(&format!("{:02x}", byte));
+        }
+
+        as_hex
+    }
+}
+
+impl Encodable for RevaultTransaction {
+    fn consensus_encode<S: io::Write>(&self, mut s: S) -> Result<usize, encode::Error> {
+        match *self {
+            RevaultTransaction::VaultTransaction(ref tx)
+            | RevaultTransaction::UnvaultTransaction(ref tx)
+            | RevaultTransaction::SpendTransaction(ref tx)
+            | RevaultTransaction::CancelTransaction(ref tx)
+            | RevaultTransaction::EmergencyTransaction(ref tx) => tx.consensus_encode(&mut s),
         }
     }
 }
