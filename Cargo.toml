@@ -6,8 +6,9 @@ edition = "2018"
 
 
 [dependencies]
-bitcoin = "0.23.0"
-miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript", branch = "master", features = ["compiler"] }
+bitcoin = { git = "https://github.com/darosior/rust-bitcoin", branch = "hack_sighashcache" }
+bitcoinconsensus = "0.19.0-1"
+miniscript = { git = "https://github.com/darosior/rust-miniscript", branch = "hack_sighashcache", features = ["compiler"] }
 secp256k1 = { version = "0.17.2" }
 
 [dev-dependencies]

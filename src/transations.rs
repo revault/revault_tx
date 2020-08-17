@@ -7,6 +7,7 @@ use super::revault_error::RevaultError;
 use bitcoin::{
     consensus::encode,
     consensus::encode::{serialize, Encodable},
+    util::bip143::SigHashCache,
     OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
 };
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
@@ -31,9 +32,13 @@ pub enum RevaultTxOut {
     SpendTxOut(TxOut),
     /// The Emergency Deep Vault, the destination of the emergency transactions fund.
     EmergencyTxOut(TxOut),
-    /// The "fee bumping" output, attached to the unvault transaction so that the fund managers can
+    /// The output attached to the unvault transaction so that the fund managers can
     /// CPFP.
     CpfpTxOut(TxOut),
+    /// The output spent by the revaulting transactions to bump their feerate
+    FeeBumpTxOut(TxOut),
+    /// An untagged external output, spent by the vault transaction
+    ExternalTxOut(TxOut),
 }
 
 /// A transaction output spent by a Revault transaction.
@@ -273,34 +278,136 @@ impl RevaultTransaction {
     pub fn signature_hash(
         &self,
         input_index: usize,
-        script_pubkey: &Script,
-        anyonecanpay: bool,
-    ) -> SigHash {
+        previous_txout: &RevaultTxOut,
+        script_code: &Script,
+        is_anyonecanpay: bool,
+    ) -> Result<SigHash, RevaultError> {
+        // Called if types match
+        fn sighash(
+            tx: &Transaction,
+            input_index: usize,
+            previous_txout: &TxOut,
+            script_code: &Script,
+            is_anyonecanpay: bool,
+        ) -> SigHash {
+            let mut cache = SigHashCache::new(&tx);
+            if is_anyonecanpay {
+                return cache.signature_hash(
+                    input_index,
+                    &script_code,
+                    previous_txout.value,
+                    SigHashType::AllPlusAnyoneCanPay,
+                );
+            }
+            cache.signature_hash(
+                input_index,
+                &script_code,
+                previous_txout.value,
+                SigHashType::All,
+            )
+        }
+
+        match *self {
+            RevaultTransaction::VaultTransaction(ref tx) => {
+                match previous_txout {
+                    RevaultTxOut::ExternalTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
+                    _ => Err(RevaultError::Signature("Wrong transaction output type: vault transactions only external utxos".to_string())),
+                }
+            }
+            RevaultTransaction::UnvaultTransaction(ref tx) => match previous_txout {
+                RevaultTxOut::VaultTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
+                _ => Err(RevaultError::Signature("Wrong transaction output type: unvault transactions only spend vault transactions".to_string())),
+            },
+            RevaultTransaction::SpendTransaction(ref tx) => match previous_txout {
+                RevaultTxOut::UnvaultTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
+                _ => Err(RevaultError::Signature("Wrong transaction output type: spend transactions only spend unvault transactions".to_string())),
+            },
+            RevaultTransaction::CancelTransaction(ref tx) => match previous_txout {
+                RevaultTxOut::UnvaultTxOut(ref txo) | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
+                _ => Err(RevaultError::Signature("Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions".to_string())),
+            },
+            RevaultTransaction::EmergencyTransaction(ref tx) => match previous_txout {
+                RevaultTxOut::VaultTxOut(ref txo) | RevaultTxOut::UnvaultTxOut(ref txo) | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
+                _ => Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string())),
+            }
+        }
+    }
+
+    /// Verify this transaction validity against libbitcoinconsensus.
+    /// Handles all the destructuring and txout research internally.
+    pub fn verify(
+        &self,
+        previous_transactions: &[&RevaultTransaction],
+    ) -> Result<(), RevaultError> {
+        // Look for a referenced txout in the set of spent transactions
+        // TODO: optimize this by walking the previous tx set only once ?
+        fn get_txout(prevout: &OutPoint, transactions: &[&RevaultTransaction]) -> Option<TxOut> {
+            for prev_tx in transactions {
+                match *prev_tx {
+                    RevaultTransaction::VaultTransaction(ref tx)
+                    | RevaultTransaction::UnvaultTransaction(ref tx)
+                    | RevaultTransaction::SpendTransaction(ref tx)
+                    | RevaultTransaction::CancelTransaction(ref tx)
+                    | RevaultTransaction::EmergencyTransaction(ref tx) => {
+                        if tx.txid() == prevout.txid {
+                            if prevout.vout as usize >= tx.output.len() {
+                                return None;
+                            }
+                            return Some(tx.output[prevout.vout as usize].clone());
+                        }
+                    }
+                }
+            }
+
+            None
+        }
+
         match *self {
             RevaultTransaction::VaultTransaction(ref tx)
             | RevaultTransaction::UnvaultTransaction(ref tx)
             | RevaultTransaction::SpendTransaction(ref tx)
             | RevaultTransaction::CancelTransaction(ref tx)
             | RevaultTransaction::EmergencyTransaction(ref tx) => {
-                if anyonecanpay {
-                    return tx.signature_hash(input_index, script_pubkey, 0x81);
+                for (index, txin) in tx.input.iter().enumerate() {
+                    match get_txout(&txin.previous_output, &previous_transactions) {
+                        Some(prev_txout) => {
+                            if let Err(err) = bitcoinconsensus::verify(
+                                &prev_txout.script_pubkey.as_bytes(),
+                                prev_txout.value,
+                                serialize(&*tx).as_slice(),
+                                index,
+                            ) {
+                                return Err(RevaultError::TransactionVerification(format!(
+                                    "Bitcoinconsensus error: {:?}",
+                                    err
+                                )));
+                            }
+                        }
+                        None => {
+                            return Err(RevaultError::TransactionVerification(format!(
+                                "Unknown txout refered by txin '{:?}'",
+                                txin
+                            )));
+                        }
+                    }
                 }
-                tx.signature_hash(input_index, script_pubkey, 0x01)
             }
         }
+
+        Ok(())
     }
 
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
-    pub fn hex(&self) -> String {
+    pub fn hex(&self) -> Result<String, Box<dyn std::error::Error>> {
         let mut buff = Vec::<u8>::new();
         let mut as_hex = String::new();
 
-        self.consensus_encode(&mut buff);
+        self.consensus_encode(&mut buff)?;
         for byte in buff.into_iter() {
             as_hex.push_str(&format!("{:02x}", byte));
         }
 
-        as_hex
+        Ok(as_hex)
     }
 }
 
@@ -469,6 +576,53 @@ mod tests {
         }
 
         secret_key.unwrap()
+    }
+
+    fn get_participants_sets(
+        secp: &secp256k1::Secp256k1<secp256k1::All>,
+    ) -> (
+        (Vec<secp256k1::SecretKey>, Vec<PublicKey>),
+        (Vec<secp256k1::SecretKey>, Vec<PublicKey>),
+        (Vec<secp256k1::SecretKey>, Vec<PublicKey>),
+    ) {
+        let managers_priv = (0..3)
+            .map(|_| get_random_privkey())
+            .collect::<Vec<secp256k1::SecretKey>>();
+        let managers = managers_priv
+            .iter()
+            .map(|privkey| PublicKey {
+                compressed: true,
+                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+            })
+            .collect::<Vec<PublicKey>>();
+
+        let non_managers_priv = (0..8)
+            .map(|_| get_random_privkey())
+            .collect::<Vec<secp256k1::SecretKey>>();
+        let non_managers = non_managers_priv
+            .iter()
+            .map(|privkey| PublicKey {
+                compressed: true,
+                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+            })
+            .collect::<Vec<PublicKey>>();
+
+        let cosigners_priv = (0..8)
+            .map(|_| get_random_privkey())
+            .collect::<Vec<secp256k1::SecretKey>>();
+        let cosigners = cosigners_priv
+            .iter()
+            .map(|privkey| PublicKey {
+                compressed: true,
+                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+            })
+            .collect::<Vec<PublicKey>>();
+
+        (
+            (managers_priv, managers),
+            (non_managers_priv, non_managers),
+            (cosigners_priv, cosigners),
+        )
     }
 
     #[test]
@@ -817,46 +971,23 @@ mod tests {
 
     #[test]
     fn test_transaction_chain_satisfaction() {
+        const CSV_VALUE: u32 = 42;
+
         let secp = secp256k1::Secp256k1::new();
 
-        // Generate some private key pairs for every participant
-        let managers_priv = (0..3)
-            .map(|_| get_random_privkey())
-            .collect::<Vec<secp256k1::SecretKey>>();
-        let managers = managers_priv
-            .iter()
-            .map(|privkey| PublicKey {
-                compressed: true,
-                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-            })
-            .collect::<Vec<PublicKey>>();
-        let non_managers_priv = (0..8)
-            .map(|_| get_random_privkey())
-            .collect::<Vec<secp256k1::SecretKey>>();
-        let non_managers = non_managers_priv
-            .iter()
-            .map(|privkey| PublicKey {
-                compressed: true,
-                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-            })
-            .collect::<Vec<PublicKey>>();
-        let cosigners_priv = (0..8)
-            .map(|_| get_random_privkey())
-            .collect::<Vec<secp256k1::SecretKey>>();
-        let cosigners = cosigners_priv
-            .iter()
-            .map(|privkey| PublicKey {
-                compressed: true,
-                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-            })
-            .collect::<Vec<PublicKey>>();
+        // Keys, keys, keys everywhere !
+        let (
+            (managers_priv, managers),
+            (non_managers_priv, non_managers),
+            (cosigners_priv, cosigners),
+        ) = get_participants_sets(&secp);
         let all_participants_priv = managers_priv
             .iter()
             .chain(non_managers_priv.iter())
             .cloned()
             .collect::<Vec<secp256k1::SecretKey>>();
 
-        // Get the script descriptors for the txo we're going to create
+        // Get the script descriptors for the txos we're going to create
         let unvault_descriptor =
             get_default_unvault_descriptors(&non_managers, &managers, &cosigners, CSV_VALUE)
                 .expect("Unvault descriptor generation error");
@@ -872,7 +1003,7 @@ mod tests {
 
         // The funding transaction does not matter (random txid from my mempool)
         let vault_scriptpubkey = vault_descriptor.script_pubkey();
-        let vault_tx = RevaultTransaction::VaultTransaction(Transaction {
+        let vault_raw_tx = Transaction {
             version: 2,
             lock_time: 0,
             input: vec![TxIn {
@@ -883,39 +1014,48 @@ mod tests {
                 ..TxIn::default()
             }],
             output: vec![TxOut {
-                value: 1,
+                value: 360,
                 script_pubkey: vault_scriptpubkey.clone(),
             }],
-        });
+        };
+        let vault_txo = RevaultTxOut::VaultTxOut(vault_raw_tx.output[0].clone());
+        let vault_tx = RevaultTransaction::VaultTransaction(vault_raw_tx);
         let vault_prevout = RevaultPrevout::VaultPrevout(vault_tx.prevout(0));
 
         // Create and sign the first (vault) emergency transaction
         let emer_txo = RevaultTxOut::EmergencyTxOut(TxOut {
-            value: 1,
+            value: 450,
             ..TxOut::default()
         });
         let mut emergency_tx =
             RevaultTransaction::new_emergency(&[vault_prevout], &[emer_txo.clone()])
                 .expect("Vault emergency transaction creation falure");
-        let emergency_tx_sighash = emergency_tx.signature_hash(0, &vault_scriptpubkey, true);
-        let mut revault_sat = RevaultSatisfier::new(&mut emergency_tx, 0, &vault_descriptor)
-            .expect("Creating satisfier.");
-        all_participants_priv.iter().for_each(|privkey| {
-            revault_sat.insert_sig(
-                PublicKey {
-                    compressed: true,
-                    key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-                },
-                secp.sign(
-                    &secp256k1::Message::from_slice(&emergency_tx_sighash).unwrap(),
-                    &privkey,
-                ),
-                true,
-            );
-        });
-        revault_sat
-            .satisfy()
-            .expect("Satisfying emergency transaction");
+        let emergency_tx_sighash = emergency_tx
+            .signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true)
+            .expect("Vault emergency sighash");
+        {
+            let mut revault_sat = RevaultSatisfier::new(&mut emergency_tx, 0, &vault_descriptor)
+                .expect("Creating satisfier.");
+            all_participants_priv.iter().for_each(|privkey| {
+                revault_sat.insert_sig(
+                    PublicKey {
+                        compressed: true,
+                        key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                    },
+                    secp.sign(
+                        &secp256k1::Message::from_slice(&emergency_tx_sighash).unwrap(),
+                        &privkey,
+                    ),
+                    true,
+                );
+            });
+            revault_sat
+                .satisfy()
+                .expect("Satisfying emergency transaction");
+        }
+        emergency_tx
+            .verify(&[&vault_tx])
+            .expect("Verifying emergency transation");
 
         // Create but *do not sign* the unvaulting transaction until all revaulting transactions
         // are
@@ -924,7 +1064,7 @@ mod tests {
             cpfp_descriptor.script_pubkey(),
         );
         let unvault_txo = RevaultTxOut::UnvaultTxOut(TxOut {
-            value: 1,
+            value: 7000,
             script_pubkey: unvault_scriptpubkey.clone(),
         });
         let cpfp_txo = RevaultTxOut::CpfpTxOut(TxOut {
@@ -932,66 +1072,87 @@ mod tests {
             script_pubkey: cpfp_scriptpubkey,
         });
         let mut unvault_tx =
-            RevaultTransaction::new_unvault(&[vault_prevout], &[unvault_txo, cpfp_txo])
+            RevaultTransaction::new_unvault(&[vault_prevout], &[unvault_txo.clone(), cpfp_txo])
                 .expect("Unvault transaction creation failure");
 
         // Create and sign the cancel transaction
-        let unvault_prevout = RevaultPrevout::UnvaultPrevout(unvault_tx.prevout(0));
-        let revault_txo = RevaultTxOut::VaultTxOut(TxOut {
-            value: 1,
+        let raw_unvault_prevout = unvault_tx.prevout(0);
+        let unvault_prevout = RevaultPrevout::UnvaultPrevout(raw_unvault_prevout);
+        let revault_txo = TxOut {
+            value: 6700,
             script_pubkey: vault_descriptor.script_pubkey(),
-        });
-        let mut cancel_tx = RevaultTransaction::new_cancel(&[unvault_prevout], &[revault_txo])
-            .expect("Cancel transaction creation failure");
-        let cancel_tx_sighash = cancel_tx.signature_hash(0, &unvault_scriptpubkey, true);
-        let mut revault_sat: RevaultSatisfier<PublicKey> =
-            RevaultSatisfier::<PublicKey>::new(&mut cancel_tx, 0, &unvault_descriptor)
-                .expect("Creating satisfier.");
-        all_participants_priv.iter().for_each(|privkey| {
-            revault_sat.insert_sig(
-                PublicKey {
-                    compressed: true,
-                    key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-                },
-                secp.sign(
-                    &secp256k1::Message::from_slice(&cancel_tx_sighash).unwrap(),
-                    &privkey,
-                ),
-                true,
-            );
-        });
-        revault_sat
-            .satisfy()
-            .expect("Satisfying cancel transaction");
+        };
+        let mut cancel_tx = RevaultTransaction::new_cancel(
+            &[unvault_prevout],
+            &[RevaultTxOut::VaultTxOut(revault_txo)],
+        )
+        .expect("Cancel transaction creation failure");
+        let cancel_tx_sighash = cancel_tx
+            .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
+            .expect("Cancel transaction sighash");
+        {
+            let mut revault_sat: RevaultSatisfier<PublicKey> =
+                RevaultSatisfier::<PublicKey>::new(&mut cancel_tx, 0, &unvault_descriptor)
+                    .expect("Creating satisfier.");
+            all_participants_priv.iter().for_each(|privkey| {
+                revault_sat.insert_sig(
+                    PublicKey {
+                        compressed: true,
+                        key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                    },
+                    secp.sign(
+                        &secp256k1::Message::from_slice(&cancel_tx_sighash).unwrap(),
+                        &privkey,
+                    ),
+                    true,
+                );
+            });
+            revault_sat
+                .satisfy()
+                .expect("Satisfying cancel transaction");
+        }
+        cancel_tx
+            .verify(&[&unvault_tx])
+            .expect("Verifying cancel transaction");
 
         // Create and sign the second (unvault) emergency transaction
         let mut unemergency_tx = RevaultTransaction::new_emergency(&[unvault_prevout], &[emer_txo])
             .expect("Unvault emergency transaction creation failure");
-        let unemergency_tx_sighash = unemergency_tx.signature_hash(0, &unvault_scriptpubkey, true);
-        revault_sat =
-            RevaultSatisfier::<PublicKey>::new(&mut unemergency_tx, 0, &unvault_descriptor)
-                .expect("Creating satisfier.");
-        all_participants_priv.iter().for_each(|privkey| {
-            revault_sat.insert_sig(
-                PublicKey {
-                    compressed: true,
-                    key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-                },
-                secp.sign(
-                    &secp256k1::Message::from_slice(&unemergency_tx_sighash).unwrap(),
-                    &privkey,
-                ),
-                true,
-            );
-        });
-        revault_sat
-            .satisfy()
-            .expect("Satisfying unvault emergency transaction");
+        let unemergency_tx_sighash = unemergency_tx
+            .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
+            .expect("Unvault emergency transaction sighash");
+        {
+            let mut revault_sat =
+                RevaultSatisfier::<PublicKey>::new(&mut unemergency_tx, 0, &unvault_descriptor)
+                    .expect("Creating satisfier.");
+            all_participants_priv.iter().for_each(|privkey| {
+                revault_sat.insert_sig(
+                    PublicKey {
+                        compressed: true,
+                        key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                    },
+                    secp.sign(
+                        &secp256k1::Message::from_slice(&unemergency_tx_sighash).unwrap(),
+                        &privkey,
+                    ),
+                    true,
+                );
+            });
+            revault_sat
+                .satisfy()
+                .expect("Satisfying unvault emergency transaction");
+        }
+        unemergency_tx
+            .verify(&[&unvault_tx])
+            .expect("Verifying unvault emergency transaction");
 
         // Now we can sign the unvault
-        let unvault_tx_sighash = unvault_tx.signature_hash(0, &vault_scriptpubkey, false);
-        revault_sat = RevaultSatisfier::<PublicKey>::new(&mut unvault_tx, 0, &unvault_descriptor)
-            .expect("Creating satisfier.");
+        let unvault_tx_sighash = unvault_tx
+            .signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), false)
+            .expect("Unvault transaction sighash");
+        let mut revault_sat =
+            RevaultSatisfier::<PublicKey>::new(&mut unvault_tx, 0, &unvault_descriptor)
+                .expect("Creating satisfier.");
         all_participants_priv.iter().for_each(|privkey| {
             revault_sat.insert_sig(
                 PublicKey {
@@ -1009,6 +1170,7 @@ mod tests {
             .satisfy()
             .expect("Satisfying unvault transaction");
 
+        // Create and sign a spend transaction
         let spend_txo = RevaultTxOut::SpendTxOut(TxOut {
             value: 1,
             ..TxOut::default()
@@ -1021,7 +1183,9 @@ mod tests {
                 CSV_VALUE - 1,
             )
             .expect("Spend transaction (n.1) creation failure");
-            let spend_tx_sighash = spend_tx.signature_hash(0, &unvault_scriptpubkey, false);
+            let spend_tx_sighash = spend_tx
+                .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), false)
+                .expect("Spend tx n.1 sighash");
             let mut tmp_revault_sat =
                 RevaultSatisfier::<PublicKey>::new(&mut spend_tx, 0, &unvault_descriptor)
                     .expect("Creating satisfier.");
@@ -1054,7 +1218,9 @@ mod tests {
         let mut spend_tx =
             RevaultTransaction::new_spend(&[unvault_prevout], &[spend_txo], CSV_VALUE)
                 .expect("Spend transaction (n.2) creation failure");
-        let spend_tx_sighash = spend_tx.signature_hash(0, &unvault_scriptpubkey, false);
+        let spend_tx_sighash = spend_tx
+            .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), false)
+            .expect("Spend tx n.2 sighash");
         revault_sat = RevaultSatisfier::<PublicKey>::new(&mut spend_tx, 0, &unvault_descriptor)
             .expect("Creating satisfier.");
         // Only the managers + automated cosigners are required
