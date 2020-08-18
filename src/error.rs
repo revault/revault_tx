@@ -1,11 +1,21 @@
+//! Revault errors
+//!
+//! Errors related to the management of Revault transactions and scripts.
+
 use std::{error, fmt};
 
+/// An error specific to the management of Revault transactions and scripts.
 #[derive(PartialEq, Eq, Debug)]
 pub enum RevaultError {
+    /// The transaction creation failed.
     TransactionCreation(String),
+    /// The script creation failed.
     ScriptCreation(String),
+    /// Signature-related errors (sighash, ..).
     Signature(String),
+    /// Miniscript satisfaction of a Revault transaction input failed.
     InputSatisfaction(String),
+    /// The verification of the transaction against libbitcoinconsensus failed.
     TransactionVerification(String),
 }
 

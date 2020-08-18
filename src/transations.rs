@@ -1,8 +1,8 @@
-///! Revault transactions
-///!
-///! Typesafe routines to create bare revault transactions.
-///!
-use super::revault_error::RevaultError;
+//! Revault transactions
+//!
+//! Typesafe routines to create bare revault transactions.
+
+use super::error::RevaultError;
 
 use bitcoin::{
     consensus::encode,
@@ -86,6 +86,9 @@ impl RevaultTransaction {
     /// Create an unvault transaction.
     /// An unvault transaction always spends one vault txout and contains one CPFP txout in
     /// addition to the unvault one.
+    ///
+    /// # Errors
+    /// - If prevouts or txouts type mismatch.
     pub fn new_unvault(
         prevouts: &[RevaultPrevout; 1],
         txouts: &[RevaultTxOut; 2],
@@ -116,6 +119,9 @@ impl RevaultTransaction {
     /// Create a new spend transaction.
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
     /// txouts (including, but not restricted to, change).
+    ///
+    /// # Errors
+    /// - If prevouts or txouts type mismatch.
     pub fn new_spend(
         prevouts: &[RevaultPrevout],
         outputs: &[RevaultTxOut],
@@ -163,6 +169,9 @@ impl RevaultTransaction {
     /// Create a new cancel transaction.
     /// A cancel transaction always pays to a vault output and spend the unvault output, and
     /// may have a fee-bumping input.
+    ///
+    /// # Errors
+    /// - If prevouts or txouts type mismatch.
     pub fn new_cancel(
         prevouts: &[RevaultPrevout],
         txouts: &[RevaultTxOut],
@@ -207,6 +216,9 @@ impl RevaultTransaction {
     /// Create an emergency transaction.
     /// There are two emergency transactions, one spending the vault output and one spending
     /// the unvault output. Both may have a fee-bumping input.
+    ///
+    /// # Errors
+    /// - If prevouts or txouts type mismatch.
     pub fn new_emergency(
         prevouts: &[RevaultPrevout],
         txouts: &[RevaultTxOut],
@@ -278,6 +290,9 @@ impl RevaultTransaction {
     /// This is a wrapper around rust-bitcoin's `signature_hash()` but as we only ever sign
     /// transaction with ALL or ALL|ANYONECANPAY we don't need to be generalistic with choosing
     /// the type.
+    ///
+    /// # Errors
+    /// - If the previous output type mismatch.
     pub fn signature_hash(
         &self,
         input_index: usize,
@@ -311,33 +326,73 @@ impl RevaultTransaction {
         }
 
         match *self {
-            RevaultTransaction::VaultTransaction(ref tx) | RevaultTransaction::FeeBumpTransaction(ref tx) => {
-                match previous_txout {
-                    RevaultTxOut::ExternalTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
-                    _ => Err(RevaultError::Signature("Wrong transaction output type: vault transactions only external utxos".to_string())),
-                }
+            RevaultTransaction::VaultTransaction(ref tx)
+            | RevaultTransaction::FeeBumpTransaction(ref tx) => match previous_txout {
+                RevaultTxOut::ExternalTxOut(ref txo) => Ok(
+                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
+                ),
+                _ => Err(
+                    RevaultError::Signature(
+                        "Wrong transaction output type: vault and fee-buming transactions only spend external utxos"
+                        .to_string()
+                    )
+                ),
             }
             RevaultTransaction::UnvaultTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::VaultTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
-                _ => Err(RevaultError::Signature("Wrong transaction output type: unvault transactions only spend vault transactions".to_string())),
+                RevaultTxOut::VaultTxOut(ref txo) => Ok(
+                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
+                ),
+                _ => Err(
+                    RevaultError::Signature(
+                        "Wrong transaction output type: unvault transactions only spend vault transactions"
+                        .to_string()
+                    )
+                ),
             },
             RevaultTransaction::SpendTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::UnvaultTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
-                _ => Err(RevaultError::Signature("Wrong transaction output type: spend transactions only spend unvault transactions".to_string())),
+                RevaultTxOut::UnvaultTxOut(ref txo) => Ok(
+                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
+                ),
+                _ => Err(
+                    RevaultError::Signature(
+                        "Wrong transaction output type: spend transactions only spend unvault transactions"
+                        .to_string()
+                    )
+                ),
             },
             RevaultTransaction::CancelTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::UnvaultTxOut(ref txo) | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
-                _ => Err(RevaultError::Signature("Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions".to_string())),
+                RevaultTxOut::UnvaultTxOut(ref txo)
+                | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(
+                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
+                ),
+                _ => Err(
+                    RevaultError::Signature(
+                        "Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions"
+                        .to_string()
+                    )
+                ),
             },
             RevaultTransaction::EmergencyTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::VaultTxOut(ref txo) | RevaultTxOut::UnvaultTxOut(ref txo) | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
-                _ => Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string())),
+                RevaultTxOut::VaultTxOut(ref txo)
+                | RevaultTxOut::UnvaultTxOut(ref txo)
+                | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(
+                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
+                ),
+                _ => Err(
+                    RevaultError::Signature(
+                        "Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions"
+                        .to_string()
+                    )
+                ),
             }
         }
     }
 
     /// Verify this transaction validity against libbitcoinconsensus.
     /// Handles all the destructuring and txout research internally.
+    ///
+    /// # Errors
+    /// - If verification fails.
     pub fn verify(
         &self,
         previous_transactions: &[&RevaultTransaction],
@@ -403,6 +458,9 @@ impl RevaultTransaction {
     }
 
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
+    ///
+    /// # Errors
+    /// - If we could not encode the transaction (should not happen).
     pub fn hex(&self) -> Result<String, Box<dyn std::error::Error>> {
         let mut buff = Vec::<u8>::new();
         let mut as_hex = String::new();
@@ -490,7 +548,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for RevaultInputSatisfier<Pk
 }
 
 /// A wrapper handling the satisfaction of a RevaultTransaction input given the input's index
-/// and the previous output's script descriptor
+/// and the previous output's script descriptor.
 pub struct RevaultSatisfier<'a, Pk: MiniscriptKey + ToPublicKey> {
     txin: &'a mut TxIn,
     descriptor: &'a Descriptor<Pk>,
@@ -500,7 +558,9 @@ pub struct RevaultSatisfier<'a, Pk: MiniscriptKey + ToPublicKey> {
 impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
     /// Create a satisfier for a RevaultTransaction from the actual transaction, the input's index,
     /// and the descriptor of the output spent by this input.
-    /// Errors on OOB.
+    ///
+    /// # Errors
+    /// - If the input index is out of bounds.
     pub fn new(
         transaction: &'a mut RevaultTransaction,
         input_index: usize,
@@ -515,7 +575,7 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
             | RevaultTransaction::FeeBumpTransaction(ref mut tx) => {
                 if input_index >= tx.input.len() {
                     return Err(RevaultError::InputSatisfaction(format!(
-                        "Input index '{}' out of bonds of the transaction '{:?}'.",
+                        "Input index '{}' out of bounds of the transaction '{:?}'.",
                         input_index, tx.input
                     )));
                 }
@@ -546,6 +606,9 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
 
     /// Fulfill the txin's witness. Errors if we can't provide a valid one out of the previously
     /// given signatures.
+    ///
+    /// # Errors
+    /// - If we could not satisfy the input.
     pub fn satisfy(&mut self) -> Result<(), RevaultError> {
         if let Err(e) = self.descriptor.satisfy(&mut self.txin, &self.satisfier) {
             return Err(RevaultError::InputSatisfaction(format!(
@@ -560,10 +623,10 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::scripts::{
+        default_unvault_descriptor, default_vault_descriptor, unvault_cpfp_descriptor,
+    };
     use super::{
-        super::{
-            get_default_unvault_descriptors, get_default_vault_descriptors, unvault_cpfp_descriptor,
-        },
         RevaultError, RevaultPrevout, RevaultSatisfier, RevaultTransaction, RevaultTxOut,
         RBF_SEQUENCE,
     };
@@ -1025,11 +1088,11 @@ mod tests {
 
         // Get the script descriptors for the txos we're going to create
         let unvault_descriptor =
-            get_default_unvault_descriptors(&non_managers, &managers, &cosigners, CSV_VALUE)
+            default_unvault_descriptor(&non_managers, &managers, &cosigners, CSV_VALUE)
                 .expect("Unvault descriptor generation error");
         let cpfp_descriptor =
             unvault_cpfp_descriptor(&managers).expect("Unvault CPFP descriptor generation error");
-        let vault_descriptor = get_default_vault_descriptors(
+        let vault_descriptor = default_vault_descriptor(
             &managers
                 .into_iter()
                 .chain(non_managers.into_iter())

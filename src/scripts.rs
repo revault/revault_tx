@@ -1,13 +1,14 @@
-///! Revault scripts
-///!
-///! Get the output and script descriptors for policies specific to the Revault architecture.
-///! We use miniscript (http://bitcoin.sipa.be/miniscript/) in order to be able to "safely" derive
-///! scripts depending on the setup configuration (ie the number of overall participants and the
-///! number of fund managers).
-///!
-///! Note that these functions are not safe to reuse once the architecture set up, as the
-///! returned descriptors are non-deterministically compiled from an abstract policy.
-use super::revault_error::RevaultError;
+//! Revault scripts
+//!
+//! Get the output and script descriptors for policies specific to the Revault architecture.
+//! We use [miniscript](http://bitcoin.sipa.be/miniscript/) in order to "safely" derive
+//! scripts depending on the setup configuration (ie the number of overall participants and the
+//! number of fund managers).
+//!
+//! Note these functions are not safe to reuse once the architecture set up, as the
+//! returned descriptors are non-deterministically compiled from an abstract policy.
+
+use super::error::RevaultError;
 
 use bitcoin::PublicKey;
 use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
@@ -17,7 +18,30 @@ use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 /// Get the miniscript descriptor for the vault outputs.
 ///
 /// The vault policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
-pub fn get_default_vault_descriptors(
+///
+/// # Examples
+/// ```rust
+/// use revault::scripts;
+/// use bitcoin;
+/// use secp256k1;
+///
+/// let secp = secp256k1::Secp256k1::new();
+/// let secret_key = secp256k1::SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
+/// let public_key = bitcoin::PublicKey {
+///     compressed: true,
+///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
+/// };
+/// let vault_descriptor =
+///     scripts::default_vault_descriptor(&[public_key, public_key]).expect("Compiling descriptor");
+///
+/// println!("Vault descriptor redeem script: {}", vault_descriptor.witness_script());
+/// ```
+///
+/// # Errors
+/// - If the passed slice contains less than 2 public keys.
+/// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
+/// bug.
+pub fn default_vault_descriptor(
     participants: &[PublicKey],
 ) -> Result<Descriptor<PublicKey>, RevaultError> {
     if participants.len() < 2 {
@@ -49,17 +73,52 @@ pub fn get_default_vault_descriptors(
 ///
 /// The unvault policy allows either all the participants together to spend, or (the fund managers
 /// + the cosigners) after a timelock.
-/// As the managers are part of the participants we can have a more efficient Script by expliciting
-/// to the compiler that the spenders are always going to sign.
 ///
-/// Thus we end up with:
-/// `and(thresh(len(managers), spenders), or(thresh(len(non_managers), non_managers),
-/// and(thresh(len(cosigners), cosigners), older(X))))`
+/// As the managers are part of the participants we can have a more efficient Script by expliciting
+/// to the compiler that the spenders are always going to sign. Thus we end up with:
+/// ```text
+/// and(thresh(len(managers), spenders), or(thresh(len(non_managers), non_managers),
+/// and(thresh(len(cosigners), cosigners), older(X))))
+/// ````
 ///
 /// As we expect the usual operations to be far more likely, we further optimize the policy to:
-/// `and(thresh(len(managers), managers), or(1@thresh(len(non_managers), non_managers),
-/// 10@and(thresh(len(cosigners), cosigners), older(X))))`
-pub fn get_default_unvault_descriptors(
+/// ```text
+/// and(thresh(len(managers), managers), or(1@thresh(len(non_managers), non_managers),
+/// 10@and(thresh(len(cosigners), cosigners), older(X))))
+/// ```
+///
+/// # Examples
+/// ```rust
+/// use revault::scripts;
+/// use bitcoin;
+/// use secp256k1;
+///
+/// let secp = secp256k1::Secp256k1::new();
+/// let secret_key = secp256k1::SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
+/// let public_key = bitcoin::PublicKey {
+///     compressed: true,
+///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
+/// };
+/// let unvault_descriptor = scripts::default_unvault_descriptor(
+///     // Non-managers
+///     &[public_key, public_key, public_key],
+///     // Managers
+///     &[public_key, public_key],
+///     // Cosigners
+///     &[public_key, public_key, public_key],
+///     // CSV
+///     42
+/// ).expect("Compiling descriptor");
+///
+/// println!("Unvault descriptor redeem script: {}", unvault_descriptor.witness_script());
+/// ```
+///
+/// # Errors
+/// - If any of the slice contains no public key, or if the number of non_managers public keys is
+/// not the same as the number of cosigners public key.
+/// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
+/// bug.
+pub fn default_unvault_descriptor(
     non_managers: &[PublicKey],
     managers: &[PublicKey],
     cosigners: &[PublicKey],
@@ -111,6 +170,10 @@ pub fn get_default_unvault_descriptors(
 /// Get the miniscript descriptor for the unvault transaction CPFP output.
 ///
 /// It's a basic N-of-N between the fund managers.
+///
+/// # Errors
+/// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
+/// bug.
 pub fn unvault_cpfp_descriptor(
     managers: &[PublicKey],
 ) -> Result<Descriptor<PublicKey>, RevaultError> {
@@ -136,8 +199,7 @@ mod tests {
     use rand::RngCore;
 
     use super::{
-        get_default_unvault_descriptors, get_default_vault_descriptors, unvault_cpfp_descriptor,
-        RevaultError,
+        default_unvault_descriptor, default_vault_descriptor, unvault_cpfp_descriptor, RevaultError,
     };
 
     use bitcoin::PublicKey;
@@ -191,13 +253,11 @@ mod tests {
                 .map(|_| get_random_pubkey())
                 .collect::<Vec<PublicKey>>();
 
-            get_default_unvault_descriptors(&non_managers, &managers, &cosigners, 18).expect(
-                &format!(
-                    "Unvault descriptors creation error with ({}, {})",
-                    n_managers, n_non_managers
-                ),
-            );
-            get_default_vault_descriptors(
+            default_unvault_descriptor(&non_managers, &managers, &cosigners, 18).expect(&format!(
+                "Unvault descriptors creation error with ({}, {})",
+                n_managers, n_non_managers
+            ));
+            default_vault_descriptor(
                 &managers
                     .iter()
                     .chain(non_managers.iter())
@@ -218,14 +278,14 @@ mod tests {
     #[test]
     fn test_configuration_limits() {
         assert_eq!(
-            get_default_vault_descriptors(&vec![get_random_pubkey()]),
+            default_vault_descriptor(&vec![get_random_pubkey()]),
             Err(RevaultError::ScriptCreation(
                 "Vault: bad parameters. We need more than one participant.".to_string()
             ))
         );
 
         assert_eq!(
-            get_default_unvault_descriptors(
+            default_unvault_descriptor(
                 &vec![get_random_pubkey()],
                 &vec![get_random_pubkey()],
                 &vec![get_random_pubkey(), get_random_pubkey()],
@@ -242,7 +302,7 @@ mod tests {
         let participants = (0..68)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        assert_eq!(get_default_vault_descriptors(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(default_vault_descriptor(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
         // Maximum non-managers for 2 managers (+ 1)
         let managers = (0..2)
@@ -254,7 +314,7 @@ mod tests {
         let cosigners = (0..21)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        assert_eq!(get_default_unvault_descriptors(&non_managers, &managers, &cosigners, 32), Err(RevaultError::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(default_unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(RevaultError::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
     }
 
     // TODO: extensively test all possibilities before reaching the limit

@@ -1,9 +1,12 @@
-mod revault_error;
-mod scripts;
-mod transations;
+//! Revault
+//!
+//! Generalistic routines to work with Revault-specific Bitcoin transactions and Scripts.
 
-pub use revault_error::RevaultError;
-pub use scripts::{
-    get_default_unvault_descriptors, get_default_vault_descriptors, unvault_cpfp_descriptor,
-};
-pub use transations::{RevaultPrevout, RevaultSatisfier, RevaultTransaction, RevaultTxOut};
+#![warn(missing_docs)]
+#![forbid(unsafe_code)]
+
+pub mod error;
+
+pub mod scripts;
+
+pub mod transations;
