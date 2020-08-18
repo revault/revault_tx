@@ -78,6 +78,8 @@ pub enum RevaultTransaction {
     CancelTransaction(Transaction),
     /// The transaction spending either a vault or unvault txo to The Emergency Deep Vault.
     EmergencyTransaction(Transaction),
+    /// The fee-bumping transaction, we don't create it but it may be passed to verify()
+    FeeBumpTransaction(Transaction),
 }
 
 impl RevaultTransaction {
@@ -264,7 +266,8 @@ impl RevaultTransaction {
             | RevaultTransaction::UnvaultTransaction(ref tx)
             | RevaultTransaction::SpendTransaction(ref tx)
             | RevaultTransaction::CancelTransaction(ref tx)
-            | RevaultTransaction::EmergencyTransaction(ref tx) => OutPoint {
+            | RevaultTransaction::EmergencyTransaction(ref tx)
+            | RevaultTransaction::FeeBumpTransaction(ref tx) => OutPoint {
                 txid: tx.txid(),
                 vout,
             },
@@ -308,7 +311,7 @@ impl RevaultTransaction {
         }
 
         match *self {
-            RevaultTransaction::VaultTransaction(ref tx) => {
+            RevaultTransaction::VaultTransaction(ref tx) | RevaultTransaction::FeeBumpTransaction(ref tx) => {
                 match previous_txout {
                     RevaultTxOut::ExternalTxOut(ref txo) => Ok(sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)),
                     _ => Err(RevaultError::Signature("Wrong transaction output type: vault transactions only external utxos".to_string())),
@@ -348,7 +351,8 @@ impl RevaultTransaction {
                     | RevaultTransaction::UnvaultTransaction(ref tx)
                     | RevaultTransaction::SpendTransaction(ref tx)
                     | RevaultTransaction::CancelTransaction(ref tx)
-                    | RevaultTransaction::EmergencyTransaction(ref tx) => {
+                    | RevaultTransaction::EmergencyTransaction(ref tx)
+                    | RevaultTransaction::FeeBumpTransaction(ref tx) => {
                         if tx.txid() == prevout.txid {
                             if prevout.vout as usize >= tx.output.len() {
                                 return None;
@@ -367,7 +371,8 @@ impl RevaultTransaction {
             | RevaultTransaction::UnvaultTransaction(ref tx)
             | RevaultTransaction::SpendTransaction(ref tx)
             | RevaultTransaction::CancelTransaction(ref tx)
-            | RevaultTransaction::EmergencyTransaction(ref tx) => {
+            | RevaultTransaction::EmergencyTransaction(ref tx)
+            | RevaultTransaction::FeeBumpTransaction(ref tx) => {
                 for (index, txin) in tx.input.iter().enumerate() {
                     match get_txout(&txin.previous_output, &previous_transactions) {
                         Some(prev_txout) => {
@@ -418,7 +423,8 @@ impl Encodable for RevaultTransaction {
             | RevaultTransaction::UnvaultTransaction(ref tx)
             | RevaultTransaction::SpendTransaction(ref tx)
             | RevaultTransaction::CancelTransaction(ref tx)
-            | RevaultTransaction::EmergencyTransaction(ref tx) => tx.consensus_encode(&mut s),
+            | RevaultTransaction::EmergencyTransaction(ref tx)
+            | RevaultTransaction::FeeBumpTransaction(ref tx) => tx.consensus_encode(&mut s),
         }
     }
 }
@@ -505,7 +511,8 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
             | RevaultTransaction::UnvaultTransaction(ref mut tx)
             | RevaultTransaction::SpendTransaction(ref mut tx)
             | RevaultTransaction::CancelTransaction(ref mut tx)
-            | RevaultTransaction::EmergencyTransaction(ref mut tx) => {
+            | RevaultTransaction::EmergencyTransaction(ref mut tx)
+            | RevaultTransaction::FeeBumpTransaction(ref mut tx) => {
                 if input_index >= tx.input.len() {
                     return Err(RevaultError::InputSatisfaction(format!(
                         "Input index '{}' out of bonds of the transaction '{:?}'.",
@@ -627,15 +634,17 @@ mod tests {
     }
 
     // Routine for ""signing"" a transaction
-    fn satisfy_transaction(
+    fn satisfy_transaction_input(
         secp: &secp256k1::Secp256k1<secp256k1::All>,
         tx: &mut RevaultTransaction,
+        input_index: usize,
         tx_sighash: &SigHash,
         descriptor: &Descriptor<PublicKey>,
         secret_keys: &Vec<secp256k1::SecretKey>,
+        is_anyonecanpay: bool,
     ) -> Result<(), RevaultError> {
         let mut revault_sat =
-            RevaultSatisfier::new(tx, 0, &descriptor).expect("Creating satisfier.");
+            RevaultSatisfier::new(tx, input_index, &descriptor).expect("Creating satisfier.");
         secret_keys.iter().for_each(|privkey| {
             revault_sat.insert_sig(
                 PublicKey {
@@ -646,7 +655,7 @@ mod tests {
                     &secp256k1::Message::from_slice(&tx_sighash).unwrap(),
                     &privkey,
                 ),
-                true,
+                is_anyonecanpay,
             );
         });
         revault_sat.satisfy()
@@ -1049,27 +1058,76 @@ mod tests {
         let vault_tx = RevaultTransaction::VaultTransaction(vault_raw_tx);
         let vault_prevout = RevaultPrevout::VaultPrevout(vault_tx.prevout(0));
 
+        // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
+        // We simulate a wallet utxo.
+        let feebump_secret_key = get_random_privkey();
+        let feebump_pubkey = PublicKey {
+            compressed: true,
+            key: secp256k1::PublicKey::from_secret_key(&secp, &feebump_secret_key),
+        };
+        // FIXME: Contribute script_code() methods to rust-bitcoin or rust-miniscript to avoid this
+        // hack (or to hide it :p)
+        let feebump_script =
+            bitcoin::util::address::Address::p2pkh(&feebump_pubkey, bitcoin::Network::Bitcoin)
+                .script_pubkey();
+        let feebump_descriptor = Descriptor::<PublicKey>::Wpkh(feebump_pubkey);
+        let raw_feebump_tx = Transaction {
+            version: 2,
+            lock_time: 0,
+            input: vec![TxIn {
+                previous_output: OutPoint::from_str(
+                    "4bb4545bb4bc8853cb03e42984d677fbe880c81e7d95609360eed0d8f45b52f8:0",
+                )
+                .unwrap(),
+                ..TxIn::default()
+            }],
+            output: vec![TxOut {
+                value: 56730,
+                script_pubkey: feebump_descriptor.script_pubkey(),
+            }],
+        };
+        let feebump_txout = RevaultTxOut::FeeBumpTxOut(raw_feebump_tx.output[0].clone());
+        let feebump_tx = RevaultTransaction::FeeBumpTransaction(raw_feebump_tx);
+        let feebump_prevout = RevaultPrevout::FeeBumpPrevout(feebump_tx.prevout(0));
+
         // Create and sign the first (vault) emergency transaction
         let emer_txo = RevaultTxOut::EmergencyTxOut(TxOut {
             value: 450,
             ..TxOut::default()
         });
-        let mut emergency_tx =
-            RevaultTransaction::new_emergency(&[vault_prevout], &[emer_txo.clone()])
-                .expect("Vault emergency transaction creation falure");
-        let emergency_tx_sighash = emergency_tx
+        let mut emergency_tx = RevaultTransaction::new_emergency(
+            &[vault_prevout, feebump_prevout],
+            &[emer_txo.clone()],
+        )
+        .expect("Vault emergency transaction creation falure");
+        let emergency_tx_sighash_vault = emergency_tx
             .signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true)
             .expect("Vault emergency sighash");
-        satisfy_transaction(
+        satisfy_transaction_input(
             &secp,
             &mut emergency_tx,
-            &emergency_tx_sighash,
+            0,
+            &emergency_tx_sighash_vault,
             &vault_descriptor,
             &all_participants_priv,
+            true,
         )
         .expect("Satisfying emergency transaction");
+        let emergency_tx_sighash_feebump = emergency_tx
+            .signature_hash(1, &feebump_txout, &feebump_script, false)
+            .expect("Vault emergency feebump sighash");
+        satisfy_transaction_input(
+            &secp,
+            &mut emergency_tx,
+            1,
+            &emergency_tx_sighash_feebump,
+            &feebump_descriptor,
+            &vec![feebump_secret_key],
+            false,
+        )
+        .expect("Satisfying feebump input of the first emergency transaction.");
         emergency_tx
-            .verify(&[&vault_tx])
+            .verify(&[&vault_tx, &feebump_tx])
             .expect("Verifying emergency transation");
 
         // Create but *do not sign* the unvaulting transaction until all revaulting transactions
@@ -1098,53 +1156,86 @@ mod tests {
             script_pubkey: vault_descriptor.script_pubkey(),
         };
         let mut cancel_tx = RevaultTransaction::new_cancel(
-            &[unvault_prevout],
+            &[unvault_prevout, feebump_prevout],
             &[RevaultTxOut::VaultTxOut(revault_txo)],
         )
         .expect("Cancel transaction creation failure");
         let cancel_tx_sighash = cancel_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
             .expect("Cancel transaction sighash");
-        satisfy_transaction(
+        satisfy_transaction_input(
             &secp,
             &mut cancel_tx,
+            0,
             &cancel_tx_sighash,
             &unvault_descriptor,
             &all_participants_priv,
+            true,
         )
         .expect("Satisfying cancel transaction");
+        let cancel_tx_sighash_feebump = cancel_tx
+            .signature_hash(1, &feebump_txout, &feebump_script, false)
+            .expect("Cancel tx feebump input sighash");
+        satisfy_transaction_input(
+            &secp,
+            &mut cancel_tx,
+            1,
+            &cancel_tx_sighash_feebump,
+            &feebump_descriptor,
+            &vec![feebump_secret_key],
+            false,
+        )
+        .expect("Satisfying feebump input of the cancel transaction.");
         cancel_tx
-            .verify(&[&unvault_tx])
+            .verify(&[&unvault_tx, &feebump_tx])
             .expect("Verifying cancel transaction");
 
         // Create and sign the second (unvault) emergency transaction
-        let mut unemergency_tx = RevaultTransaction::new_emergency(&[unvault_prevout], &[emer_txo])
-            .expect("Unvault emergency transaction creation failure");
+        let mut unemergency_tx =
+            RevaultTransaction::new_emergency(&[unvault_prevout, feebump_prevout], &[emer_txo])
+                .expect("Unvault emergency transaction creation failure");
         let unemergency_tx_sighash = unemergency_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
             .expect("Unvault emergency transaction sighash");
-        satisfy_transaction(
+        satisfy_transaction_input(
             &secp,
             &mut unemergency_tx,
+            0,
             &unemergency_tx_sighash,
             &unvault_descriptor,
             &all_participants_priv,
+            true,
         )
         .expect("Satisfying unvault emergency transaction");
+        let unemer_tx_sighash_feebump = unemergency_tx
+            .signature_hash(1, &feebump_txout, &feebump_script, false)
+            .expect("Unvault emergency tx feebump input sighash");
+        satisfy_transaction_input(
+            &secp,
+            &mut unemergency_tx,
+            1,
+            &unemer_tx_sighash_feebump,
+            &feebump_descriptor,
+            &vec![feebump_secret_key],
+            false,
+        )
+        .expect("Satisfying feebump input of the cancel transaction.");
         unemergency_tx
-            .verify(&[&unvault_tx])
+            .verify(&[&unvault_tx, &feebump_tx])
             .expect("Verifying unvault emergency transaction");
 
         // Now we can sign the unvault
         let unvault_tx_sighash = unvault_tx
             .signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), false)
             .expect("Unvault transaction sighash");
-        satisfy_transaction(
+        satisfy_transaction_input(
             &secp,
             &mut unvault_tx,
+            0,
             &unvault_tx_sighash,
             &vault_descriptor,
             &all_participants_priv,
+            false,
         )
         .expect("Satisfying unvault transaction");
 
@@ -1160,9 +1251,10 @@ mod tests {
         let spend_tx_sighash = spend_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), false)
             .expect("Spend tx n.1 sighash");
-        let satisfaction_res = satisfy_transaction(
+        let satisfaction_res = satisfy_transaction_input(
             &secp,
             &mut spend_tx,
+            0,
             &spend_tx_sighash,
             &unvault_descriptor,
             &managers_priv
@@ -1170,6 +1262,7 @@ mod tests {
                 .chain(cosigners_priv.iter())
                 .copied()
                 .collect::<Vec<secp256k1::SecretKey>>(),
+            false,
         );
         assert_eq!(
             satisfaction_res,
@@ -1185,9 +1278,10 @@ mod tests {
         let spend_tx_sighash = spend_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), false)
             .expect("Spend tx n.2 sighash");
-        satisfy_transaction(
+        satisfy_transaction_input(
             &secp,
             &mut spend_tx,
+            0,
             &spend_tx_sighash,
             &unvault_descriptor,
             &managers_priv
@@ -1195,6 +1289,7 @@ mod tests {
                 .chain(cosigners_priv.iter())
                 .copied()
                 .collect::<Vec<secp256k1::SecretKey>>(),
+            false,
         )
         .expect("Satisfying second spend transaction");
     }
