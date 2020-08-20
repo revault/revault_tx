@@ -4,12 +4,10 @@
 
 use super::error::RevaultError;
 
-use bitcoin::{
-    consensus::encode,
-    consensus::encode::{serialize, Encodable},
-    util::bip143::SigHashCache,
-    OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
-};
+use bitcoin::consensus::encode;
+use bitcoin::consensus::encode::Encodable;
+use bitcoin::util::bip143::SigHashCache;
+use bitcoin::{OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut};
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
 use secp256k1::Signature;
 
@@ -269,20 +267,31 @@ impl RevaultTransaction {
         }
     }
 
-    /// Get the specified output of this transaction as an OutPoint to be referenced
-    /// in a following transaction.
-    /// Mainly useful to avoid the destructuring boilerplate.
-    pub fn prevout(&self, vout: u32) -> OutPoint {
+    // It's private on purpose: accessing the inner tx should either be done by using the provided
+    // methods (or adding new ones to be reused), or by careful pattern matching.
+    fn inner_tx(&self) -> &Transaction {
         match *self {
             RevaultTransaction::VaultTransaction(ref tx)
             | RevaultTransaction::UnvaultTransaction(ref tx)
             | RevaultTransaction::SpendTransaction(ref tx)
             | RevaultTransaction::CancelTransaction(ref tx)
             | RevaultTransaction::EmergencyTransaction(ref tx)
-            | RevaultTransaction::FeeBumpTransaction(ref tx) => OutPoint {
-                txid: tx.txid(),
-                vout,
-            },
+            | RevaultTransaction::FeeBumpTransaction(ref tx) => tx,
+        }
+    }
+
+    /// Get the network-serialized (inner) transaction
+    pub fn serialize(&self) -> Vec<u8> {
+        encode::serialize(&*self)
+    }
+
+    /// Get the specified output of this transaction as an OutPoint to be referenced
+    /// in a following transaction.
+    /// Mainly useful to avoid the destructuring boilerplate.
+    pub fn prevout(&self, vout: u32) -> OutPoint {
+        OutPoint {
+            txid: self.inner_tx().txid(),
+            vout,
         }
     }
 
@@ -421,35 +430,26 @@ impl RevaultTransaction {
             None
         }
 
-        match *self {
-            RevaultTransaction::VaultTransaction(ref tx)
-            | RevaultTransaction::UnvaultTransaction(ref tx)
-            | RevaultTransaction::SpendTransaction(ref tx)
-            | RevaultTransaction::CancelTransaction(ref tx)
-            | RevaultTransaction::EmergencyTransaction(ref tx)
-            | RevaultTransaction::FeeBumpTransaction(ref tx) => {
-                for (index, txin) in tx.input.iter().enumerate() {
-                    match get_txout(&txin.previous_output, &previous_transactions) {
-                        Some(prev_txout) => {
-                            if let Err(err) = bitcoinconsensus::verify(
-                                &prev_txout.script_pubkey.as_bytes(),
-                                prev_txout.value,
-                                serialize(&*tx).as_slice(),
-                                index,
-                            ) {
-                                return Err(RevaultError::TransactionVerification(format!(
-                                    "Bitcoinconsensus error: {:?}",
-                                    err
-                                )));
-                            }
-                        }
-                        None => {
-                            return Err(RevaultError::TransactionVerification(format!(
-                                "Unknown txout refered by txin '{:?}'",
-                                txin
-                            )));
-                        }
+        for (index, txin) in self.inner_tx().input.iter().enumerate() {
+            match get_txout(&txin.previous_output, &previous_transactions) {
+                Some(prev_txout) => {
+                    if let Err(err) = bitcoinconsensus::verify(
+                        &prev_txout.script_pubkey.as_bytes(),
+                        prev_txout.value,
+                        self.serialize().as_slice(),
+                        index,
+                    ) {
+                        return Err(RevaultError::TransactionVerification(format!(
+                            "Bitcoinconsensus error: {:?}",
+                            err
+                        )));
                     }
+                }
+                None => {
+                    return Err(RevaultError::TransactionVerification(format!(
+                        "Unknown txout refered by txin '{:?}'",
+                        txin
+                    )));
                 }
             }
         }
@@ -476,14 +476,7 @@ impl RevaultTransaction {
 
 impl Encodable for RevaultTransaction {
     fn consensus_encode<S: io::Write>(&self, mut s: S) -> Result<usize, encode::Error> {
-        match *self {
-            RevaultTransaction::VaultTransaction(ref tx)
-            | RevaultTransaction::UnvaultTransaction(ref tx)
-            | RevaultTransaction::SpendTransaction(ref tx)
-            | RevaultTransaction::CancelTransaction(ref tx)
-            | RevaultTransaction::EmergencyTransaction(ref tx)
-            | RevaultTransaction::FeeBumpTransaction(ref tx) => tx.consensus_encode(&mut s),
-        }
+        self.inner_tx().consensus_encode(&mut s)
     }
 }
 
