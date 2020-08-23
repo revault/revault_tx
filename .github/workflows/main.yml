@@ -1,0 +1,50 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        # We don't have a MSRV (yet?)
+        toolchain: [stable,
+                    beta,
+                    nightly]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+      - name: Install Rust ${{ matrix.toolchain }} toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          override: true
+          profile: minimal
+      - name: Build on Rust ${{ matrix.toolchain }}
+        run: RUSTFLAGS="-C link-dead-code" cargo build --verbose  --color always
+      - name: Test on Rust ${{ matrix.toolchain }} with net-tokio
+        run: RUSTFLAGS="-C link-dead-code" cargo test --verbose --color always
+      - name: Install deps for kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install binutils-dev libcurl4-openssl-dev zlib1g-dev libdw-dev libiberty-dev
+      - name: Install kcov
+        run: |
+          wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz
+          tar xzf master.tar.gz
+          cd kcov-master && mkdir build && cd build
+          cmake ..
+          make
+          make install DESTDIR=../../kcov-build
+          cd ../.. && rm -rf kcov-master master.tar.gz
+      - name: Generate coverage report
+        run: |
+          for file in target/debug/lightning-*; do
+            [ -x "${file}" ] || continue;
+            mkdir -p "target/cov/$(basename $file)";
+            ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file";
+          done
+      - name: Upload coverage
+        uses: codecov/codecov-action@v1
+        with:
+          fail_ci_if_error: true
