@@ -1169,6 +1169,11 @@ mod tests {
             true,
         )
         .expect("Satisfying emergency transaction");
+        // You cannot get a sighash for an unexpected prevout
+        assert_eq!(
+            emergency_tx.signature_hash(0, &emer_txo.clone(), &unvault_descriptor.witness_script(), true),
+            Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
+        );
         let emergency_tx_sighash_feebump = emergency_tx
             .signature_hash(1, &feebump_txout, &feebump_script, false)
             .expect("Vault emergency feebump sighash");
@@ -1200,9 +1205,11 @@ mod tests {
             value: 330,
             script_pubkey: cpfp_scriptpubkey,
         });
-        let mut unvault_tx =
-            RevaultTransaction::new_unvault(&[vault_prevout], &[unvault_txo.clone(), cpfp_txo])
-                .expect("Unvault transaction creation failure");
+        let mut unvault_tx = RevaultTransaction::new_unvault(
+            &[vault_prevout],
+            &[unvault_txo.clone(), cpfp_txo.clone()],
+        )
+        .expect("Unvault transaction creation failure");
 
         // Create and sign the cancel transaction
         let raw_unvault_prevout = unvault_tx.prevout(0);
@@ -1216,6 +1223,13 @@ mod tests {
             &[RevaultTxOut::VaultTxOut(revault_txo)],
         )
         .expect("Cancel transaction creation failure");
+        // You cannot get a sighash for an unexpected prevout
+        assert_eq!(
+            cancel_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true),
+            Err(RevaultError::Signature(
+                "Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions".to_string()
+            ))
+        );
         let cancel_tx_sighash = cancel_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
             .expect("Cancel transaction sighash");
@@ -1250,6 +1264,11 @@ mod tests {
         let mut unemergency_tx =
             RevaultTransaction::new_emergency(&[unvault_prevout, feebump_prevout], &[emer_txo])
                 .expect("Unvault emergency transaction creation failure");
+        // You cannot get a sighash for an unexpected prevout
+        assert_eq!(
+            unemergency_tx.signature_hash(0, &cpfp_txo.clone(), &vault_descriptor.witness_script(), true),
+            Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
+        );
         let unemergency_tx_sighash = unemergency_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
             .expect("Unvault emergency transaction sighash");
@@ -1263,6 +1282,14 @@ mod tests {
             true,
         )
         .expect("Satisfying unvault emergency transaction");
+        // If we don't satisfy the feebump input, libbitcoinconsensus will yell
+        assert_eq!(
+            unemergency_tx.verify(&[&unvault_tx, &feebump_tx]),
+            Err(RevaultError::TransactionVerification(
+                "Bitcoinconsensus error: ERR_SCRIPT".to_string()
+            ))
+        );
+        // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx
             .signature_hash(1, &feebump_txout, &feebump_script, false)
             .expect("Unvault emergency tx feebump input sighash");
@@ -1279,8 +1306,21 @@ mod tests {
         unemergency_tx
             .verify(&[&unvault_tx, &feebump_tx])
             .expect("Verifying unvault emergency transaction");
+        // However if we confused the unvault emergency with the vault emergency and pass the
+        // vault_tx prevout, it won't pass the libbitcoinconsensus guards.
+        unemergency_tx
+            .verify(&[&vault_tx, &feebump_tx])
+            .expect_err("No error raised with wrong prevout !");
 
         // Now we can sign the unvault
+        // However if we secify a wrong prevout, it'll yell at us
+        assert_eq!(
+            unvault_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true),
+            Err(RevaultError::Signature(
+                "Wrong transaction output type: unvault transactions only spend vault transactions"
+                    .to_string()
+            ))
+        );
         let unvault_tx_sighash = unvault_tx
             .signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), false)
             .expect("Unvault transaction sighash");
@@ -1294,6 +1334,9 @@ mod tests {
             false,
         )
         .expect("Satisfying unvault transaction");
+        unvault_tx
+            .verify(&[&vault_tx])
+            .expect("Verifying unvault transaction");
 
         // Create and sign a spend transaction
         let spend_txo = RevaultTxOut::SpendTxOut(TxOut {
@@ -1304,6 +1347,14 @@ mod tests {
         let mut spend_tx =
             RevaultTransaction::new_spend(&[unvault_prevout], &[spend_txo.clone()], CSV_VALUE - 1)
                 .expect("Spend transaction (n.1) creation failure");
+        // You cannot get a sighash for an unexpected prevout
+        assert_eq!(
+            spend_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true),
+            Err(RevaultError::Signature(
+                "Wrong transaction output type: spend transactions only spend unvault transactions"
+                    .to_string()
+            ))
+        );
         let spend_tx_sighash = spend_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), false)
             .expect("Spend tx n.1 sighash");
