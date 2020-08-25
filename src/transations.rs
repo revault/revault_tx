@@ -794,6 +794,13 @@ mod tests {
                 vault_prevout,
             )))
         );
+        assert_eq!(
+            RevaultTransaction::new_spend(&[unvault_prevout], &[feebump_txout.clone()], 144),
+            Err(RevaultError::TransactionCreation(format!(
+                "Spend: output ({:?}) type mismatch",
+                &feebump_txout,
+            )))
+        );
         // multiple inputs
         assert_eq!(
             RevaultTransaction::new_spend(
@@ -1141,6 +1148,27 @@ mod tests {
         let feebump_tx = RevaultTransaction::FeeBumpTransaction(raw_feebump_tx);
         let feebump_prevout = RevaultPrevout::FeeBumpPrevout(feebump_tx.prevout(0));
 
+        // Test the signature_hash() "bad previous txout" error path
+        assert_eq!(feebump_tx.signature_hash(
+            0,
+            &vault_txo,
+            &vault_descriptor.script_code().unwrap(),
+            false,
+        ), Err(RevaultError::Signature(
+            "Wrong transaction output type: vault and fee-buming transactions only spend external utxos"
+            .to_string()
+        )));
+        // However if it's of the right type it won't Error
+        let external_txo = RevaultTxOut::ExternalTxOut(TxOut::default());
+        feebump_tx
+            .signature_hash(
+                0,
+                &external_txo,
+                &vault_descriptor.script_code().unwrap(),
+                false,
+            )
+            .expect("Getting a sighash for a dummy feebump tx.");
+
         // Create and sign the first (vault) emergency transaction
         let emer_txo = RevaultTxOut::EmergencyTxOut(TxOut {
             value: 450,
@@ -1409,5 +1437,13 @@ mod tests {
             false,
         )
         .expect("Satisfying second spend transaction");
+
+        // Test that we can get the hexadecimal representation of each transaction without error
+        vault_tx.hex().expect("Hex repr vault_tx");
+        unvault_tx.hex().expect("Hex repr unvault_tx");
+        spend_tx.hex().expect("Hex repr spend_tx");
+        cancel_tx.hex().expect("Hex repr cancel_tx");
+        emergency_tx.hex().expect("Hex repr emergency_tx");
+        feebump_tx.hex().expect("Hex repr feebump_tx");
     }
 }
