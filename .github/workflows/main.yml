@@ -7,12 +7,15 @@ jobs:
     strategy:
       matrix:
         # We don't have a MSRV (yet?)
-        toolchain: [stable,
-                    beta,
-                    nightly]
-        include:
-          - toolchain: nightly
-    runs-on: ubuntu-latest
+        toolchain:
+          - stable
+          - beta
+          - nightly
+        os:
+          - ubuntu-latest
+          - macOS-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v2
