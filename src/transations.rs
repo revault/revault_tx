@@ -1121,11 +1121,6 @@ mod tests {
             compressed: true,
             key: secp256k1::PublicKey::from_secret_key(&secp, &feebump_secret_key),
         };
-        // FIXME: Contribute script_code() methods to rust-bitcoin or rust-miniscript to avoid this
-        // hack (or to hide it :p)
-        let feebump_script =
-            bitcoin::util::address::Address::p2pkh(&feebump_pubkey, bitcoin::Network::Bitcoin)
-                .script_pubkey();
         let feebump_descriptor = Descriptor::<PublicKey>::Wpkh(feebump_pubkey);
         let raw_feebump_tx = Transaction {
             version: 2,
@@ -1175,7 +1170,12 @@ mod tests {
             Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
         );
         let emergency_tx_sighash_feebump = emergency_tx
-            .signature_hash(1, &feebump_txout, &feebump_script, false)
+            .signature_hash(
+                1,
+                &feebump_txout,
+                &feebump_descriptor.script_code().unwrap(),
+                false,
+            )
             .expect("Vault emergency feebump sighash");
         satisfy_transaction_input(
             &secp,
@@ -1244,7 +1244,12 @@ mod tests {
         )
         .expect("Satisfying cancel transaction");
         let cancel_tx_sighash_feebump = cancel_tx
-            .signature_hash(1, &feebump_txout, &feebump_script, false)
+            .signature_hash(
+                1,
+                &feebump_txout,
+                &feebump_descriptor.script_code().unwrap(),
+                false,
+            )
             .expect("Cancel tx feebump input sighash");
         satisfy_transaction_input(
             &secp,
@@ -1291,7 +1296,12 @@ mod tests {
         );
         // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx
-            .signature_hash(1, &feebump_txout, &feebump_script, false)
+            .signature_hash(
+                1,
+                &feebump_txout,
+                &feebump_descriptor.script_code().unwrap(),
+                false,
+            )
             .expect("Unvault emergency tx feebump input sighash");
         satisfy_transaction_input(
             &secp,
