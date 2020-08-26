@@ -7,12 +7,15 @@ jobs:
     strategy:
       matrix:
         # We don't have a MSRV (yet?)
-        toolchain: [stable,
-                    beta,
-                    nightly]
-        include:
-          - toolchain: nightly
-    runs-on: ubuntu-latest
+        toolchain:
+          - stable
+          - beta
+          - nightly
+        os:
+          - ubuntu-latest
+          - macOS-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v2
@@ -76,3 +79,28 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           parallel-finished: true
+
+  rustfmt_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+            components: rustfmt
+            override: true
+      - run: cargo fmt -- --check
+
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
+            components: clippy
+            override: true
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
