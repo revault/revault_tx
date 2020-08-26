@@ -303,6 +303,8 @@ mod tests {
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
         assert_eq!(default_vault_descriptor(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        // For the sake of test coverage: we should get the same error with CPFP policy
+        assert_eq!(unvault_cpfp_descriptor(&participants), Err(RevaultError::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
         // Maximum non-managers for 2 managers (+ 1)
         let managers = (0..2)
