@@ -616,9 +616,7 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::scripts::{
-        default_unvault_descriptor, default_vault_descriptor, unvault_cpfp_descriptor,
-    };
+    use super::super::scripts::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor};
     use super::{
         RevaultError, RevaultPrevout, RevaultSatisfier, RevaultTransaction, RevaultTxOut,
         RBF_SEQUENCE,
@@ -1088,11 +1086,11 @@ mod tests {
 
         // Get the script descriptors for the txos we're going to create
         let unvault_descriptor =
-            default_unvault_descriptor(&non_managers, &managers, &cosigners, CSV_VALUE)
+            unvault_descriptor(&non_managers, &managers, &cosigners, CSV_VALUE)
                 .expect("Unvault descriptor generation error");
         let cpfp_descriptor =
             unvault_cpfp_descriptor(&managers).expect("Unvault CPFP descriptor generation error");
-        let vault_descriptor = default_vault_descriptor(
+        let vault_descriptor = vault_descriptor(
             &managers
                 .into_iter()
                 .chain(non_managers.into_iter())

@@ -32,7 +32,7 @@ use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 ///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
 /// };
 /// let vault_descriptor =
-///     scripts::default_vault_descriptor(&[public_key, public_key]).expect("Compiling descriptor");
+///     scripts::vault_descriptor(&[public_key, public_key]).expect("Compiling descriptor");
 ///
 /// println!("Vault descriptor redeem script: {}", vault_descriptor.witness_script());
 /// ```
@@ -41,9 +41,7 @@ use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 /// - If the passed slice contains less than 2 public keys.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn default_vault_descriptor(
-    participants: &[PublicKey],
-) -> Result<Descriptor<PublicKey>, RevaultError> {
+pub fn vault_descriptor(participants: &[PublicKey]) -> Result<Descriptor<PublicKey>, RevaultError> {
     if participants.len() < 2 {
         return Err(RevaultError::ScriptCreation(
             "Vault: bad parameters. We need more than one participant.".to_string(),
@@ -99,7 +97,7 @@ pub fn default_vault_descriptor(
 ///     compressed: true,
 ///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
 /// };
-/// let unvault_descriptor = scripts::default_unvault_descriptor(
+/// let unvault_descriptor = scripts::unvault_descriptor(
 ///     // Non-managers
 ///     &[public_key, public_key, public_key],
 ///     // Managers
@@ -118,7 +116,7 @@ pub fn default_vault_descriptor(
 /// not the same as the number of cosigners public key.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn default_unvault_descriptor(
+pub fn unvault_descriptor(
     non_managers: &[PublicKey],
     managers: &[PublicKey],
     cosigners: &[PublicKey],
@@ -198,9 +196,7 @@ pub fn unvault_cpfp_descriptor(
 mod tests {
     use rand::RngCore;
 
-    use super::{
-        default_unvault_descriptor, default_vault_descriptor, unvault_cpfp_descriptor, RevaultError,
-    };
+    use super::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor, RevaultError};
 
     use bitcoin::PublicKey;
 
@@ -253,11 +249,11 @@ mod tests {
                 .map(|_| get_random_pubkey())
                 .collect::<Vec<PublicKey>>();
 
-            default_unvault_descriptor(&non_managers, &managers, &cosigners, 18).expect(&format!(
+            unvault_descriptor(&non_managers, &managers, &cosigners, 18).expect(&format!(
                 "Unvault descriptors creation error with ({}, {})",
                 n_managers, n_non_managers
             ));
-            default_vault_descriptor(
+            vault_descriptor(
                 &managers
                     .iter()
                     .chain(non_managers.iter())
@@ -278,14 +274,14 @@ mod tests {
     #[test]
     fn test_configuration_limits() {
         assert_eq!(
-            default_vault_descriptor(&vec![get_random_pubkey()]),
+            vault_descriptor(&vec![get_random_pubkey()]),
             Err(RevaultError::ScriptCreation(
                 "Vault: bad parameters. We need more than one participant.".to_string()
             ))
         );
 
         assert_eq!(
-            default_unvault_descriptor(
+            unvault_descriptor(
                 &vec![get_random_pubkey()],
                 &vec![get_random_pubkey()],
                 &vec![get_random_pubkey(), get_random_pubkey()],
@@ -302,7 +298,7 @@ mod tests {
         let participants = (0..68)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        assert_eq!(default_vault_descriptor(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(vault_descriptor(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
         // For the sake of test coverage: we should get the same error with CPFP policy
         assert_eq!(unvault_cpfp_descriptor(&participants), Err(RevaultError::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
@@ -316,7 +312,7 @@ mod tests {
         let cosigners = (0..21)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        assert_eq!(default_unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(RevaultError::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(RevaultError::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
     }
 
     // TODO: extensively test all possibilities before reaching the limit
