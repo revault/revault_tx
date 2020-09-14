@@ -278,7 +278,7 @@ fn sighash(
     is_anyonecanpay: bool,
 ) -> SigHash {
     // FIXME: cache the cache for when the user has too much cash
-    let mut cache = SigHashCache::new(&tx);
+    let mut cache = SigHashCache::new(tx);
     cache.signature_hash(
         input_index,
         &script_code,
@@ -898,7 +898,7 @@ mod tests {
         let emergency_tx_sighash_feebump = emergency_tx.signature_hash(
             1,
             &feebump_txout,
-            &feebump_descriptor.script_code().unwrap(),
+            &feebump_descriptor.script_code(),
             false,
         );
         satisfy_transaction_input(
@@ -958,12 +958,9 @@ mod tests {
             true,
         )
         .expect("Satisfying cancel transaction");
-        let cancel_tx_sighash_feebump = cancel_tx.signature_hash(
-            1,
-            &feebump_txout,
-            &feebump_descriptor.script_code().unwrap(),
-            false,
-        );
+        let cancel_tx_sighash_feebump =
+            cancel_tx.signature_hash(1, &feebump_txout, &feebump_descriptor.script_code(), false);
+
         satisfy_transaction_input(
             &secp,
             &mut cancel_tx,
@@ -1007,7 +1004,7 @@ mod tests {
         let unemer_tx_sighash_feebump = unemergency_tx.signature_hash(
             1,
             &feebump_txout,
-            &feebump_descriptor.script_code().unwrap(),
+            &feebump_descriptor.script_code(),
             false,
         );
         satisfy_transaction_input(
