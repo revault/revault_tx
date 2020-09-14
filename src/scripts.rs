@@ -21,7 +21,7 @@ use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 ///
 /// # Examples
 /// ```rust
-/// use revault::scripts;
+/// use revault_tx::scripts;
 /// use bitcoin;
 /// use secp256k1;
 ///
@@ -88,7 +88,7 @@ pub fn vault_descriptor(participants: &[PublicKey]) -> Result<Descriptor<PublicK
 ///
 /// # Examples
 /// ```rust
-/// use revault::scripts;
+/// use revault_tx::scripts;
 /// use bitcoin;
 /// use secp256k1;
 ///
