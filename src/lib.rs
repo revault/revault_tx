@@ -9,4 +9,4 @@ pub mod error;
 
 pub mod scripts;
 
-pub mod transations;
+pub mod transactions;
