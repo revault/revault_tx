@@ -2,7 +2,7 @@
 //!
 //! Typesafe routines to create bare revault transactions.
 
-use super::error::RevaultError;
+use crate::error::Error;
 
 use bitcoin::consensus::encode;
 use bitcoin::consensus::encode::Encodable;
@@ -90,7 +90,7 @@ impl RevaultTransaction {
     pub fn new_unvault(
         prevouts: &[RevaultPrevout; 1],
         txouts: &[RevaultTxOut; 2],
-    ) -> Result<RevaultTransaction, RevaultError> {
+    ) -> Result<RevaultTransaction, Error> {
         match (prevouts, txouts) {
             (
                 [RevaultPrevout::VaultPrevout(ref vault_prevout)],
@@ -107,7 +107,7 @@ impl RevaultTransaction {
                     output: vec![unvault_txout.clone(), cpfp_txout.clone()],
                 }))
             }
-            _ => Err(RevaultError::TransactionCreation(format!(
+            _ => Err(Error::TransactionCreation(format!(
                 "Unvault: type mismatch on prevout ({:?}) or output(s) ({:?})",
                 prevouts, txouts
             ))),
@@ -124,7 +124,7 @@ impl RevaultTransaction {
         prevouts: &[RevaultPrevout],
         outputs: &[RevaultTxOut],
         csv_value: u32,
-    ) -> Result<RevaultTransaction, RevaultError> {
+    ) -> Result<RevaultTransaction, Error> {
         let mut txins = Vec::<TxIn>::with_capacity(prevouts.len());
         for prevout in prevouts {
             if let RevaultPrevout::UnvaultPrevout(ref prev) = prevout {
@@ -134,7 +134,7 @@ impl RevaultTransaction {
                     ..TxIn::default()
                 })
             } else {
-                return Err(RevaultError::TransactionCreation(format!(
+                return Err(Error::TransactionCreation(format!(
                     "Spend: prevout ({:?}) type mismatch",
                     prevout
                 )));
@@ -148,7 +148,7 @@ impl RevaultTransaction {
                     txouts.push(txout.clone())
                 }
                 _ => {
-                    return Err(RevaultError::TransactionCreation(format!(
+                    return Err(Error::TransactionCreation(format!(
                         "Spend: output ({:?}) type mismatch",
                         out
                     )))
@@ -173,7 +173,7 @@ impl RevaultTransaction {
     pub fn new_cancel(
         prevouts: &[RevaultPrevout],
         txouts: &[RevaultTxOut],
-    ) -> Result<RevaultTransaction, RevaultError> {
+    ) -> Result<RevaultTransaction, Error> {
         match (prevouts, txouts) {
             // FIXME: Use https://github.com/rust-lang/rust/issues/54883 once stabilized ..
             (
@@ -204,7 +204,7 @@ impl RevaultTransaction {
                     output: vec![vault_txout.clone()],
                 }))
             }
-            _ => Err(RevaultError::TransactionCreation(format!(
+            _ => Err(Error::TransactionCreation(format!(
                 "Cancel: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 prevouts, txouts,
             ))),
@@ -220,7 +220,7 @@ impl RevaultTransaction {
     pub fn new_emergency(
         prevouts: &[RevaultPrevout],
         txouts: &[RevaultTxOut],
-    ) -> Result<RevaultTransaction, RevaultError> {
+    ) -> Result<RevaultTransaction, Error> {
         // FIXME: Use https://github.com/rust-lang/rust/issues/54883 once stabilized ..
         match (prevouts, txouts) {
             (
@@ -260,7 +260,7 @@ impl RevaultTransaction {
                     output: vec![emer_txout.clone()],
                 }))
             }
-            _ => Err(RevaultError::TransactionCreation(format!(
+            _ => Err(Error::TransactionCreation(format!(
                 "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 prevouts, txouts,
             ))),
@@ -308,7 +308,7 @@ impl RevaultTransaction {
         previous_txout: &RevaultTxOut,
         script_code: &Script,
         is_anyonecanpay: bool,
-    ) -> Result<SigHash, RevaultError> {
+    ) -> Result<SigHash, Error> {
         // Called if types match
         fn sighash(
             tx: &Transaction,
@@ -341,7 +341,7 @@ impl RevaultTransaction {
                     sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
                 ),
                 _ => Err(
-                    RevaultError::Signature(
+                    Error::Signature(
                         "Wrong transaction output type: vault and fee-buming transactions only spend external utxos"
                         .to_string()
                     )
@@ -352,7 +352,7 @@ impl RevaultTransaction {
                     sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
                 ),
                 _ => Err(
-                    RevaultError::Signature(
+                    Error::Signature(
                         "Wrong transaction output type: unvault transactions only spend vault transactions"
                         .to_string()
                     )
@@ -363,7 +363,7 @@ impl RevaultTransaction {
                     sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
                 ),
                 _ => Err(
-                    RevaultError::Signature(
+                    Error::Signature(
                         "Wrong transaction output type: spend transactions only spend unvault transactions"
                         .to_string()
                     )
@@ -375,7 +375,7 @@ impl RevaultTransaction {
                     sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
                 ),
                 _ => Err(
-                    RevaultError::Signature(
+                    Error::Signature(
                         "Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions"
                         .to_string()
                     )
@@ -388,7 +388,7 @@ impl RevaultTransaction {
                     sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
                 ),
                 _ => Err(
-                    RevaultError::Signature(
+                    Error::Signature(
                         "Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions"
                         .to_string()
                     )
@@ -402,10 +402,7 @@ impl RevaultTransaction {
     ///
     /// # Errors
     /// - If verification fails.
-    pub fn verify(
-        &self,
-        previous_transactions: &[&RevaultTransaction],
-    ) -> Result<(), RevaultError> {
+    pub fn verify(&self, previous_transactions: &[&RevaultTransaction]) -> Result<(), Error> {
         // Look for a referenced txout in the set of spent transactions
         // TODO: optimize this by walking the previous tx set only once ?
         fn get_txout(prevout: &OutPoint, transactions: &[&RevaultTransaction]) -> Option<TxOut> {
@@ -439,14 +436,14 @@ impl RevaultTransaction {
                         self.serialize().as_slice(),
                         index,
                     ) {
-                        return Err(RevaultError::TransactionVerification(format!(
+                        return Err(Error::TransactionVerification(format!(
                             "Bitcoinconsensus error: {:?}",
                             err
                         )));
                     }
                 }
                 None => {
-                    return Err(RevaultError::TransactionVerification(format!(
+                    return Err(Error::TransactionVerification(format!(
                         "Unknown txout refered by txin '{:?}'",
                         txin
                     )));
@@ -558,7 +555,7 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
         transaction: &'a mut RevaultTransaction,
         input_index: usize,
         descriptor: &'a Descriptor<Pk>,
-    ) -> Result<RevaultSatisfier<'a, Pk>, RevaultError> {
+    ) -> Result<RevaultSatisfier<'a, Pk>, Error> {
         let txin = match transaction {
             RevaultTransaction::VaultTransaction(ref mut tx)
             | RevaultTransaction::UnvaultTransaction(ref mut tx)
@@ -567,7 +564,7 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
             | RevaultTransaction::EmergencyTransaction(ref mut tx)
             | RevaultTransaction::FeeBumpTransaction(ref mut tx) => {
                 if input_index >= tx.input.len() {
-                    return Err(RevaultError::InputSatisfaction(format!(
+                    return Err(Error::InputSatisfaction(format!(
                         "Input index '{}' out of bounds of the transaction '{:?}'.",
                         input_index, tx.input
                     )));
@@ -602,9 +599,9 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
     ///
     /// # Errors
     /// - If we could not satisfy the input.
-    pub fn satisfy(&mut self) -> Result<(), RevaultError> {
+    pub fn satisfy(&mut self) -> Result<(), Error> {
         if let Err(e) = self.descriptor.satisfy(&mut self.txin, &self.satisfier) {
-            return Err(RevaultError::InputSatisfaction(format!(
+            return Err(Error::InputSatisfaction(format!(
                 "Script satisfaction error: {}.",
                 e
             )));
@@ -618,8 +615,7 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
 mod tests {
     use super::super::scripts::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor};
     use super::{
-        RevaultError, RevaultPrevout, RevaultSatisfier, RevaultTransaction, RevaultTxOut,
-        RBF_SEQUENCE,
+        Error, RevaultPrevout, RevaultSatisfier, RevaultTransaction, RevaultTxOut, RBF_SEQUENCE,
     };
 
     use rand::RngCore;
@@ -696,7 +692,7 @@ mod tests {
         descriptor: &Descriptor<PublicKey>,
         secret_keys: &Vec<secp256k1::SecretKey>,
         is_anyonecanpay: bool,
-    ) -> Result<(), RevaultError> {
+    ) -> Result<(), Error> {
         let mut revault_sat =
             RevaultSatisfier::new(tx, input_index, &descriptor).expect("Creating satisfier.");
         secret_keys.iter().for_each(|privkey| {
@@ -763,7 +759,7 @@ mod tests {
                 &[vault_prevout],
                 &[vault_txout.clone(), feebump_txout.clone()]
             ),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Unvault: type mismatch on prevout ({:?}) or output(s) ({:?})",
                 &[vault_prevout],
                 &[vault_txout.clone(), feebump_txout.clone()]
@@ -787,14 +783,14 @@ mod tests {
         );
         assert_eq!(
             RevaultTransaction::new_spend(&[vault_prevout], &[spend_txout.clone()], 144),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Spend: prevout ({:?}) type mismatch",
                 vault_prevout,
             )))
         );
         assert_eq!(
             RevaultTransaction::new_spend(&[unvault_prevout], &[feebump_txout.clone()], 144),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Spend: output ({:?}) type mismatch",
                 &feebump_txout,
             )))
@@ -830,7 +826,7 @@ mod tests {
                 &[spend_txout.clone()],
                 144
             ),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Spend: prevout ({:?}) type mismatch",
                 feebump_prevout,
             )))
@@ -902,7 +898,7 @@ mod tests {
                 &[unvault_prevout],
                 &[vault_txout.clone(), vault_txout.clone()]
             ),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Cancel: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 &[unvault_prevout],
                 &[vault_txout.clone(), vault_txout.clone()]
@@ -938,7 +934,7 @@ mod tests {
                 &[unvault_prevout, feebump_prevout],
                 &[vault_txout.clone(), vault_txout.clone()]
             ),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Cancel: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 &[unvault_prevout, feebump_prevout],
                 &[vault_txout.clone(), vault_txout.clone()]
@@ -963,7 +959,7 @@ mod tests {
         );
         assert_eq!(
             RevaultTransaction::new_emergency(&[vault_prevout], &[vault_txout.clone()]),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 &[vault_prevout],
                 &[vault_txout.clone()]
@@ -999,7 +995,7 @@ mod tests {
                 &[vault_prevout, vault_prevout],
                 &[emer_txout.clone()]
             ),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 &[vault_prevout, vault_prevout],
                 &[emer_txout.clone()]
@@ -1022,7 +1018,7 @@ mod tests {
         );
         assert_eq!(
             RevaultTransaction::new_emergency(&[unvault_prevout], &[spend_txout.clone()]),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 &[unvault_prevout],
                 &[spend_txout.clone()]
@@ -1058,7 +1054,7 @@ mod tests {
                 &[unvault_prevout, vault_prevout],
                 &[emer_txout.clone()]
             ),
-            Err(RevaultError::TransactionCreation(format!(
+            Err(Error::TransactionCreation(format!(
                 "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
                 &[unvault_prevout, vault_prevout],
                 &[emer_txout.clone()]
@@ -1152,7 +1148,7 @@ mod tests {
             &vault_txo,
             &vault_descriptor.script_code().unwrap(),
             false,
-        ), Err(RevaultError::Signature(
+        ), Err(Error::Signature(
             "Wrong transaction output type: vault and fee-buming transactions only spend external utxos"
             .to_string()
         )));
@@ -1193,7 +1189,7 @@ mod tests {
         // You cannot get a sighash for an unexpected prevout
         assert_eq!(
             emergency_tx.signature_hash(0, &emer_txo.clone(), &unvault_descriptor.witness_script(), true),
-            Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
+            Err(Error::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
         );
         let emergency_tx_sighash_feebump = emergency_tx
             .signature_hash(
@@ -1252,7 +1248,7 @@ mod tests {
         // You cannot get a sighash for an unexpected prevout
         assert_eq!(
             cancel_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true),
-            Err(RevaultError::Signature(
+            Err(Error::Signature(
                 "Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions".to_string()
             ))
         );
@@ -1298,7 +1294,7 @@ mod tests {
         // You cannot get a sighash for an unexpected prevout
         assert_eq!(
             unemergency_tx.signature_hash(0, &cpfp_txo.clone(), &vault_descriptor.witness_script(), true),
-            Err(RevaultError::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
+            Err(Error::Signature("Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions".to_string()))
         );
         let unemergency_tx_sighash = unemergency_tx
             .signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true)
@@ -1316,7 +1312,7 @@ mod tests {
         // If we don't satisfy the feebump input, libbitcoinconsensus will yell
         assert_eq!(
             unemergency_tx.verify(&[&unvault_tx, &feebump_tx]),
-            Err(RevaultError::TransactionVerification(
+            Err(Error::TransactionVerification(
                 "Bitcoinconsensus error: ERR_SCRIPT".to_string()
             ))
         );
@@ -1352,7 +1348,7 @@ mod tests {
         // However if we secify a wrong prevout, it'll yell at us
         assert_eq!(
             unvault_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true),
-            Err(RevaultError::Signature(
+            Err(Error::Signature(
                 "Wrong transaction output type: unvault transactions only spend vault transactions"
                     .to_string()
             ))
@@ -1386,7 +1382,7 @@ mod tests {
         // You cannot get a sighash for an unexpected prevout
         assert_eq!(
             spend_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true),
-            Err(RevaultError::Signature(
+            Err(Error::Signature(
                 "Wrong transaction output type: spend transactions only spend unvault transactions"
                     .to_string()
             ))
@@ -1409,7 +1405,7 @@ mod tests {
         );
         assert_eq!(
             satisfaction_res,
-            Err(RevaultError::InputSatisfaction(
+            Err(Error::InputSatisfaction(
                 "Script satisfaction error: could not satisfy.".to_string()
             ))
         );
