@@ -8,7 +8,7 @@
 //! Note these functions are not safe to reuse once the architecture set up, as the
 //! returned descriptors are non-deterministically compiled from an abstract policy.
 
-use super::error::RevaultError;
+use crate::error::Error;
 
 use bitcoin::PublicKey;
 use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
@@ -41,9 +41,9 @@ use miniscript::{policy::concrete::Policy, Descriptor, Segwitv0};
 /// - If the passed slice contains less than 2 public keys.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn vault_descriptor(participants: &[PublicKey]) -> Result<Descriptor<PublicKey>, RevaultError> {
+pub fn vault_descriptor(participants: &[PublicKey]) -> Result<Descriptor<PublicKey>, Error> {
     if participants.len() < 2 {
-        return Err(RevaultError::ScriptCreation(
+        return Err(Error::ScriptCreation(
             "Vault: bad parameters. We need more than one participant.".to_string(),
         ));
     }
@@ -59,7 +59,7 @@ pub fn vault_descriptor(participants: &[PublicKey]) -> Result<Descriptor<PublicK
 
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
-        Err(compile_err) => Err(RevaultError::ScriptCreation(format!(
+        Err(compile_err) => Err(Error::ScriptCreation(format!(
             "Vault policy compilation error: {}",
             compile_err
         ))),
@@ -121,9 +121,9 @@ pub fn unvault_descriptor(
     managers: &[PublicKey],
     cosigners: &[PublicKey],
     csv_value: u32,
-) -> Result<Descriptor<PublicKey>, RevaultError> {
+) -> Result<Descriptor<PublicKey>, Error> {
     if non_managers.is_empty() || managers.is_empty() || cosigners.len() != non_managers.len() {
-        return Err(RevaultError::ScriptCreation(
+        return Err(Error::ScriptCreation(
             "Unvault: bad parameters. There must be a non-zero \
                 number of managers and non_managers, and as many cosigners as non_managers"
                 .to_string(),
@@ -157,7 +157,7 @@ pub fn unvault_descriptor(
 
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
-        Err(compile_err) => Err(RevaultError::ScriptCreation(format!(
+        Err(compile_err) => Err(Error::ScriptCreation(format!(
             "Unvault policy compilation error: {}",
             compile_err
         ))),
@@ -172,9 +172,7 @@ pub fn unvault_descriptor(
 /// # Errors
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn unvault_cpfp_descriptor(
-    managers: &[PublicKey],
-) -> Result<Descriptor<PublicKey>, RevaultError> {
+pub fn unvault_cpfp_descriptor(managers: &[PublicKey]) -> Result<Descriptor<PublicKey>, Error> {
     let pubkeys = managers
         .iter()
         .map(|pubkey| Policy::Key(*pubkey))
@@ -184,7 +182,7 @@ pub fn unvault_cpfp_descriptor(
 
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
-        Err(compile_err) => Err(RevaultError::ScriptCreation(format!(
+        Err(compile_err) => Err(Error::ScriptCreation(format!(
             "Unvault CPFP policy compilation error: {}",
             compile_err
         ))),
@@ -196,7 +194,7 @@ pub fn unvault_cpfp_descriptor(
 mod tests {
     use rand::RngCore;
 
-    use super::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor, RevaultError};
+    use super::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor, Error};
 
     use bitcoin::PublicKey;
 
@@ -275,7 +273,7 @@ mod tests {
     fn test_configuration_limits() {
         assert_eq!(
             vault_descriptor(&vec![get_random_pubkey()]),
-            Err(RevaultError::ScriptCreation(
+            Err(Error::ScriptCreation(
                 "Vault: bad parameters. We need more than one participant.".to_string()
             ))
         );
@@ -287,7 +285,7 @@ mod tests {
                 &vec![get_random_pubkey(), get_random_pubkey()],
                 6
             ),
-            Err(RevaultError::ScriptCreation(
+            Err(Error::ScriptCreation(
                 "Unvault: bad parameters. There must be a non-zero \
                 number of managers and non_managers, and as many cosigners as non_managers"
                     .to_string()
@@ -298,9 +296,9 @@ mod tests {
         let participants = (0..68)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        assert_eq!(vault_descriptor(&participants), Err(RevaultError::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(vault_descriptor(&participants), Err(Error::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
         // For the sake of test coverage: we should get the same error with CPFP policy
-        assert_eq!(unvault_cpfp_descriptor(&participants), Err(RevaultError::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(unvault_cpfp_descriptor(&participants), Err(Error::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
         // Maximum non-managers for 2 managers (+ 1)
         let managers = (0..2)
@@ -312,7 +310,7 @@ mod tests {
         let cosigners = (0..21)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
-        assert_eq!(unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(RevaultError::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(Error::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
     }
 
     // TODO: extensively test all possibilities before reaching the limit

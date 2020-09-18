@@ -6,7 +6,7 @@ use std::{error, fmt};
 
 /// An error specific to the management of Revault transactions and scripts.
 #[derive(PartialEq, Eq, Debug)]
-pub enum RevaultError {
+pub enum Error {
     /// The transaction creation failed.
     TransactionCreation(String),
     /// The script creation failed.
@@ -19,26 +19,20 @@ pub enum RevaultError {
     TransactionVerification(String),
 }
 
-impl fmt::Display for RevaultError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            RevaultError::TransactionCreation(ref e) => {
+            Error::TransactionCreation(ref e) => {
                 write!(f, "Revault transaction creation error: {}", e)
             }
-            RevaultError::ScriptCreation(ref e) => {
-                write!(f, "Revault script creation error: {}", e)
-            }
-            RevaultError::Signature(ref e) => {
-                write!(f, "Revault transaction signature error: {}", e)
-            }
-            RevaultError::InputSatisfaction(ref e) => {
-                write!(f, "Revault input satisfaction error: {}", e)
-            }
-            RevaultError::TransactionVerification(ref e) => {
+            Error::ScriptCreation(ref e) => write!(f, "Revault script creation error: {}", e),
+            Error::Signature(ref e) => write!(f, "Revault transaction signature error: {}", e),
+            Error::InputSatisfaction(ref e) => write!(f, "Revault input satisfaction error: {}", e),
+            Error::TransactionVerification(ref e) => {
                 write!(f, "Revault transaction verification error: {}", e)
             }
         }
     }
 }
 
-impl error::Error for RevaultError {}
+impl error::Error for Error {}
