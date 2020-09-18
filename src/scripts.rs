@@ -292,13 +292,23 @@ mod tests {
             ))
         );
 
-        // Maximum N-of-N (+ 1)
+        // Maximum N-of-N
+        let participants = (0..67)
+            .map(|_| get_random_pubkey())
+            .collect::<Vec<PublicKey>>();
+        vault_descriptor(&participants).expect("Should be OK: max allowed value");
+        // Now hit the limit
         let participants = (0..68)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
         assert_eq!(vault_descriptor(&participants), Err(Error::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
-        // Maximum 1-of-N (+ 1)
+        // Maximum 1-of-N
+        let managers = (0..20)
+            .map(|_| get_random_pubkey())
+            .collect::<Vec<PublicKey>>();
+        unvault_cpfp_descriptor(&managers).expect("Should be OK, that's the maximum allowed value");
+        // Hit the limit
         let managers = (0..21)
             .map(|_| get_random_pubkey())
             .collect::<Vec<PublicKey>>();
