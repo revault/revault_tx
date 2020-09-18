@@ -554,60 +554,77 @@ mod tests {
     use rand::RngCore;
     use std::str::FromStr;
 
-    use bitcoin::{OutPoint, PublicKey, SigHash, Transaction, TxIn, TxOut};
-    use miniscript::Descriptor;
+    use bitcoin::{util::bip32, OutPoint, SigHash, Transaction, TxIn, TxOut};
+    use miniscript::{
+        descriptor::{DescriptorPublicKey, DescriptorXPub},
+        Descriptor,
+    };
 
-    fn get_random_privkey() -> bitcoin::secp256k1::SecretKey {
-        let mut rand_bytes = [0u8; 32];
-        let mut secret_key = Err(bitcoin::secp256k1::Error::InvalidSecretKey);
+    fn get_random_privkey() -> bip32::ExtendedPrivKey {
+        let mut rand_bytes = [0u8; 64];
 
-        while secret_key.is_err() {
-            rand::thread_rng().fill_bytes(&mut rand_bytes);
-            secret_key = bitcoin::secp256k1::SecretKey::from_slice(&rand_bytes);
-        }
+        rand::thread_rng().fill_bytes(&mut rand_bytes);
 
-        secret_key.unwrap()
+        bip32::ExtendedPrivKey::new_master(
+            bitcoin::network::constants::Network::Bitcoin,
+            &rand_bytes,
+        )
+        .unwrap_or_else(|_| get_random_privkey())
     }
 
+    /// This generates the master private keys to derive directly from master, so it's
+    /// [None]<xpub_goes_here>m/* descriptor pubkeys
     fn get_participants_sets(
         secp: &bitcoin::secp256k1::Secp256k1<bitcoin::secp256k1::All>,
     ) -> (
-        (Vec<bitcoin::secp256k1::SecretKey>, Vec<PublicKey>),
-        (Vec<bitcoin::secp256k1::SecretKey>, Vec<PublicKey>),
-        (Vec<bitcoin::secp256k1::SecretKey>, Vec<PublicKey>),
+        (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
+        (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
+        (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
     ) {
         let managers_priv = (0..3)
             .map(|_| get_random_privkey())
-            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
+            .collect::<Vec<bip32::ExtendedPrivKey>>();
         let managers = managers_priv
             .iter()
-            .map(|privkey| PublicKey {
-                compressed: true,
-                key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+            .map(|xpriv| {
+                DescriptorPublicKey::XPub(DescriptorXPub {
+                    origin: None,
+                    xpub: bip32::ExtendedPubKey::from_private(&secp, &xpriv),
+                    derivation_path: bip32::DerivationPath::from(vec![]),
+                    is_wildcard: true,
+                })
             })
-            .collect::<Vec<PublicKey>>();
+            .collect::<Vec<DescriptorPublicKey>>();
 
         let non_managers_priv = (0..8)
             .map(|_| get_random_privkey())
-            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
+            .collect::<Vec<bip32::ExtendedPrivKey>>();
         let non_managers = non_managers_priv
             .iter()
-            .map(|privkey| PublicKey {
-                compressed: true,
-                key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+            .map(|xpriv| {
+                DescriptorPublicKey::XPub(DescriptorXPub {
+                    origin: None,
+                    xpub: bip32::ExtendedPubKey::from_private(&secp, &xpriv),
+                    derivation_path: bip32::DerivationPath::from(vec![]),
+                    is_wildcard: true,
+                })
             })
-            .collect::<Vec<PublicKey>>();
+            .collect::<Vec<DescriptorPublicKey>>();
 
         let cosigners_priv = (0..8)
             .map(|_| get_random_privkey())
-            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
+            .collect::<Vec<bip32::ExtendedPrivKey>>();
         let cosigners = cosigners_priv
             .iter()
-            .map(|privkey| PublicKey {
-                compressed: true,
-                key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+            .map(|xpriv| {
+                DescriptorPublicKey::XPub(DescriptorXPub {
+                    origin: None,
+                    xpub: bip32::ExtendedPubKey::from_private(&secp, &xpriv),
+                    derivation_path: bip32::DerivationPath::from(vec![]),
+                    is_wildcard: true,
+                })
             })
-            .collect::<Vec<PublicKey>>();
+            .collect::<Vec<DescriptorPublicKey>>();
 
         (
             (managers_priv, managers),
@@ -622,21 +639,36 @@ mod tests {
         tx: &mut impl RevaultTransaction,
         input_index: usize,
         tx_sighash: &SigHash,
-        descriptor: &Descriptor<PublicKey>,
-        secret_keys: &Vec<bitcoin::secp256k1::SecretKey>,
+        descriptor: &Descriptor<DescriptorPublicKey>,
+        xprivs: &Vec<bip32::ExtendedPrivKey>,
+        child_number: Option<bip32::ChildNumber>,
         is_anyonecanpay: bool,
     ) -> Result<(), Error> {
         let mut revault_sat =
             RevaultSatisfier::new(tx, input_index, &descriptor).expect("Creating satisfier.");
-        secret_keys.iter().for_each(|privkey| {
+        // Can we agree that rustfmt does some nasty formatting now ??
+        let derivation_path = bip32::DerivationPath::from(if let Some(cn) = child_number {
+            vec![cn]
+        } else {
+            vec![]
+        });
+        xprivs.iter().for_each(|xpriv| {
+            // As key, we store the master xpub with the path to the actual pubkey for this sig
+            // so that to_public_key() returns this one.
             revault_sat.insert_sig(
-                PublicKey {
-                    compressed: true,
-                    key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
-                },
+                DescriptorPublicKey::XPub(DescriptorXPub {
+                    origin: None,
+                    xpub: bip32::ExtendedPubKey::from_private(&secp, xpriv),
+                    derivation_path: derivation_path.clone(),
+                    is_wildcard: false,
+                }),
                 secp.sign(
                     &bitcoin::secp256k1::Message::from_slice(&tx_sighash).unwrap(),
-                    &privkey,
+                    &xpriv
+                        .derive_priv(&secp, &derivation_path)
+                        .unwrap()
+                        .private_key
+                        .key,
                 ),
                 is_anyonecanpay,
             );
@@ -798,31 +830,41 @@ mod tests {
 
         let secp = bitcoin::secp256k1::Secp256k1::new();
 
+        // Let's get the 10th key of each
+        let child_number = bip32::ChildNumber::from(10);
+
         // Keys, keys, keys everywhere !
         let (
             (managers_priv, managers),
             (non_managers_priv, non_managers),
             (cosigners_priv, cosigners),
         ) = get_participants_sets(&secp);
-        let all_participants_priv = managers_priv
+        let all_participants_xpriv = managers_priv
             .iter()
             .chain(non_managers_priv.iter())
             .cloned()
-            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
+            .collect::<Vec<bip32::ExtendedPrivKey>>();
 
         // Get the script descriptors for the txos we're going to create
-        let unvault_descriptor =
-            unvault_descriptor(non_managers.clone(), managers.clone(), cosigners, CSV_VALUE)
-                .expect("Unvault descriptor generation error");
+        let unvault_descriptor = unvault_descriptor(
+            non_managers.clone(),
+            managers.clone(),
+            cosigners.clone(),
+            CSV_VALUE,
+        )
+        .expect("Unvault descriptor generation error")
+        .derive(child_number);
         let cpfp_descriptor = unvault_cpfp_descriptor(managers.clone())
-            .expect("Unvault CPFP descriptor generation error");
+            .expect("Unvault CPFP descriptor generation error")
+            .derive(child_number);
         let vault_descriptor = vault_descriptor(
             managers
                 .into_iter()
                 .chain(non_managers.into_iter())
-                .collect::<Vec<PublicKey>>(),
+                .collect::<Vec<DescriptorPublicKey>>(),
         )
-        .expect("Vault descriptor generation error");
+        .expect("Vault descriptor generation error")
+        .derive(child_number);
 
         // The funding transaction does not matter (random txid from my mempool)
         let vault_scriptpubkey = vault_descriptor.script_pubkey();
@@ -847,12 +889,15 @@ mod tests {
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
-        let feebump_secret_key = get_random_privkey();
-        let feebump_pubkey = PublicKey {
-            compressed: true,
-            key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &feebump_secret_key),
-        };
-        let feebump_descriptor = Descriptor::<PublicKey>::Wpkh(feebump_pubkey);
+        let feebump_xpriv = get_random_privkey();
+        let feebump_xpub = bip32::ExtendedPubKey::from_private(&secp, &feebump_xpriv);
+        let feebump_descriptor =
+            Descriptor::<DescriptorPublicKey>::Wpkh(DescriptorPublicKey::XPub(DescriptorXPub {
+                origin: None,
+                xpub: feebump_xpub,
+                derivation_path: bip32::DerivationPath::from(vec![]),
+                is_wildcard: false, // We are not going to derive from this one
+            }));
         let raw_feebump_tx = Transaction {
             version: 2,
             lock_time: 0,
@@ -891,10 +936,12 @@ mod tests {
             0,
             &emergency_tx_sighash_vault,
             &vault_descriptor,
-            &all_participants_priv,
+            &all_participants_xpriv,
+            Some(child_number),
             true,
         )
         .expect("Satisfying emergency transaction");
+
         let emergency_tx_sighash_feebump = emergency_tx.signature_hash(
             1,
             &feebump_txout,
@@ -907,7 +954,8 @@ mod tests {
             1,
             &emergency_tx_sighash_feebump,
             &feebump_descriptor,
-            &vec![feebump_secret_key],
+            &vec![feebump_xpriv],
+            None,
             false,
         )
         .expect("Satisfying feebump input of the first emergency transaction.");
@@ -954,7 +1002,8 @@ mod tests {
             0,
             &cancel_tx_sighash,
             &unvault_descriptor,
-            &all_participants_priv,
+            &all_participants_xpriv,
+            Some(child_number),
             true,
         )
         .expect("Satisfying cancel transaction");
@@ -967,7 +1016,8 @@ mod tests {
             1,
             &cancel_tx_sighash_feebump,
             &feebump_descriptor,
-            &vec![feebump_secret_key],
+            &vec![feebump_xpriv],
+            None, // No derivation path for the feebump key
             false,
         )
         .expect("Satisfying feebump input of the cancel transaction.");
@@ -992,7 +1042,8 @@ mod tests {
             0,
             &unemergency_tx_sighash,
             &unvault_descriptor,
-            &all_participants_priv,
+            &all_participants_xpriv,
+            Some(child_number),
             true,
         )
         .expect("Satisfying unvault emergency transaction");
@@ -1013,7 +1064,8 @@ mod tests {
             1,
             &unemer_tx_sighash_feebump,
             &feebump_descriptor,
-            &vec![feebump_secret_key],
+            &vec![feebump_xpriv],
+            None,
             false,
         )
         .expect("Satisfying feebump input of the cancel transaction.");
@@ -1028,7 +1080,8 @@ mod tests {
             0,
             &unvault_tx_sighash,
             &vault_descriptor,
-            &all_participants_priv,
+            &all_participants_xpriv,
+            Some(child_number),
             false,
         )
         .expect("Satisfying unvault transaction");
@@ -1057,7 +1110,8 @@ mod tests {
                 .iter()
                 .chain(cosigners_priv.iter())
                 .copied()
-                .collect::<Vec<bitcoin::secp256k1::SecretKey>>(),
+                .collect::<Vec<bip32::ExtendedPrivKey>>(),
+            Some(child_number),
             false,
         );
         assert_eq!(
@@ -1085,7 +1139,8 @@ mod tests {
                 .iter()
                 .chain(cosigners_priv.iter())
                 .copied()
-                .collect::<Vec<bitcoin::secp256k1::SecretKey>>(),
+                .collect::<Vec<bip32::ExtendedPrivKey>>(),
+            Some(child_number),
             false,
         )
         .expect("Satisfying second spend transaction");
