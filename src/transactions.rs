@@ -6,10 +6,10 @@ use crate::{error::Error, prevouts::*, txouts::*};
 
 use bitcoin::consensus::encode;
 use bitcoin::consensus::encode::Encodable;
+use bitcoin::secp256k1::Signature;
 use bitcoin::util::bip143::SigHashCache;
 use bitcoin::{OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut};
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
-use secp256k1::Signature;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -557,55 +557,55 @@ mod tests {
     use bitcoin::{OutPoint, PublicKey, SigHash, Transaction, TxIn, TxOut};
     use miniscript::Descriptor;
 
-    fn get_random_privkey() -> secp256k1::SecretKey {
+    fn get_random_privkey() -> bitcoin::secp256k1::SecretKey {
         let mut rand_bytes = [0u8; 32];
-        let mut secret_key = Err(secp256k1::Error::InvalidSecretKey);
+        let mut secret_key = Err(bitcoin::secp256k1::Error::InvalidSecretKey);
 
         while secret_key.is_err() {
             rand::thread_rng().fill_bytes(&mut rand_bytes);
-            secret_key = secp256k1::SecretKey::from_slice(&rand_bytes);
+            secret_key = bitcoin::secp256k1::SecretKey::from_slice(&rand_bytes);
         }
 
         secret_key.unwrap()
     }
 
     fn get_participants_sets(
-        secp: &secp256k1::Secp256k1<secp256k1::All>,
+        secp: &bitcoin::secp256k1::Secp256k1<bitcoin::secp256k1::All>,
     ) -> (
-        (Vec<secp256k1::SecretKey>, Vec<PublicKey>),
-        (Vec<secp256k1::SecretKey>, Vec<PublicKey>),
-        (Vec<secp256k1::SecretKey>, Vec<PublicKey>),
+        (Vec<bitcoin::secp256k1::SecretKey>, Vec<PublicKey>),
+        (Vec<bitcoin::secp256k1::SecretKey>, Vec<PublicKey>),
+        (Vec<bitcoin::secp256k1::SecretKey>, Vec<PublicKey>),
     ) {
         let managers_priv = (0..3)
             .map(|_| get_random_privkey())
-            .collect::<Vec<secp256k1::SecretKey>>();
+            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
         let managers = managers_priv
             .iter()
             .map(|privkey| PublicKey {
                 compressed: true,
-                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
             })
             .collect::<Vec<PublicKey>>();
 
         let non_managers_priv = (0..8)
             .map(|_| get_random_privkey())
-            .collect::<Vec<secp256k1::SecretKey>>();
+            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
         let non_managers = non_managers_priv
             .iter()
             .map(|privkey| PublicKey {
                 compressed: true,
-                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
             })
             .collect::<Vec<PublicKey>>();
 
         let cosigners_priv = (0..8)
             .map(|_| get_random_privkey())
-            .collect::<Vec<secp256k1::SecretKey>>();
+            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
         let cosigners = cosigners_priv
             .iter()
             .map(|privkey| PublicKey {
                 compressed: true,
-                key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
             })
             .collect::<Vec<PublicKey>>();
 
@@ -618,12 +618,12 @@ mod tests {
 
     // Routine for ""signing"" a transaction
     fn satisfy_transaction_input(
-        secp: &secp256k1::Secp256k1<secp256k1::All>,
+        secp: &bitcoin::secp256k1::Secp256k1<bitcoin::secp256k1::All>,
         tx: &mut impl RevaultTransaction,
         input_index: usize,
         tx_sighash: &SigHash,
         descriptor: &Descriptor<PublicKey>,
-        secret_keys: &Vec<secp256k1::SecretKey>,
+        secret_keys: &Vec<bitcoin::secp256k1::SecretKey>,
         is_anyonecanpay: bool,
     ) -> Result<(), Error> {
         let mut revault_sat =
@@ -632,10 +632,10 @@ mod tests {
             revault_sat.insert_sig(
                 PublicKey {
                     compressed: true,
-                    key: secp256k1::PublicKey::from_secret_key(&secp, &privkey),
+                    key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &privkey),
                 },
                 secp.sign(
-                    &secp256k1::Message::from_slice(&tx_sighash).unwrap(),
+                    &bitcoin::secp256k1::Message::from_slice(&tx_sighash).unwrap(),
                     &privkey,
                 ),
                 is_anyonecanpay,
@@ -796,7 +796,7 @@ mod tests {
     fn test_transaction_chain_satisfaction() {
         const CSV_VALUE: u32 = 42;
 
-        let secp = secp256k1::Secp256k1::new();
+        let secp = bitcoin::secp256k1::Secp256k1::new();
 
         // Keys, keys, keys everywhere !
         let (
@@ -808,7 +808,7 @@ mod tests {
             .iter()
             .chain(non_managers_priv.iter())
             .cloned()
-            .collect::<Vec<secp256k1::SecretKey>>();
+            .collect::<Vec<bitcoin::secp256k1::SecretKey>>();
 
         // Get the script descriptors for the txos we're going to create
         let unvault_descriptor =
@@ -850,7 +850,7 @@ mod tests {
         let feebump_secret_key = get_random_privkey();
         let feebump_pubkey = PublicKey {
             compressed: true,
-            key: secp256k1::PublicKey::from_secret_key(&secp, &feebump_secret_key),
+            key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &feebump_secret_key),
         };
         let feebump_descriptor = Descriptor::<PublicKey>::Wpkh(feebump_pubkey);
         let raw_feebump_tx = Transaction {
@@ -1057,7 +1057,7 @@ mod tests {
                 .iter()
                 .chain(cosigners_priv.iter())
                 .copied()
-                .collect::<Vec<secp256k1::SecretKey>>(),
+                .collect::<Vec<bitcoin::secp256k1::SecretKey>>(),
             false,
         );
         assert_eq!(
@@ -1085,7 +1085,7 @@ mod tests {
                 .iter()
                 .chain(cosigners_priv.iter())
                 .copied()
-                .collect::<Vec<secp256k1::SecretKey>>(),
+                .collect::<Vec<bitcoin::secp256k1::SecretKey>>(),
             false,
         )
         .expect("Satisfying second spend transaction");

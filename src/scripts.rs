@@ -22,7 +22,7 @@ use miniscript::{policy::concrete::Policy, Descriptor, MiniscriptKey, Segwitv0};
 /// ```rust
 /// use revault_tx::scripts;
 /// use bitcoin;
-/// use secp256k1;
+/// use bitcoin::secp256k1;
 ///
 /// let secp = secp256k1::Secp256k1::new();
 /// let secret_key = secp256k1::SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
@@ -86,7 +86,7 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(participants: Vec<Pk>) -> Result<Desc
 /// ```rust
 /// use revault_tx::scripts;
 /// use bitcoin;
-/// use secp256k1;
+/// use bitcoin::secp256k1;
 ///
 /// let secp = secp256k1::Secp256k1::new();
 /// let secret_key = secp256k1::SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
@@ -204,19 +204,19 @@ mod tests {
     use bitcoin::PublicKey;
 
     fn get_random_pubkey() -> PublicKey {
-        let secp = secp256k1::Secp256k1::new();
+        let secp = bitcoin::secp256k1::Secp256k1::new();
         let mut rand_bytes = [0u8; 32];
         // Make rustc happy..
-        let mut secret_key = Err(secp256k1::Error::InvalidSecretKey);
+        let mut secret_key = Err(bitcoin::secp256k1::Error::InvalidSecretKey);
 
         while secret_key.is_err() {
             rand::thread_rng().fill_bytes(&mut rand_bytes);
-            secret_key = secp256k1::SecretKey::from_slice(&rand_bytes);
+            secret_key = bitcoin::secp256k1::SecretKey::from_slice(&rand_bytes);
         }
 
         PublicKey {
             compressed: true,
-            key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key.unwrap()),
+            key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key.unwrap()),
         }
     }
 

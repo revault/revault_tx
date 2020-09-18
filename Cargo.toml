@@ -8,7 +8,6 @@ edition = "2018"
 [dependencies]
 bitcoin = "0.24"
 bitcoinconsensus = "0.19.0-1"
-secp256k1 = { version = "0.18.0" }
 miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript", branch = "master", features = ["compiler"] }
 
 [dev-dependencies]
