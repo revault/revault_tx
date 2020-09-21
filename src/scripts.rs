@@ -130,6 +130,12 @@ pub fn unvault_descriptor(
         ));
     }
 
+    if (csv_value & (1 << 22)) != 0 {
+        return Err(Error::ScriptCreation(
+            "Unvault: bad parameters. The CSV must be specified in block granularity".to_owned(),
+        ));
+    }
+
     let mut pubkeys = managers
         .iter()
         .map(|pubkey| Policy::Key(*pubkey))
@@ -148,7 +154,7 @@ pub fn unvault_descriptor(
         .collect::<Vec<Policy<PublicKey>>>();
     let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
-    let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::After(csv_value)]);
+    let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older(csv_value)]);
 
     let cosigners_or_non_spenders =
         Policy::Or(vec![(10, cosigners_and_csv), (1, non_spenders_thres)]);
@@ -289,6 +295,19 @@ mod tests {
                 "Unvault: bad parameters. There must be a non-zero \
                 number of managers and non_managers, and as many cosigners as non_managers"
                     .to_string()
+            ))
+        );
+
+        assert_eq!(
+            unvault_descriptor(
+                &vec![get_random_pubkey()],
+                &vec![get_random_pubkey()],
+                &vec![get_random_pubkey()],
+                4194305
+            ),
+            Err(Error::ScriptCreation(
+                "Unvault: bad parameters. The CSV must be specified in block granularity"
+                    .to_owned()
             ))
         );
 

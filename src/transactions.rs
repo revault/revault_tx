@@ -453,8 +453,9 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for RevaultInputSatisfier<Pk
         None
     }
 
-    fn check_after(&self, csv: u32) -> bool {
-        self.sequence == csv
+    fn check_older(&self, csv: u32) -> bool {
+        assert!((csv & (1 << 22) == 0));
+        self.sequence >= csv
     }
 }
 
@@ -1059,8 +1060,7 @@ mod tests {
             false,
         )
         .expect("Satisfying second spend transaction");
-        // FIXME: fix the After vs Older typo in the unvault policy
-        // assert_libbitcoinconsensus_validity!(spend_tx, [unvault_tx]);
+        assert_libbitcoinconsensus_validity!(spend_tx, [unvault_tx]);
 
         // Test that we can get the hexadecimal representation of each transaction without error
         vault_tx.hex().expect("Hex repr vault_tx");
