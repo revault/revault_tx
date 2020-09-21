@@ -50,7 +50,8 @@ pub fn vault_descriptor(participants: &[PublicKey]) -> Result<Descriptor<PublicK
 
     let pubkeys = participants
         .iter()
-        .map(|pubkey| Policy::Key(*pubkey))
+        .copied()
+        .map(Policy::Key)
         .collect::<Vec<Policy<PublicKey>>>();
 
     // Note that this will be more optimal once
@@ -138,19 +139,22 @@ pub fn unvault_descriptor(
 
     let mut pubkeys = managers
         .iter()
-        .map(|pubkey| Policy::Key(*pubkey))
+        .copied()
+        .map(Policy::Key)
         .collect::<Vec<Policy<PublicKey>>>();
     let spenders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
     pubkeys = non_managers
         .iter()
-        .map(|pubkey| Policy::Key(*pubkey))
+        .copied()
+        .map(Policy::Key)
         .collect::<Vec<Policy<PublicKey>>>();
     let non_spenders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
     pubkeys = cosigners
         .iter()
-        .map(|pubkey| Policy::Key(*pubkey))
+        .copied()
+        .map(Policy::Key)
         .collect::<Vec<Policy<PublicKey>>>();
     let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
@@ -181,7 +185,8 @@ pub fn unvault_descriptor(
 pub fn unvault_cpfp_descriptor(managers: &[PublicKey]) -> Result<Descriptor<PublicKey>, Error> {
     let pubkeys = managers
         .iter()
-        .map(|pubkey| Policy::Key(*pubkey))
+        .copied()
+        .map(Policy::Key)
         .collect::<Vec<Policy<PublicKey>>>();
 
     let policy = Policy::Threshold(1, pubkeys);
