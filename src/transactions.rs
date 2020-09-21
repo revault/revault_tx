@@ -2,7 +2,7 @@
 //!
 //! Typesafe routines to create bare revault transactions.
 
-use crate::error::Error;
+use crate::{error::Error, prevouts::*, txouts::*};
 
 use bitcoin::consensus::encode;
 use bitcoin::consensus::encode::Encodable;
@@ -12,457 +12,44 @@ use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
 use secp256k1::Signature;
 
 use std::collections::HashMap;
-use std::io;
+use std::fmt;
 
-const RBF_SEQUENCE: u32 = u32::MAX - 2;
-
-/// A transaction output created by a Revault transaction.
-#[derive(PartialEq, Eq, Debug, Clone, Hash)]
-pub enum RevaultTxOut {
-    /// A vault transaction output. Used by the funding / deposit transactions, the cancel
-    /// transactions, and the spend transactions (for the change).
-    VaultTxOut(TxOut),
-    /// *The* unvault transaction output.
-    UnvaultTxOut(TxOut),
-    /// A spend transaction output. As Revault is flexible by default with regard to the
-    /// destination of the spend transaction funds, any number of these can be present in a spend
-    /// transaction (use a VaultTxOut for the change output however).
-    SpendTxOut(TxOut),
-    /// The Emergency Deep Vault, the destination of the emergency transactions fund.
-    EmergencyTxOut(TxOut),
-    /// The output attached to the unvault transaction so that the fund managers can
-    /// CPFP.
-    CpfpTxOut(TxOut),
-    /// The output spent by the revaulting transactions to bump their feerate
-    FeeBumpTxOut(TxOut),
-    /// An untagged external output, spent by the vault transaction
-    ExternalTxOut(TxOut),
-}
-
-/// A transaction output spent by a Revault transaction.
-#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash, PartialOrd, Ord)]
-pub enum RevaultPrevout {
-    /// A vault txo spent by the unvault transaction and the emergency transaction.
-    VaultPrevout(OutPoint),
-    /// An unvault txo spent by the cancel transaction, an emergency transaction, and
-    /// the spend transaction.
-    UnvaultPrevout(OutPoint),
-    /// A wallet txo spent by a revaulting (cancel, emergency) transaction to bump the
-    /// transaction feerate.
-    /// This output is often created by a first stage transaction, but may directly be a wallet
-    /// utxo.
-    FeeBumpPrevout(OutPoint),
-    /// The unvault CPFP txo spent to accelerate the confirmation of the unvault transaction.
-    CpfpPrevout(OutPoint),
-}
-
-// Using a struct wrapper around the enum wrapper to create an encapsulation behaviour would be
-// quite verbose..
+/// TxIn's sequence to set for the tx to be bip125-replaceable
+pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
 
 /// A Revault transaction. Apart from the VaultTransaction, all variants must be instanciated
 /// using the new_*() methods.
-#[derive(PartialEq, Eq, Debug)]
-pub enum RevaultTransaction {
-    /// The funding transaction, we don't create it but it's a handy wrapper.
-    VaultTransaction(Transaction),
-    /// The unvaulting transaction, spending a vault and being eventually spent by a spend
-    /// transaction (if not revaulted).
-    UnvaultTransaction(Transaction),
-    /// The transaction spending the unvaulting transaction, paying to one or multiple
-    /// externally-controlled addresses, and possibly to a new vault txo for the change.
-    SpendTransaction(Transaction),
-    /// The transaction "revaulting" a spend attempt, i.e. spending the unvaulting transaction back
-    /// to a vault txo.
-    CancelTransaction(Transaction),
-    /// The transaction spending either a vault or unvault txo to The Emergency Deep Vault.
-    EmergencyTransaction(Transaction),
-    /// The fee-bumping transaction, we don't create it but it may be passed to verify()
-    FeeBumpTransaction(Transaction),
-}
+pub trait RevaultTransaction: fmt::Debug {
+    /// Get the inner transaction
+    fn inner_tx(&self) -> &Transaction;
 
-impl RevaultTransaction {
-    /// Create an unvault transaction.
-    /// An unvault transaction always spends one vault txout and contains one CPFP txout in
-    /// addition to the unvault one.
-    ///
-    /// # Errors
-    /// - If prevouts or txouts type mismatch.
-    pub fn new_unvault(
-        prevouts: &[RevaultPrevout; 1],
-        txouts: &[RevaultTxOut; 2],
-    ) -> Result<RevaultTransaction, Error> {
-        match (prevouts, txouts) {
-            (
-                [RevaultPrevout::VaultPrevout(ref vault_prevout)],
-                [RevaultTxOut::UnvaultTxOut(ref unvault_txout), RevaultTxOut::CpfpTxOut(ref cpfp_txout)],
-            ) => {
-                let vault_input = TxIn {
-                    previous_output: *vault_prevout,
-                    ..Default::default()
-                };
-                Ok(RevaultTransaction::UnvaultTransaction(Transaction {
-                    version: 2,
-                    lock_time: 0, // FIXME: anti fee snipping
-                    input: vec![vault_input],
-                    output: vec![unvault_txout.clone(), cpfp_txout.clone()],
-                }))
-            }
-            _ => Err(Error::TransactionCreation(format!(
-                "Unvault: type mismatch on prevout ({:?}) or output(s) ({:?})",
-                prevouts, txouts
-            ))),
-        }
-    }
-
-    /// Create a new spend transaction.
-    /// A spend transaction can batch multiple unvault txouts, and may have any number of
-    /// txouts (including, but not restricted to, change).
-    ///
-    /// # Errors
-    /// - If prevouts or txouts type mismatch.
-    pub fn new_spend(
-        prevouts: &[RevaultPrevout],
-        outputs: &[RevaultTxOut],
-        csv_value: u32,
-    ) -> Result<RevaultTransaction, Error> {
-        let mut txins = Vec::<TxIn>::with_capacity(prevouts.len());
-        for prevout in prevouts {
-            if let RevaultPrevout::UnvaultPrevout(ref prev) = prevout {
-                txins.push(TxIn {
-                    previous_output: *prev,
-                    sequence: csv_value,
-                    ..TxIn::default()
-                })
-            } else {
-                return Err(Error::TransactionCreation(format!(
-                    "Spend: prevout ({:?}) type mismatch",
-                    prevout
-                )));
-            }
-        }
-
-        let mut txouts = Vec::<TxOut>::with_capacity(outputs.len());
-        for out in outputs {
-            match out {
-                RevaultTxOut::SpendTxOut(ref txout) | RevaultTxOut::VaultTxOut(ref txout) => {
-                    txouts.push(txout.clone())
-                }
-                _ => {
-                    return Err(Error::TransactionCreation(format!(
-                        "Spend: output ({:?}) type mismatch",
-                        out
-                    )))
-                }
-            }
-        }
-
-        Ok(RevaultTransaction::SpendTransaction(Transaction {
-            version: 2,
-            lock_time: 0,
-            input: txins,
-            output: txouts,
-        }))
-    }
-
-    /// Create a new cancel transaction.
-    /// A cancel transaction always pays to a vault output and spend the unvault output, and
-    /// may have a fee-bumping input.
-    ///
-    /// # Errors
-    /// - If prevouts or txouts type mismatch.
-    pub fn new_cancel(
-        prevouts: &[RevaultPrevout],
-        txouts: &[RevaultTxOut],
-    ) -> Result<RevaultTransaction, Error> {
-        match (prevouts, txouts) {
-            // FIXME: Use https://github.com/rust-lang/rust/issues/54883 once stabilized ..
-            (
-                &[RevaultPrevout::UnvaultPrevout(_)],
-                &[RevaultTxOut::VaultTxOut(ref vault_txout)],
-            )
-            | (
-                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
-                &[RevaultTxOut::VaultTxOut(ref vault_txout)],
-            ) => {
-                let inputs = prevouts
-                    .iter()
-                    .map(|prevout| TxIn {
-                        previous_output: match prevout {
-                            RevaultPrevout::UnvaultPrevout(ref prev)
-                            | RevaultPrevout::FeeBumpPrevout(ref prev) => *prev,
-                            _ => unreachable!(),
-                        },
-                        sequence: RBF_SEQUENCE,
-                        ..Default::default()
-                    })
-                    .collect();
-
-                Ok(RevaultTransaction::CancelTransaction(Transaction {
-                    version: 2,
-                    lock_time: 0,
-                    input: inputs,
-                    output: vec![vault_txout.clone()],
-                }))
-            }
-            _ => Err(Error::TransactionCreation(format!(
-                "Cancel: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
-                prevouts, txouts,
-            ))),
-        }
-    }
-
-    /// Create an emergency transaction.
-    /// There are two emergency transactions, one spending the vault output and one spending
-    /// the unvault output. Both may have a fee-bumping input.
-    ///
-    /// # Errors
-    /// - If prevouts or txouts type mismatch.
-    pub fn new_emergency(
-        prevouts: &[RevaultPrevout],
-        txouts: &[RevaultTxOut],
-    ) -> Result<RevaultTransaction, Error> {
-        // FIXME: Use https://github.com/rust-lang/rust/issues/54883 once stabilized ..
-        match (prevouts, txouts) {
-            (
-                &[RevaultPrevout::VaultPrevout(_)],
-                &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
-            )
-            | (
-                &[RevaultPrevout::VaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
-                &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
-            )
-            | (
-                &[RevaultPrevout::UnvaultPrevout(_)],
-                &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
-            )
-            | (
-                &[RevaultPrevout::UnvaultPrevout(_), RevaultPrevout::FeeBumpPrevout(_)],
-                &[RevaultTxOut::EmergencyTxOut(ref emer_txout)],
-            ) => {
-                let inputs = prevouts
-                    .iter()
-                    .map(|prevout| TxIn {
-                        previous_output: match prevout {
-                            RevaultPrevout::VaultPrevout(ref prev)
-                            | RevaultPrevout::UnvaultPrevout(ref prev)
-                            | RevaultPrevout::FeeBumpPrevout(ref prev) => *prev,
-                            _ => unreachable!(),
-                        },
-                        sequence: RBF_SEQUENCE,
-                        ..Default::default()
-                    })
-                    .collect();
-
-                Ok(RevaultTransaction::EmergencyTransaction(Transaction {
-                    version: 2,
-                    lock_time: 0,
-                    input: inputs,
-                    output: vec![emer_txout.clone()],
-                }))
-            }
-            _ => Err(Error::TransactionCreation(format!(
-                "Emergency: prevout(s) ({:?}) or output(s) ({:?}) type mismatch",
-                prevouts, txouts,
-            ))),
-        }
-    }
-
-    // It's private on purpose: accessing the inner tx should either be done by using the provided
-    // methods (or adding new ones to be reused), or by careful pattern matching.
-    fn inner_tx(&self) -> &Transaction {
-        match *self {
-            RevaultTransaction::VaultTransaction(ref tx)
-            | RevaultTransaction::UnvaultTransaction(ref tx)
-            | RevaultTransaction::SpendTransaction(ref tx)
-            | RevaultTransaction::CancelTransaction(ref tx)
-            | RevaultTransaction::EmergencyTransaction(ref tx)
-            | RevaultTransaction::FeeBumpTransaction(ref tx) => tx,
-        }
-    }
-
-    /// Get the network-serialized (inner) transaction
-    pub fn serialize(&self) -> Vec<u8> {
-        encode::serialize(&*self)
-    }
+    /// Get the inner transaction
+    fn inner_tx_mut(&mut self) -> &mut Transaction;
 
     /// Get the specified output of this transaction as an OutPoint to be referenced
     /// in a following transaction.
-    /// Mainly useful to avoid the destructuring boilerplate.
-    pub fn prevout(&self, vout: u32) -> OutPoint {
+    fn into_prevout(&self, vout: u32) -> OutPoint {
         OutPoint {
             txid: self.inner_tx().txid(),
             vout,
         }
     }
 
-    /// Get the sighash for any RevaultTransaction input.
-    /// This is a wrapper around rust-bitcoin's `signature_hash()` but as we only ever sign
-    /// transaction with ALL or ALL|ANYONECANPAY we don't need to be generalistic with choosing
-    /// the type.
-    ///
-    /// # Errors
-    /// - If the previous output type mismatch.
-    pub fn signature_hash(
-        &self,
-        input_index: usize,
-        previous_txout: &RevaultTxOut,
-        script_code: &Script,
-        is_anyonecanpay: bool,
-    ) -> Result<SigHash, Error> {
-        // Called if types match
-        fn sighash(
-            tx: &Transaction,
-            input_index: usize,
-            previous_txout: &TxOut,
-            script_code: &Script,
-            is_anyonecanpay: bool,
-        ) -> SigHash {
-            let mut cache = SigHashCache::new(&tx);
-            if is_anyonecanpay {
-                return cache.signature_hash(
-                    input_index,
-                    &script_code,
-                    previous_txout.value,
-                    SigHashType::AllPlusAnyoneCanPay,
-                );
-            }
-            cache.signature_hash(
-                input_index,
-                &script_code,
-                previous_txout.value,
-                SigHashType::All,
-            )
-        }
-
-        match *self {
-            RevaultTransaction::VaultTransaction(ref tx)
-            | RevaultTransaction::FeeBumpTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::ExternalTxOut(ref txo) => Ok(
-                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
-                ),
-                _ => Err(
-                    Error::Signature(
-                        "Wrong transaction output type: vault and fee-buming transactions only spend external utxos"
-                        .to_string()
-                    )
-                ),
-            }
-            RevaultTransaction::UnvaultTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::VaultTxOut(ref txo) => Ok(
-                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
-                ),
-                _ => Err(
-                    Error::Signature(
-                        "Wrong transaction output type: unvault transactions only spend vault transactions"
-                        .to_string()
-                    )
-                ),
-            },
-            RevaultTransaction::SpendTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::UnvaultTxOut(ref txo) => Ok(
-                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
-                ),
-                _ => Err(
-                    Error::Signature(
-                        "Wrong transaction output type: spend transactions only spend unvault transactions"
-                        .to_string()
-                    )
-                ),
-            },
-            RevaultTransaction::CancelTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::UnvaultTxOut(ref txo)
-                | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(
-                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
-                ),
-                _ => Err(
-                    Error::Signature(
-                        "Wrong transaction output type: cancel transactions only spend unvault transactions and fee-bumping transactions"
-                        .to_string()
-                    )
-                ),
-            },
-            RevaultTransaction::EmergencyTransaction(ref tx) => match previous_txout {
-                RevaultTxOut::VaultTxOut(ref txo)
-                | RevaultTxOut::UnvaultTxOut(ref txo)
-                | RevaultTxOut::FeeBumpTxOut(ref txo) => Ok(
-                    sighash(&tx, input_index, &txo, &script_code, is_anyonecanpay)
-                ),
-                _ => Err(
-                    Error::Signature(
-                        "Wrong transaction output type: emergency transactions only spend vault, unvault and fee-bumping transactions"
-                        .to_string()
-                    )
-                ),
-            }
-        }
-    }
-
-    /// Verify this transaction validity against libbitcoinconsensus.
-    /// Handles all the destructuring and txout research internally.
-    ///
-    /// # Errors
-    /// - If verification fails.
-    pub fn verify(&self, previous_transactions: &[&RevaultTransaction]) -> Result<(), Error> {
-        // Look for a referenced txout in the set of spent transactions
-        // TODO: optimize this by walking the previous tx set only once ?
-        fn get_txout(prevout: &OutPoint, transactions: &[&RevaultTransaction]) -> Option<TxOut> {
-            for prev_tx in transactions {
-                match *prev_tx {
-                    RevaultTransaction::VaultTransaction(ref tx)
-                    | RevaultTransaction::UnvaultTransaction(ref tx)
-                    | RevaultTransaction::SpendTransaction(ref tx)
-                    | RevaultTransaction::CancelTransaction(ref tx)
-                    | RevaultTransaction::EmergencyTransaction(ref tx)
-                    | RevaultTransaction::FeeBumpTransaction(ref tx) => {
-                        if tx.txid() == prevout.txid {
-                            if prevout.vout as usize >= tx.output.len() {
-                                return None;
-                            }
-                            return Some(tx.output[prevout.vout as usize].clone());
-                        }
-                    }
-                }
-            }
-
-            None
-        }
-
-        for (index, txin) in self.inner_tx().input.iter().enumerate() {
-            match get_txout(&txin.previous_output, &previous_transactions) {
-                Some(prev_txout) => {
-                    if let Err(err) = bitcoinconsensus::verify(
-                        &prev_txout.script_pubkey.as_bytes(),
-                        prev_txout.value,
-                        self.serialize().as_slice(),
-                        index,
-                    ) {
-                        return Err(Error::TransactionVerification(format!(
-                            "Bitcoinconsensus error: {:?}",
-                            err
-                        )));
-                    }
-                }
-                None => {
-                    return Err(Error::TransactionVerification(format!(
-                        "Unknown txout refered by txin '{:?}'",
-                        txin
-                    )));
-                }
-            }
-        }
-
-        Ok(())
+    /// Get the network-serialized (inner) transaction
+    fn serialize(&self) -> Vec<u8> {
+        // FIXME: this panics...
+        encode::serialize(self.inner_tx())
     }
 
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
     ///
     /// # Errors
     /// - If we could not encode the transaction (should not happen).
-    pub fn hex(&self) -> Result<String, Box<dyn std::error::Error>> {
+    fn hex(&self) -> Result<String, Box<dyn std::error::Error>> {
         let mut buff = Vec::<u8>::new();
         let mut as_hex = String::new();
 
-        self.consensus_encode(&mut buff)?;
+        self.inner_tx().consensus_encode(&mut buff)?;
         for byte in buff.into_iter() {
             as_hex.push_str(&format!("{:02x}", byte));
         }
@@ -471,9 +58,343 @@ impl RevaultTransaction {
     }
 }
 
-impl Encodable for RevaultTransaction {
-    fn consensus_encode<S: io::Write>(&self, mut s: S) -> Result<usize, encode::Error> {
-        self.inner_tx().consensus_encode(&mut s)
+// Boilerplate for newtype declaration and small trait helpers implementation.
+macro_rules! impl_revault_transaction {
+    ( $transaction_name:ident, $doc_comment:meta ) => {
+        #[$doc_comment]
+        #[derive(Debug)]
+        pub struct $transaction_name(Transaction);
+
+        impl RevaultTransaction for $transaction_name {
+            fn inner_tx(&self) -> &Transaction {
+                &self.0
+            }
+
+            fn inner_tx_mut(&mut self) -> &mut Transaction {
+                &mut self.0
+            }
+        }
+    };
+}
+
+// Boilerplate for creating an actual (inner) transaction with a known number of prevouts / txouts.
+macro_rules! create_tx {
+    ( [$( ($prevout:expr, $sequence:expr) ),* $(,)?], [$($txout:expr),* $(,)?]) => {
+        Transaction {
+            version: 2,
+            lock_time: 0, // FIXME: anti fee-snipping
+            input: vec![$(
+                TxIn {
+                    previous_output: $prevout.outpoint(),
+                    sequence: $sequence,
+                    ..TxIn::default()
+                },
+            )*],
+            output: vec![$(
+                $txout.get_txout(),
+            )*],
+        }
+    }
+}
+
+impl_revault_transaction!(
+    UnvaultTransaction,
+    doc = "The unvaulting transaction, spending a vault and being eventually spent by a spend transaction (if not revaulted)."
+);
+impl UnvaultTransaction {
+    /// An unvault transaction always spends one vault output and contains one CPFP output in
+    /// addition to the unvault one.
+    pub fn new(
+        vault_input: (VaultPrevout, u32),
+        unvault_txout: UnvaultTxOut,
+        cpfp_txout: CpfpTxOut,
+    ) -> UnvaultTransaction {
+        UnvaultTransaction(create_tx!(
+            [(vault_input.0, vault_input.1)],
+            [unvault_txout, cpfp_txout]
+        ))
+    }
+}
+
+impl_revault_transaction!(
+    CancelTransaction,
+    doc = "The transaction \"revaulting\" a spend attempt, i.e. spending the unvaulting transaction back to a vault txo."
+);
+impl CancelTransaction {
+    /// A cancel transaction always pays to a vault output and spends the unvault output, and
+    /// may have a fee-bumping input.
+    pub fn new(
+        unvault_input: (UnvaultPrevout, u32),
+        feebump_input: Option<(FeeBumpPrevout, u32)>,
+        vault_txout: VaultTxOut,
+    ) -> CancelTransaction {
+        CancelTransaction(if let Some(feebump_input) = feebump_input {
+            create_tx!(
+                [
+                    (unvault_input.0, unvault_input.1),
+                    (feebump_input.0, feebump_input.1)
+                ],
+                [vault_txout]
+            )
+        } else {
+            create_tx!([(unvault_input.0, unvault_input.1)], [vault_txout])
+        })
+    }
+}
+
+impl_revault_transaction!(
+    EmergencyTransaction,
+    doc = "The transaction spending a vault output to The Emergency Script."
+);
+impl EmergencyTransaction {
+    /// The first emergency transaction always spends a vault output and pays to the Emergency
+    /// Script. It may also spend an additional output for fee-bumping.
+    pub fn new(
+        vault_input: (VaultPrevout, u32),
+        feebump_input: Option<(FeeBumpPrevout, u32)>,
+        emer_txout: EmergencyTxOut,
+    ) -> EmergencyTransaction {
+        EmergencyTransaction(if let Some(feebump_input) = feebump_input {
+            create_tx!(
+                [
+                    (vault_input.0, vault_input.1),
+                    (feebump_input.0, feebump_input.1)
+                ],
+                [emer_txout]
+            )
+        } else {
+            create_tx!([(vault_input.0, vault_input.1)], [emer_txout])
+        })
+    }
+}
+
+impl_revault_transaction!(
+    UnvaultEmergencyTransaction,
+    doc = "The transaction spending an unvault output to The Emergency Script."
+);
+impl UnvaultEmergencyTransaction {
+    /// The second emergency transaction always spends an unvault output and pays to the Emergency
+    /// Script. It may also spend an additional output for fee-bumping.
+    pub fn new(
+        unvault_input: (UnvaultPrevout, u32),
+        feebump_input: Option<(FeeBumpPrevout, u32)>,
+        emer_txout: EmergencyTxOut,
+    ) -> UnvaultEmergencyTransaction {
+        UnvaultEmergencyTransaction(if let Some(feebump_input) = feebump_input {
+            create_tx!(
+                [
+                    (unvault_input.0, unvault_input.1),
+                    (feebump_input.0, feebump_input.1)
+                ],
+                [emer_txout]
+            )
+        } else {
+            create_tx!([(unvault_input.0, unvault_input.1)], [emer_txout])
+        })
+    }
+}
+
+impl_revault_transaction!(
+    SpendTransaction,
+    doc = "The transaction spending the unvaulting transaction, paying to one or multiple \
+    externally-controlled addresses, and possibly to a new vault txo for the change."
+);
+impl SpendTransaction {
+    /// A spend transaction can batch multiple unvault txouts, and may have any number of
+    /// txouts (including, but not restricted to, change).
+    pub fn new(
+        unvault_inputs: &[(UnvaultPrevout, u32)],
+        spend_txouts: Vec<SpendTxOut>,
+    ) -> SpendTransaction {
+        SpendTransaction(Transaction {
+            version: 2,
+            lock_time: 0, // FIXME: anti fee-snipping
+            input: unvault_inputs
+                .iter()
+                .map(|input| TxIn {
+                    previous_output: input.0.outpoint(),
+                    sequence: input.1,
+                    ..TxIn::default()
+                })
+                .collect(),
+            output: spend_txouts
+                .into_iter()
+                .map(|spend_txout| match spend_txout {
+                    SpendTxOut::Destination(txo) => txo.get_txout(),
+                    SpendTxOut::Change(txo) => txo.get_txout(),
+                })
+                .collect(),
+        })
+    }
+}
+
+impl_revault_transaction!(
+    VaultTransaction,
+    doc = "The funding transaction, we don't create it but it's a handy wrapper for verify()."
+);
+impl VaultTransaction {
+    /// We don't create nor are able to sign, it's just a type wrapper for verify so explicitly no
+    /// restriction on the types here
+    pub fn new(tx: Transaction) -> VaultTransaction {
+        VaultTransaction(tx)
+    }
+}
+
+impl_revault_transaction!(
+    FeeBumpTransaction,
+    doc = "The fee-bumping transaction, we don't create it but it may be passed to verify()."
+);
+impl FeeBumpTransaction {
+    /// We don't create nor are able to sign, it's just a type wrapper for verify so explicitly no
+    /// restriction on the types here
+    pub fn new(tx: Transaction) -> FeeBumpTransaction {
+        FeeBumpTransaction(tx)
+    }
+}
+
+// Non typesafe sighash boilerplate
+fn sighash(
+    tx: &Transaction,
+    input_index: usize,
+    previous_txout: &TxOut,
+    script_code: &Script,
+    is_anyonecanpay: bool,
+) -> SigHash {
+    // FIXME: cache the cache for when the user has too much cash
+    let mut cache = SigHashCache::new(&tx);
+    cache.signature_hash(
+        input_index,
+        &script_code,
+        previous_txout.value,
+        if is_anyonecanpay {
+            SigHashType::AllPlusAnyoneCanPay
+        } else {
+            SigHashType::All
+        },
+    )
+}
+
+// We use this to configure which txouts types are valid to be used by a given transaction type.
+// This allows to compile-time check that we request a sighash for what is more likely to be a
+// valid Revault transaction.
+macro_rules! impl_valid_prev_txouts {
+    ( $valid_prev_txouts: ident, [$($txout:ident),*], $doc_comment:meta ) => {
+        #[$doc_comment]
+        pub trait $valid_prev_txouts: RevaultTxOut {}
+        $(impl $valid_prev_txouts for $txout {})*
+    };
+}
+
+impl UnvaultTransaction {
+    /// Get a signature hash for an input, previous_txout's type is statically checked to be
+    /// acceptable.
+    pub fn signature_hash(
+        &self,
+        input_index: usize,
+        previous_txout: &VaultTxOut,
+        script_code: &Script,
+    ) -> SigHash {
+        sighash(
+            &self.0,
+            input_index,
+            previous_txout.inner_txout(),
+            script_code,
+            false,
+        )
+    }
+}
+
+impl_valid_prev_txouts!(
+    CancelPrevTxout,
+    [UnvaultTxOut, FeeBumpTxOut],
+    doc = "CancelTransaction can only spend UnvaultTxOut and FeeBumpTxOut txouts"
+);
+impl CancelTransaction {
+    /// Get a signature hash for an input, previous_txout's type is statically checked to be
+    /// acceptable.
+    pub fn signature_hash(
+        &self,
+        input_index: usize,
+        previous_txout: &impl CancelPrevTxout,
+        script_code: &Script,
+        is_anyonecanpay: bool,
+    ) -> SigHash {
+        sighash(
+            &self.0,
+            input_index,
+            previous_txout.inner_txout(),
+            script_code,
+            is_anyonecanpay,
+        )
+    }
+}
+
+impl_valid_prev_txouts!(
+    EmergencyPrevTxout,
+    [VaultTxOut, FeeBumpTxOut],
+    doc = "EmergencyTransaction can only spend UnvaultTxOut and FeeBumpTxOut txouts"
+);
+impl EmergencyTransaction {
+    /// Get a signature hash for an input, previous_txout's type is statically checked to be
+    /// acceptable.
+    pub fn signature_hash(
+        &self,
+        input_index: usize,
+        previous_txout: &impl EmergencyPrevTxout,
+        script_code: &Script,
+        is_anyonecanpay: bool,
+    ) -> SigHash {
+        sighash(
+            &self.0,
+            input_index,
+            previous_txout.inner_txout(),
+            script_code,
+            is_anyonecanpay,
+        )
+    }
+}
+
+impl_valid_prev_txouts!(
+    UnvaultEmerPrevTxout,
+    [UnvaultTxOut, FeeBumpTxOut],
+    doc = "UnvaultEmergencyTransaction can only spend UnvaultTxOut and FeeBumpTxOut txouts."
+);
+impl UnvaultEmergencyTransaction {
+    /// Get a signature hash for an input, previous_txout's type is statically checked to be
+    /// acceptable.
+    fn signature_hash(
+        &self,
+        input_index: usize,
+        previous_txout: &impl UnvaultEmerPrevTxout,
+        script_code: &Script,
+        is_anyonecanpay: bool,
+    ) -> SigHash {
+        sighash(
+            &self.0,
+            input_index,
+            previous_txout.inner_txout(),
+            script_code,
+            is_anyonecanpay,
+        )
+    }
+}
+
+impl SpendTransaction {
+    /// Get a signature hash for an input, previous_txout's type is statically checked to be
+    /// acceptable.
+    pub fn signature_hash(
+        &self,
+        input_index: usize,
+        previous_txout: &UnvaultTxOut,
+        script_code: &Script,
+    ) -> SigHash {
+        sighash(
+            &self.0,
+            input_index,
+            previous_txout.inner_txout(),
+            script_code,
+            false,
+        )
     }
 }
 
@@ -552,32 +473,24 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
     /// # Errors
     /// - If the input index is out of bounds.
     pub fn new(
-        transaction: &'a mut RevaultTransaction,
+        transaction: &'a mut impl RevaultTransaction,
         input_index: usize,
         descriptor: &'a Descriptor<Pk>,
     ) -> Result<RevaultSatisfier<'a, Pk>, Error> {
-        let txin = match transaction {
-            RevaultTransaction::VaultTransaction(ref mut tx)
-            | RevaultTransaction::UnvaultTransaction(ref mut tx)
-            | RevaultTransaction::SpendTransaction(ref mut tx)
-            | RevaultTransaction::CancelTransaction(ref mut tx)
-            | RevaultTransaction::EmergencyTransaction(ref mut tx)
-            | RevaultTransaction::FeeBumpTransaction(ref mut tx) => {
-                if input_index >= tx.input.len() {
-                    return Err(Error::InputSatisfaction(format!(
-                        "Input index '{}' out of bounds of the transaction '{:?}'.",
-                        input_index, tx.input
-                    )));
-                }
-                &mut tx.input[input_index]
-            }
-        };
+        let tx = transaction.inner_tx_mut();
+        let txin = tx.input.get_mut(input_index);
+        if let Some(txin) = txin {
+            return Ok(RevaultSatisfier::<Pk> {
+                satisfier: RevaultInputSatisfier::new(txin.sequence),
+                txin,
+                descriptor,
+            });
+        }
 
-        Ok(RevaultSatisfier::<Pk> {
-            satisfier: RevaultInputSatisfier::new(txin.sequence),
-            txin,
-            descriptor,
-        })
+        Err(Error::InputSatisfaction(format!(
+            "Input index '{}' out of bounds.",
+            input_index,
+        )))
     }
 
     /// Insert a signature for a given pubkey to eventually satisfy the spending conditions of the
@@ -609,6 +522,61 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
 
         Ok(())
     }
+}
+
+/// Verify this transaction validity against libbitcoinconsensus.
+/// Handles all the destructuring and txout research internally.
+///
+/// # Errors
+/// - If verification fails.
+pub fn verify_revault_transaction(
+    revault_tx: &impl RevaultTransaction,
+    previous_transactions: &[&impl RevaultTransaction],
+) -> Result<(), Error> {
+    // Look for a referenced txout in the set of spent transactions
+    // TODO: optimize this by walking the previous tx set only once ?
+    fn get_prev_script_and_value<'a>(
+        prevout: &OutPoint,
+        transactions: &'a [&impl RevaultTransaction],
+    ) -> Option<(&'a [u8], u64)> {
+        for prev_tx in transactions {
+            let tx = prev_tx.inner_tx();
+            if tx.txid() == prevout.txid {
+                return tx
+                    .output
+                    .get(prevout.vout as usize)
+                    .and_then(|txo| Some((txo.script_pubkey.as_bytes(), txo.value)));
+            }
+        }
+
+        None
+    }
+
+    for (index, txin) in revault_tx.inner_tx().input.iter().enumerate() {
+        match get_prev_script_and_value(&txin.previous_output, &previous_transactions) {
+            Some((ref raw_script_pubkey, ref value)) => {
+                if let Err(err) = bitcoinconsensus::verify(
+                    *raw_script_pubkey,
+                    *value,
+                    revault_tx.serialize().as_slice(),
+                    index,
+                ) {
+                    return Err(Error::TransactionVerification(format!(
+                        "Bitcoinconsensus error: {:?}",
+                        err
+                    )));
+                }
+            }
+            None => {
+                return Err(Error::TransactionVerification(format!(
+                    "Unknown txout refered by txin '{:?}'",
+                    txin
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
