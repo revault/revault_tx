@@ -525,6 +525,61 @@ impl<'a, Pk: MiniscriptKey + ToPublicKey> RevaultSatisfier<'a, Pk> {
     }
 }
 
+/// Verify this transaction validity against libbitcoinconsensus.
+/// Handles all the destructuring and txout research internally.
+///
+/// # Errors
+/// - If verification fails.
+pub fn verify_revault_transaction(
+    revault_tx: &impl RevaultTransaction,
+    previous_transactions: &[&impl RevaultTransaction],
+) -> Result<(), Error> {
+    // Look for a referenced txout in the set of spent transactions
+    // TODO: optimize this by walking the previous tx set only once ?
+    fn get_prev_script_and_value<'a>(
+        prevout: &OutPoint,
+        transactions: &'a [&impl RevaultTransaction],
+    ) -> Option<(&'a [u8], u64)> {
+        for prev_tx in transactions {
+            let tx = prev_tx.inner_tx();
+            if tx.txid() == prevout.txid {
+                return tx
+                    .output
+                    .get(prevout.vout as usize)
+                    .and_then(|txo| Some((txo.script_pubkey.as_bytes(), txo.value)));
+            }
+        }
+
+        None
+    }
+
+    for (index, txin) in revault_tx.inner_tx().input.iter().enumerate() {
+        match get_prev_script_and_value(&txin.previous_output, &previous_transactions) {
+            Some((ref raw_script_pubkey, ref value)) => {
+                if let Err(err) = bitcoinconsensus::verify(
+                    *raw_script_pubkey,
+                    *value,
+                    revault_tx.serialize().as_slice(),
+                    index,
+                ) {
+                    return Err(Error::TransactionVerification(format!(
+                        "Bitcoinconsensus error: {:?}",
+                        err
+                    )));
+                }
+            }
+            None => {
+                return Err(Error::TransactionVerification(format!(
+                    "Unknown txout refered by txin '{:?}'",
+                    txin
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
