@@ -197,26 +197,20 @@ pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
 
 #[cfg(test)]
 mod tests {
-    use rand::RngCore;
-
     use super::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor, Error};
 
-    use bitcoin::PublicKey;
+    use bitcoin::{
+        secp256k1::rand::{rngs::SmallRng, FromEntropy},
+        PublicKey,
+    };
 
-    fn get_random_pubkey() -> PublicKey {
+    fn get_random_pubkey(rng: &mut SmallRng) -> PublicKey {
         let secp = bitcoin::secp256k1::Secp256k1::new();
-        let mut rand_bytes = [0u8; 32];
-        // Make rustc happy..
-        let mut secret_key = Err(bitcoin::secp256k1::Error::InvalidSecretKey);
-
-        while secret_key.is_err() {
-            rand::thread_rng().fill_bytes(&mut rand_bytes);
-            secret_key = bitcoin::secp256k1::SecretKey::from_slice(&rand_bytes);
-        }
+        let (_, public_key) = secp.generate_keypair(rng);
 
         PublicKey {
             compressed: true,
-            key: bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key.unwrap()),
+            key: public_key,
         }
     }
 
@@ -241,15 +235,16 @@ mod tests {
             (3, 18),
         ];
 
+        let mut rng = SmallRng::from_entropy();
         for (n_managers, n_non_managers) in configurations.iter() {
             let managers = (0..*n_managers)
-                .map(|_| get_random_pubkey())
+                .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
             let non_managers = (0..*n_non_managers)
-                .map(|_| get_random_pubkey())
+                .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
             let cosigners = (0..*n_non_managers)
-                .map(|_| get_random_pubkey())
+                .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
 
             unvault_descriptor(
@@ -283,8 +278,10 @@ mod tests {
 
     #[test]
     fn test_configuration_limits() {
+        let mut rng = SmallRng::from_entropy();
+
         assert_eq!(
-            vault_descriptor(vec![get_random_pubkey()]),
+            vault_descriptor(vec![get_random_pubkey(&mut rng)]),
             Err(Error::ScriptCreation(
                 "Vault: bad parameters. We need more than one participant.".to_string()
             ))
@@ -292,9 +289,9 @@ mod tests {
 
         assert_eq!(
             unvault_descriptor(
-                vec![get_random_pubkey()],
-                vec![get_random_pubkey()],
-                vec![get_random_pubkey(), get_random_pubkey()],
+                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng), get_random_pubkey(&mut rng)],
                 6
             ),
             Err(Error::ScriptCreation(
@@ -306,9 +303,9 @@ mod tests {
 
         assert_eq!(
             unvault_descriptor(
-                vec![get_random_pubkey()],
-                vec![get_random_pubkey()],
-                vec![get_random_pubkey()],
+                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng)],
                 4194305
             ),
             Err(Error::ScriptCreation(
@@ -321,35 +318,35 @@ mod tests {
 
         // Maximum N-of-N
         let participants = (0..67)
-            .map(|_| get_random_pubkey())
+            .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
         vault_descriptor(participants).expect("Should be OK: max allowed value");
         // Now hit the limit
         //let participants = (0..68)
-        //.map(|_| get_random_pubkey())
+        //.map(|_| get_random_pubkey(&mut rng))
         //.collect::<Vec<PublicKey>>();
         //assert_eq!(vault_descriptor(&participants), Err(Error::ScriptCreation("Vault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
         // Maximum 1-of-N
         let managers = (0..20)
-            .map(|_| get_random_pubkey())
+            .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
         unvault_cpfp_descriptor(managers).expect("Should be OK, that's the maximum allowed value");
         // Hit the limit
         //let managers = (0..21)
-        //.map(|_| get_random_pubkey())
+        //.map(|_| get_random_pubkey(&mut rng))
         //.collect::<Vec<PublicKey>>();
         //assert_eq!(unvault_cpfp_descriptor(&managers), Err(Error::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
         // Maximum non-managers for 2 managers (+ 1)
         //let managers = (0..2)
-        //.map(|_| get_random_pubkey())
+        //.map(|_| get_random_pubkey(&mut rng))
         //.collect::<Vec<PublicKey>>();
         //let non_managers = (0..21)
-        //.map(|_| get_random_pubkey())
+        //.map(|_| get_random_pubkey(&mut rng))
         //.collect::<Vec<PublicKey>>();
         //let cosigners = (0..21)
-        //.map(|_| get_random_pubkey())
+        //.map(|_| get_random_pubkey(&mut rng))
         //.collect::<Vec<PublicKey>>();
         //assert_eq!(unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(Error::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
     }

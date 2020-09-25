@@ -551,25 +551,28 @@ mod tests {
     };
     use crate::{prevouts::*, scripts::*, txouts::*};
 
-    use rand::RngCore;
     use std::str::FromStr;
 
-    use bitcoin::{util::bip32, OutPoint, SigHash, Transaction, TxIn, TxOut};
+    use bitcoin::{
+        secp256k1::rand::{rngs::SmallRng, FromEntropy, RngCore},
+        util::bip32,
+        OutPoint, SigHash, Transaction, TxIn, TxOut,
+    };
     use miniscript::{
         descriptor::{DescriptorPublicKey, DescriptorXPub},
         Descriptor,
     };
 
-    fn get_random_privkey() -> bip32::ExtendedPrivKey {
+    fn get_random_privkey(rng: &mut SmallRng) -> bip32::ExtendedPrivKey {
         let mut rand_bytes = [0u8; 64];
 
-        rand::thread_rng().fill_bytes(&mut rand_bytes);
+        rng.fill_bytes(&mut rand_bytes);
 
         bip32::ExtendedPrivKey::new_master(
             bitcoin::network::constants::Network::Bitcoin,
             &rand_bytes,
         )
-        .unwrap_or_else(|_| get_random_privkey())
+        .unwrap_or_else(|_| get_random_privkey(rng))
     }
 
     /// This generates the master private keys to derive directly from master, so it's
@@ -581,8 +584,10 @@ mod tests {
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
     ) {
+        let mut rng = SmallRng::from_entropy();
+
         let managers_priv = (0..3)
-            .map(|_| get_random_privkey())
+            .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
         let managers = managers_priv
             .iter()
@@ -597,7 +602,7 @@ mod tests {
             .collect::<Vec<DescriptorPublicKey>>();
 
         let non_managers_priv = (0..8)
-            .map(|_| get_random_privkey())
+            .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
         let non_managers = non_managers_priv
             .iter()
@@ -612,7 +617,7 @@ mod tests {
             .collect::<Vec<DescriptorPublicKey>>();
 
         let cosigners_priv = (0..8)
-            .map(|_| get_random_privkey())
+            .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
         let cosigners = cosigners_priv
             .iter()
@@ -889,7 +894,8 @@ mod tests {
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
-        let feebump_xpriv = get_random_privkey();
+        let mut rng = SmallRng::from_entropy();
+        let feebump_xpriv = get_random_privkey(&mut rng);
         let feebump_xpub = bip32::ExtendedPubKey::from_private(&secp, &feebump_xpriv);
         let feebump_descriptor =
             Descriptor::<DescriptorPublicKey>::Wpkh(DescriptorPublicKey::XPub(DescriptorXPub {
