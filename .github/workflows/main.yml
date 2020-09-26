@@ -69,17 +69,6 @@ jobs:
           parallel: true
           path-to-lcov: ${{ steps.coverage.outputs.report }}
 
-
-  grcov_finalize:
-    runs-on: ubuntu-latest
-    needs: grcov
-    steps:
-      - name: Coveralls finalization
-        uses: coverallsapp/github-action@master
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          parallel-finished: true
-
   rustfmt_check:
     runs-on: ubuntu-latest
     steps:

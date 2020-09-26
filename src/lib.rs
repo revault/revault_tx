@@ -9,4 +9,8 @@ pub mod error;
 
 pub mod scripts;
 
+pub mod prevouts;
+
+pub mod txouts;
+
 pub mod transactions;
