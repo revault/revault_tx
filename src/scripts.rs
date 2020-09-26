@@ -168,6 +168,71 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
     }
 }
 
+/// Generates an unvault script descriptor with more control over each set of participants.
+///
+/// == A boilerplate "prefer not using this" warning goes here.. ==
+/// The default [unvault_descriptor] is a safe(r) alternative.
+///
+/// This basically abstracts the policy and does a `or(all_participants, and(managers, cosigners, CSV))`
+/// in order to allow experiments with the set of keys of the managers not being included in
+/// the set of keys of all the participants (does not necessarily means that the managers
+/// *themselves* aren't part of this set).
+/// Furthermore, this allows to custom the threshold values of each sub-policy as well as the
+/// likelyhood of each branch of the or().
+///
+/// # Errors
+/// - If any of the slice contains no public key, or if the number of non_managers public keys is
+/// not the same as the number of cosigners public key.
+/// - If the policy compilation to miniscript failed
+#[allow(clippy::too_many_arguments)]
+pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
+    all_participants_pubkeys: Vec<Pk>,
+    all_participants_thresh: usize,
+    all_participants_likelyhood: usize,
+    managers_pubkeys: Vec<Pk>,
+    managers_thresh: usize,
+    cosigners_pubkeys: Vec<Pk>,
+    cosigners_thresh: usize,
+    csv_value: u32,
+    managers_alone_likelyhood: usize,
+) -> Result<Descriptor<Pk>, Error> {
+    let all_participants_pubkeys = all_participants_pubkeys
+        .into_iter()
+        .map(Policy::Key)
+        .collect::<Vec<Policy<Pk>>>();
+    let all_participants = Policy::Threshold(all_participants_thresh, all_participants_pubkeys);
+
+    let managers_pubkeys = managers_pubkeys
+        .into_iter()
+        .map(Policy::Key)
+        .collect::<Vec<Policy<Pk>>>();
+    let managers = Policy::Threshold(managers_thresh, managers_pubkeys);
+
+    let cosigners_pubkeys = cosigners_pubkeys
+        .into_iter()
+        .map(Policy::Key)
+        .collect::<Vec<Policy<Pk>>>();
+    let cosigners = Policy::Threshold(cosigners_thresh, cosigners_pubkeys);
+
+    let managers_alone = Policy::And(vec![
+        managers,
+        Policy::And(vec![cosigners, Policy::Older(csv_value)]),
+    ]);
+
+    let final_policy = Policy::Or(vec![
+        (all_participants_likelyhood, all_participants),
+        (managers_alone_likelyhood, managers_alone),
+    ]);
+
+    match final_policy.compile::<Segwitv0>() {
+        Err(compile_err) => Err(Error::ScriptCreation(format!(
+            "Raw unvault policy compilation error: {}",
+            compile_err
+        ))),
+        Ok(miniscript) => Ok(Descriptor::<Pk>::Wsh(miniscript)),
+    }
+}
+
 /// Get the miniscript descriptor for the unvault transaction CPFP output.
 ///
 /// It's a basic N-of-N between the fund managers.
@@ -197,7 +262,10 @@ pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
 
 #[cfg(test)]
 mod tests {
-    use super::{unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor, Error};
+    use super::{
+        raw_unvault_descriptor, unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor,
+        Error,
+    };
 
     use bitcoin::{
         secp256k1::rand::{rngs::SmallRng, FromEntropy},
@@ -277,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn test_configuration_limits() {
+    fn test_default_configuration_limits() {
         let mut rng = SmallRng::from_entropy();
 
         assert_eq!(
@@ -351,5 +419,125 @@ mod tests {
         //assert_eq!(unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(Error::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
     }
 
-    // TODO: extensively test all possibilities before reaching the limit
+    #[test]
+    pub fn test_raw_unvault_descriptor() {
+        let mut rng = SmallRng::from_entropy();
+        const CSV_VALUE: u32 = 33;
+
+        let non_managers = (0..5)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        let managers = (0..3)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        let all_participants = managers
+            .iter()
+            .chain(non_managers.iter())
+            .cloned()
+            .collect::<Vec<PublicKey>>();
+
+        let cosigners = (0..5)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+
+        // We can reproduce the default policy
+        let default_policy = raw_unvault_descriptor(
+            all_participants.clone(),
+            all_participants.len(),
+            1,
+            managers.clone(),
+            managers.len(),
+            cosigners.clone(),
+            cosigners.len(),
+            CSV_VALUE,
+            10,
+        )
+        .expect("Default policy");
+        // However it'll not be as optimized as the default constructor!
+        // Note: doing this mainly to check if rust-miniscript will optimize this one day
+        assert!(
+            default_policy
+                != unvault_descriptor(
+                    non_managers.clone(),
+                    managers.clone(),
+                    cosigners.clone(),
+                    CSV_VALUE
+                )
+                .unwrap()
+        );
+
+        // But that's obviously a huge footgun:
+        raw_unvault_descriptor(
+            managers.clone(),
+            managers.len(),
+            1,
+            all_participants.clone(),
+            all_participants.len(),
+            cosigners.clone(),
+            cosigners.len(),
+            CSV_VALUE,
+            10,
+        )
+        .expect("If arguments are reversed");
+
+        // What's cool however is that we can now separate our sets:
+        raw_unvault_descriptor(
+            non_managers.clone(),
+            non_managers.len(),
+            1,
+            managers.clone(),
+            managers.len(),
+            cosigners.clone(),
+            cosigners.len(),
+            CSV_VALUE,
+            10,
+        )
+        .expect("When managers are not part of the stakeholders");
+
+        // Or have different thresholds for each
+        let managers_second_keys = (0..3)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        raw_unvault_descriptor(
+            all_participants.clone(),
+            all_participants.len() - 2, // That's a 3-of-5
+            3,                          // Because why not
+            managers_second_keys.clone(),
+            managers_second_keys.len() - 1, // That's a 2-of-3
+            cosigners.clone(),
+            cosigners.len(),
+            CSV_VALUE,
+            7,
+        )
+        .expect("When passing custom thresholds");
+
+        // Or both
+        raw_unvault_descriptor(
+            non_managers.clone(),
+            non_managers.len() - 1,
+            8,
+            managers.clone(),
+            managers.len() - 2,
+            cosigners.clone(),
+            cosigners.len(),
+            CSV_VALUE,
+            2,
+        )
+        .expect("When passing custom thresholds and managers not stakeholders");
+
+        // But YA footgun: the policy compiler itself
+        // FIXME: Not ME, upstream! This should be a compiler error, see https://github.com/rust-bitcoin/rust-miniscript/issues/115#issuecomment-674521015
+        //raw_unvault_descriptor(
+        //all_participants.clone(),
+        //all_participants.len(),
+        //1,
+        //managers.clone(),
+        //managers.len(),
+        //cosigners.clone(),
+        //cosigners.len(),
+        //CSV_VALUE,
+        //1,
+        //)
+        //.expect_err("Duplicated keys across paths");
+    }
 }
