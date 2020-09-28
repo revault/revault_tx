@@ -5,10 +5,8 @@
 use crate::{error::Error, prevouts::*, txouts::*};
 
 use bitcoin::{
-    consensus::encode::{self, Encodable},
-    secp256k1::Signature,
-    util::bip143::SigHashCache,
-    OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
+    consensus::encode::Encodable, secp256k1::Signature, util::bip143::SigHashCache, OutPoint,
+    PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
 };
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
 
@@ -37,9 +35,10 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Get the network-serialized (inner) transaction
-    fn serialize(&self) -> Vec<u8> {
-        // FIXME: this panics...
-        encode::serialize(self.inner_tx())
+    fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut buff = Vec::<u8>::new();
+        self.inner_tx().consensus_encode(&mut buff)?;
+        Ok(buff)
     }
 
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
@@ -699,7 +698,7 @@ mod tests {
                         bitcoinconsensus::verify(
                             prev_script,
                             prev_value,
-                            $tx.serialize().as_slice(),
+                            $tx.serialize().expect("Serializing tx").as_slice(),
                             index,
                         ).expect("Libbitcoinconsensus error");
                         continue;
