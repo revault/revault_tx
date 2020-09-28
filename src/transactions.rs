@@ -5,8 +5,10 @@
 use crate::{error::Error, prevouts::*, txouts::*};
 
 use bitcoin::{
-    consensus::encode::Encodable, secp256k1::Signature, util::bip143::SigHashCache, OutPoint,
-    PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
+    consensus::encode::{Encodable, Error as EncodeError},
+    secp256k1::Signature,
+    util::bip143::SigHashCache,
+    OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
 };
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
 
@@ -35,7 +37,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Get the network-serialized (inner) transaction
-    fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn serialize(&self) -> Result<Vec<u8>, EncodeError> {
         let mut buff = Vec::<u8>::new();
         self.inner_tx().consensus_encode(&mut buff)?;
         Ok(buff)
@@ -45,7 +47,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     ///
     /// # Errors
     /// - If we could not encode the transaction (should not happen).
-    fn hex(&self) -> Result<String, Box<dyn std::error::Error>> {
+    fn hex(&self) -> Result<String, EncodeError> {
         let mut buff = Vec::<u8>::new();
         let mut as_hex = String::new();
 
