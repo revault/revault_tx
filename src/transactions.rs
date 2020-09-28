@@ -4,11 +4,12 @@
 
 use crate::{error::Error, prevouts::*, txouts::*};
 
-use bitcoin::consensus::encode;
-use bitcoin::consensus::encode::Encodable;
-use bitcoin::secp256k1::Signature;
-use bitcoin::util::bip143::SigHashCache;
-use bitcoin::{OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut};
+use bitcoin::{
+    consensus::encode::{self, Encodable},
+    secp256k1::Signature,
+    util::bip143::SigHashCache,
+    OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction, TxIn, TxOut,
+};
 use miniscript::{BitcoinSig, Descriptor, MiniscriptKey, Satisfier, ToPublicKey};
 
 use std::collections::HashMap;
