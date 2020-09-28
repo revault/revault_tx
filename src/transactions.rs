@@ -712,126 +712,6 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_creation() {
-        const CSV_VALUE: u32 = 38;
-
-        // Transactions which happened to be in my mempool
-        let deposit_outpoint = OutPoint::from_str(
-            "ea4a9f84cce4e5b195b496e2823f7939b474f3fd3d2d8d59b91bb2312a8113f3:0",
-        )
-        .unwrap();
-        let feebump_outpoint = OutPoint::from_str(
-            "1d239c9299a7e350e3ae6e5fb4068f13b4e01fe188a0d0533f6555aad6b17b0a:0",
-        )
-        .unwrap();
-
-        let vault_prevout = VaultPrevout::new(deposit_outpoint);
-        let feebump_prevout = FeeBumpPrevout::new(feebump_outpoint);
-
-        // All the txouts created in all transactions
-        let txout = TxOut {
-            value: 19_000,
-            ..TxOut::default()
-        };
-        let vault_txout = VaultTxOut::new(txout);
-        let txout = TxOut {
-            value: 18_000,
-            ..TxOut::default()
-        };
-        let unvault_txout = UnvaultTxOut::new(txout);
-        let txout = TxOut {
-            value: 330,
-            ..TxOut::default()
-        };
-        let cpfp_txout = CpfpTxOut::new(txout);
-        let txout = TxOut {
-            value: 10_000,
-            ..TxOut::default()
-        };
-        let spend_dest_txout = ExternalTxOut::new(txout);
-        let txout = TxOut {
-            value: 7_000,
-            ..TxOut::default()
-        };
-        let spend_change_txout = VaultTxOut::new(txout);
-        let txout = TxOut {
-            value: 17_500,
-            ..TxOut::default()
-        };
-        let cancel_txout = VaultTxOut::new(txout);
-        let txout = TxOut {
-            value: 18_500,
-            ..TxOut::default()
-        };
-        let emer_txout = EmergencyTxOut::new(txout);
-        let txout = TxOut {
-            value: 17_500,
-            ..TxOut::default()
-        };
-        let emer_unvault_txout = EmergencyTxOut::new(txout);
-
-        // All transactions we actually are going to create and sign
-        let _emergency_tx =
-            EmergencyTransaction::new((vault_prevout, RBF_SEQUENCE), None, emer_txout.clone(), 0);
-        let _emergency_tx = EmergencyTransaction::new(
-            (vault_prevout, RBF_SEQUENCE),
-            Some((feebump_prevout, RBF_SEQUENCE)),
-            emer_txout.clone(),
-            0,
-        );
-        let unvault_tx = UnvaultTransaction::new(
-            (vault_prevout, RBF_SEQUENCE),
-            unvault_txout.clone(),
-            cpfp_txout.clone(),
-            0,
-        );
-        let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_prevout(0));
-        let _cancel_tx =
-            CancelTransaction::new((unvault_prevout, RBF_SEQUENCE), None, vault_txout, 0);
-        let cancel_tx = CancelTransaction::new(
-            (unvault_prevout, RBF_SEQUENCE),
-            Some((feebump_prevout, RBF_SEQUENCE)),
-            cancel_txout,
-            0,
-        );
-        let _emergency_unvault_tx = UnvaultEmergencyTransaction::new(
-            (unvault_prevout, RBF_SEQUENCE),
-            None,
-            emer_unvault_txout.clone(),
-            0,
-        );
-        let _emergency_unvault_tx = UnvaultEmergencyTransaction::new(
-            (unvault_prevout, RBF_SEQUENCE),
-            Some((feebump_prevout, RBF_SEQUENCE)),
-            emer_unvault_txout,
-            0,
-        );
-        let spend_tx = SpendTransaction::new(
-            &[(UnvaultPrevout::new(unvault_tx.into_prevout(0)), CSV_VALUE)],
-            vec![
-                SpendTxOut::Destination(spend_dest_txout),
-                SpendTxOut::Change(spend_change_txout),
-            ],
-            0,
-        );
-
-        // We can do an additional depth as well, eg with the revaulted txo..
-        let _sec_unvault_tx = UnvaultTransaction::new(
-            (VaultPrevout::new(cancel_tx.into_prevout(0)), RBF_SEQUENCE),
-            unvault_txout,
-            cpfp_txout,
-            0,
-        );
-        // ..Or the spend_tx's change
-        let _sec_emer_tx = EmergencyTransaction::new(
-            (VaultPrevout::new(spend_tx.into_prevout(1)), RBF_SEQUENCE),
-            None,
-            emer_txout,
-            0,
-        );
-    }
-
-    #[test]
     fn test_transaction_chain_satisfaction() {
         const CSV_VALUE: u32 = 42;
 
@@ -890,7 +770,7 @@ mod tests {
                 script_pubkey: vault_scriptpubkey.clone(),
             }],
         };
-        let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].clone());
+        let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].value, &vault_descriptor);
         let vault_tx = VaultTransaction::new(vault_raw_tx);
         let vault_prevout = VaultPrevout::new(vault_tx.into_prevout(0));
 
@@ -971,18 +851,8 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are
-        let (unvault_scriptpubkey, cpfp_scriptpubkey) = (
-            unvault_descriptor.script_pubkey(),
-            cpfp_descriptor.script_pubkey(),
-        );
-        let unvault_txo = UnvaultTxOut::new(TxOut {
-            value: 7000,
-            script_pubkey: unvault_scriptpubkey.clone(),
-        });
-        let cpfp_txo = CpfpTxOut::new(TxOut {
-            value: 330,
-            script_pubkey: cpfp_scriptpubkey,
-        });
+        let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor);
+        let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
         let mut unvault_tx = UnvaultTransaction::new(
             (vault_prevout, RBF_SEQUENCE),
             unvault_txo.clone(),
@@ -992,10 +862,7 @@ mod tests {
         let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_prevout(0));
 
         // Create and sign the cancel transaction
-        let revault_txo = VaultTxOut::new(TxOut {
-            value: 6700,
-            script_pubkey: vault_descriptor.script_pubkey(),
-        });
+        let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
         let mut cancel_tx = CancelTransaction::new(
             (unvault_prevout, RBF_SEQUENCE),
             Some((feebump_prevout, RBF_SEQUENCE)),
