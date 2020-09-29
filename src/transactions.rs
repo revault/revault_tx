@@ -81,16 +81,12 @@ macro_rules! impl_revault_transaction {
 
 // Boilerplate for creating an actual (inner) transaction with a known number of prevouts / txouts.
 macro_rules! create_tx {
-    ( [$( ($prevout:expr, $sequence:expr) ),* $(,)?], [$($txout:expr),* $(,)?], $lock_time:expr $(,)?) => {
+    ( [$($revault_txin:expr),* $(,)?], [$($txout:expr),* $(,)?], $lock_time:expr $(,)?) => {
         Transaction {
             version: 2,
             lock_time: $lock_time,
             input: vec![$(
-                TxIn {
-                    previous_output: $prevout.outpoint(),
-                    sequence: $sequence,
-                    ..TxIn::default()
-                },
+                $revault_txin.as_unsigned_txin(),
             )*],
             output: vec![$(
                 $txout.get_txout(),
@@ -107,13 +103,13 @@ impl UnvaultTransaction {
     /// An unvault transaction always spends one vault output and contains one CPFP output in
     /// addition to the unvault one.
     pub fn new(
-        vault_input: (VaultPrevout, u32),
+        vault_input: VaultTxIn,
         unvault_txout: UnvaultTxOut,
         cpfp_txout: CpfpTxOut,
         lock_time: u32,
     ) -> UnvaultTransaction {
         UnvaultTransaction(create_tx!(
-            [(vault_input.0, vault_input.1)],
+            [vault_input],
             [unvault_txout, cpfp_txout],
             lock_time,
         ))
@@ -128,26 +124,15 @@ impl CancelTransaction {
     /// A cancel transaction always pays to a vault output and spends the unvault output, and
     /// may have a fee-bumping input.
     pub fn new(
-        unvault_input: (UnvaultPrevout, u32),
-        feebump_input: Option<(FeeBumpPrevout, u32)>,
+        unvault_input: UnvaultTxIn,
+        feebump_input: Option<FeeBumpTxIn>,
         vault_txout: VaultTxOut,
         lock_time: u32,
     ) -> CancelTransaction {
         CancelTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!(
-                [
-                    (unvault_input.0, unvault_input.1),
-                    (feebump_input.0, feebump_input.1)
-                ],
-                [vault_txout],
-                lock_time,
-            )
+            create_tx!([unvault_input, feebump_input], [vault_txout], lock_time,)
         } else {
-            create_tx!(
-                [(unvault_input.0, unvault_input.1)],
-                [vault_txout],
-                lock_time,
-            )
+            create_tx!([unvault_input], [vault_txout], lock_time,)
         })
     }
 }
@@ -160,22 +145,15 @@ impl EmergencyTransaction {
     /// The first emergency transaction always spends a vault output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
     pub fn new(
-        vault_input: (VaultPrevout, u32),
-        feebump_input: Option<(FeeBumpPrevout, u32)>,
+        vault_input: VaultTxIn,
+        feebump_input: Option<FeeBumpTxIn>,
         emer_txout: EmergencyTxOut,
         lock_time: u32,
     ) -> EmergencyTransaction {
         EmergencyTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!(
-                [
-                    (vault_input.0, vault_input.1),
-                    (feebump_input.0, feebump_input.1)
-                ],
-                [emer_txout],
-                lock_time,
-            )
+            create_tx!([vault_input, feebump_input], [emer_txout], lock_time,)
         } else {
-            create_tx!([(vault_input.0, vault_input.1)], [emer_txout], lock_time,)
+            create_tx!([vault_input], [emer_txout], lock_time,)
         })
     }
 }
@@ -188,26 +166,15 @@ impl UnvaultEmergencyTransaction {
     /// The second emergency transaction always spends an unvault output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
     pub fn new(
-        unvault_input: (UnvaultPrevout, u32),
-        feebump_input: Option<(FeeBumpPrevout, u32)>,
+        unvault_input: UnvaultTxIn,
+        feebump_input: Option<FeeBumpTxIn>,
         emer_txout: EmergencyTxOut,
         lock_time: u32,
     ) -> UnvaultEmergencyTransaction {
         UnvaultEmergencyTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!(
-                [
-                    (unvault_input.0, unvault_input.1),
-                    (feebump_input.0, feebump_input.1)
-                ],
-                [emer_txout],
-                lock_time,
-            )
+            create_tx!([unvault_input, feebump_input], [emer_txout], lock_time,)
         } else {
-            create_tx!(
-                [(unvault_input.0, unvault_input.1)],
-                [emer_txout],
-                lock_time,
-            )
+            create_tx!([unvault_input], [emer_txout], lock_time,)
         })
     }
 }
@@ -221,7 +188,7 @@ impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
     /// txouts (including, but not restricted to, change).
     pub fn new(
-        unvault_inputs: &[(UnvaultPrevout, u32)],
+        unvault_inputs: &[UnvaultTxIn],
         spend_txouts: Vec<SpendTxOut>,
         lock_time: u32,
     ) -> SpendTransaction {
@@ -230,11 +197,7 @@ impl SpendTransaction {
             lock_time,
             input: unvault_inputs
                 .iter()
-                .map(|input| TxIn {
-                    previous_output: input.0.outpoint(),
-                    sequence: input.1,
-                    ..TxIn::default()
-                })
+                .map(|input| input.as_unsigned_txin())
                 .collect(),
             output: spend_txouts
                 .into_iter()
@@ -772,7 +735,6 @@ mod tests {
         };
         let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].value, &vault_descriptor);
         let vault_tx = VaultTransaction::new(vault_raw_tx);
-        let vault_prevout = VaultPrevout::new(vault_tx.into_outpoint(0), vault_txo.clone());
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
@@ -803,19 +765,20 @@ mod tests {
         };
         let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
         let feebump_tx = FeeBumpTransaction::new(raw_feebump_tx);
-        let feebump_prevout = FeeBumpPrevout::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
 
         // Create and sign the first (vault) emergency transaction
+        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone(), RBF_SEQUENCE);
+        let feebump_txin = FeeBumpTxIn::new(
+            feebump_tx.into_outpoint(0),
+            feebump_txo.clone(),
+            RBF_SEQUENCE,
+        );
         let emer_txo = EmergencyTxOut::new(TxOut {
             value: 450,
             ..TxOut::default()
         });
-        let mut emergency_tx = EmergencyTransaction::new(
-            (vault_prevout.clone(), RBF_SEQUENCE),
-            Some((feebump_prevout.clone(), RBF_SEQUENCE)),
-            emer_txo.clone(),
-            0,
-        );
+        let mut emergency_tx =
+            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emer_txo.clone(), 0);
         let emergency_tx_sighash_vault =
             emergency_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true);
         satisfy_transaction_input(
@@ -847,24 +810,26 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are
+        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone(), u32::MAX);
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor);
         let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
-        let mut unvault_tx = UnvaultTransaction::new(
-            (vault_prevout.clone(), RBF_SEQUENCE),
-            unvault_txo.clone(),
-            cpfp_txo.clone(),
-            0,
-        );
-        let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_outpoint(0), unvault_txo.clone());
+        let mut unvault_tx =
+            UnvaultTransaction::new(vault_txin, unvault_txo.clone(), cpfp_txo.clone(), 0);
 
         // Create and sign the cancel transaction
-        let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
-        let mut cancel_tx = CancelTransaction::new(
-            (unvault_prevout.clone(), RBF_SEQUENCE),
-            Some((feebump_prevout.clone(), RBF_SEQUENCE)),
-            revault_txo,
-            0,
+        let unvault_txin = UnvaultTxIn::new(
+            unvault_tx.into_outpoint(0),
+            unvault_txo.clone(),
+            RBF_SEQUENCE,
         );
+        let feebump_txin = FeeBumpTxIn::new(
+            feebump_tx.into_outpoint(0),
+            feebump_txo.clone(),
+            RBF_SEQUENCE,
+        );
+        let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
+        let mut cancel_tx =
+            CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
         let cancel_tx_sighash =
             cancel_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true);
         satisfy_transaction_input(
@@ -895,12 +860,18 @@ mod tests {
         assert_libbitcoinconsensus_validity!(cancel_tx, [unvault_tx, feebump_tx]);
 
         // Create and sign the second (unvault) emergency transaction
-        let mut unemergency_tx = UnvaultEmergencyTransaction::new(
-            (unvault_prevout.clone(), RBF_SEQUENCE),
-            Some((feebump_prevout.clone(), RBF_SEQUENCE)),
-            emer_txo,
-            0,
+        let unvault_txin = UnvaultTxIn::new(
+            unvault_tx.into_outpoint(0),
+            unvault_txo.clone(),
+            RBF_SEQUENCE,
         );
+        let feebump_txin = FeeBumpTxIn::new(
+            feebump_tx.into_outpoint(0),
+            feebump_txo.clone(),
+            RBF_SEQUENCE,
+        );
+        let mut unemergency_tx =
+            UnvaultEmergencyTransaction::new(unvault_txin, Some(feebump_txin), emer_txo, 0);
         let unemergency_tx_sighash = unemergency_tx.signature_hash(
             0,
             &unvault_txo,
@@ -958,14 +929,20 @@ mod tests {
         .expect("Satisfying unvault transaction");
         assert_libbitcoinconsensus_validity!(unvault_tx, [vault_tx]);
 
+        // FIXME: We should test batching as well for the spend transaction
         // Create and sign a spend transaction
+        let unvault_txin = UnvaultTxIn::new(
+            unvault_tx.into_outpoint(0),
+            unvault_txo.clone(),
+            CSV_VALUE - 1,
+        );
         let spend_txo = ExternalTxOut::new(TxOut {
             value: 1,
             ..TxOut::default()
         });
         // Test satisfaction failure with a wrong CSV value
         let mut spend_tx = SpendTransaction::new(
-            &[(unvault_prevout.clone(), CSV_VALUE - 1)],
+            &[unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             0,
         );
@@ -993,8 +970,13 @@ mod tests {
         );
 
         // "This time for sure !"
+        let unvault_txin = UnvaultTxIn::new(
+            unvault_tx.into_outpoint(0),
+            unvault_txo.clone(),
+            CSV_VALUE, // The valid sequence this time
+        );
         let mut spend_tx = SpendTransaction::new(
-            &[(unvault_prevout.clone(), CSV_VALUE)],
+            &[unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             0,
         );
