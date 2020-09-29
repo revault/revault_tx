@@ -29,7 +29,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Get the specified output of this transaction as an OutPoint to be referenced
     /// in a following transaction.
-    fn into_prevout(&self, vout: u32) -> OutPoint {
+    fn into_outpoint(&self, vout: u32) -> OutPoint {
         OutPoint {
             txid: self.inner_tx().txid(),
             vout,
@@ -249,10 +249,10 @@ impl SpendTransaction {
 
 impl_revault_transaction!(
     VaultTransaction,
-    doc = "The funding transaction, we don't create it but it's a handy wrapper for verify()."
+    doc = "The funding transaction, we don't create nor sign it."
 );
 impl VaultTransaction {
-    /// We don't create nor are able to sign, it's just a type wrapper for verify so explicitly no
+    /// We don't create nor are able to sign, it's just a type wrapper so explicitly no
     /// restriction on the types here
     pub fn new(tx: Transaction) -> VaultTransaction {
         VaultTransaction(tx)
@@ -261,10 +261,10 @@ impl VaultTransaction {
 
 impl_revault_transaction!(
     FeeBumpTransaction,
-    doc = "The fee-bumping transaction, we don't create it but it may be passed to verify()."
+    doc = "The fee-bumping transaction, we don't create nor sign it."
 );
 impl FeeBumpTransaction {
-    /// We don't create nor are able to sign, it's just a type wrapper for verify so explicitly no
+    /// We don't create nor are able to sign, it's just a type wrapper so explicitly no
     /// restriction on the types here
     pub fn new(tx: Transaction) -> FeeBumpTransaction {
         FeeBumpTransaction(tx)
@@ -772,7 +772,7 @@ mod tests {
         };
         let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].value, &vault_descriptor);
         let vault_tx = VaultTransaction::new(vault_raw_tx);
-        let vault_prevout = VaultPrevout::new(vault_tx.into_prevout(0), vault_txo.clone());
+        let vault_prevout = VaultPrevout::new(vault_tx.into_outpoint(0), vault_txo.clone());
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
@@ -803,7 +803,7 @@ mod tests {
         };
         let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
         let feebump_tx = FeeBumpTransaction::new(raw_feebump_tx);
-        let feebump_prevout = FeeBumpPrevout::new(feebump_tx.into_prevout(0), feebump_txo.clone());
+        let feebump_prevout = FeeBumpPrevout::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
 
         // Create and sign the first (vault) emergency transaction
         let emer_txo = EmergencyTxOut::new(TxOut {
@@ -855,7 +855,7 @@ mod tests {
             cpfp_txo.clone(),
             0,
         );
-        let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_prevout(0), unvault_txo.clone());
+        let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_outpoint(0), unvault_txo.clone());
 
         // Create and sign the cancel transaction
         let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
