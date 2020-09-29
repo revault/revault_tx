@@ -772,7 +772,7 @@ mod tests {
         };
         let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].value, &vault_descriptor);
         let vault_tx = VaultTransaction::new(vault_raw_tx);
-        let vault_prevout = VaultPrevout::new(vault_tx.into_prevout(0));
+        let vault_prevout = VaultPrevout::new(vault_tx.into_prevout(0), vault_txo.clone());
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
@@ -801,9 +801,9 @@ mod tests {
                 script_pubkey: feebump_descriptor.script_pubkey(),
             }],
         };
-        let feebump_txout = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
+        let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
         let feebump_tx = FeeBumpTransaction::new(raw_feebump_tx);
-        let feebump_prevout = FeeBumpPrevout::new(feebump_tx.into_prevout(0));
+        let feebump_prevout = FeeBumpPrevout::new(feebump_tx.into_prevout(0), feebump_txo.clone());
 
         // Create and sign the first (vault) emergency transaction
         let emer_txo = EmergencyTxOut::new(TxOut {
@@ -811,8 +811,8 @@ mod tests {
             ..TxOut::default()
         });
         let mut emergency_tx = EmergencyTransaction::new(
-            (vault_prevout, RBF_SEQUENCE),
-            Some((feebump_prevout, RBF_SEQUENCE)),
+            (vault_prevout.clone(), RBF_SEQUENCE),
+            Some((feebump_prevout.clone(), RBF_SEQUENCE)),
             emer_txo.clone(),
             0,
         );
@@ -830,12 +830,8 @@ mod tests {
         )
         .expect("Satisfying emergency transaction");
 
-        let emergency_tx_sighash_feebump = emergency_tx.signature_hash(
-            1,
-            &feebump_txout,
-            &feebump_descriptor.script_code(),
-            false,
-        );
+        let emergency_tx_sighash_feebump =
+            emergency_tx.signature_hash(1, &feebump_txo, &feebump_descriptor.script_code(), false);
         satisfy_transaction_input(
             &secp,
             &mut emergency_tx,
@@ -854,18 +850,18 @@ mod tests {
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor);
         let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
         let mut unvault_tx = UnvaultTransaction::new(
-            (vault_prevout, RBF_SEQUENCE),
+            (vault_prevout.clone(), RBF_SEQUENCE),
             unvault_txo.clone(),
             cpfp_txo.clone(),
             0,
         );
-        let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_prevout(0));
+        let unvault_prevout = UnvaultPrevout::new(unvault_tx.into_prevout(0), unvault_txo.clone());
 
         // Create and sign the cancel transaction
         let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
         let mut cancel_tx = CancelTransaction::new(
-            (unvault_prevout, RBF_SEQUENCE),
-            Some((feebump_prevout, RBF_SEQUENCE)),
+            (unvault_prevout.clone(), RBF_SEQUENCE),
+            Some((feebump_prevout.clone(), RBF_SEQUENCE)),
             revault_txo,
             0,
         );
@@ -883,7 +879,7 @@ mod tests {
         )
         .expect("Satisfying cancel transaction");
         let cancel_tx_sighash_feebump =
-            cancel_tx.signature_hash(1, &feebump_txout, &feebump_descriptor.script_code(), false);
+            cancel_tx.signature_hash(1, &feebump_txo, &feebump_descriptor.script_code(), false);
 
         satisfy_transaction_input(
             &secp,
@@ -900,8 +896,8 @@ mod tests {
 
         // Create and sign the second (unvault) emergency transaction
         let mut unemergency_tx = UnvaultEmergencyTransaction::new(
-            (unvault_prevout, RBF_SEQUENCE),
-            Some((feebump_prevout, RBF_SEQUENCE)),
+            (unvault_prevout.clone(), RBF_SEQUENCE),
+            Some((feebump_prevout.clone(), RBF_SEQUENCE)),
             emer_txo,
             0,
         );
@@ -929,7 +925,7 @@ mod tests {
         // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx.signature_hash(
             1,
-            &feebump_txout,
+            &feebump_txo,
             &feebump_descriptor.script_code(),
             false,
         );
@@ -969,7 +965,7 @@ mod tests {
         });
         // Test satisfaction failure with a wrong CSV value
         let mut spend_tx = SpendTransaction::new(
-            &[(unvault_prevout, CSV_VALUE - 1)],
+            &[(unvault_prevout.clone(), CSV_VALUE - 1)],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             0,
         );
@@ -998,7 +994,7 @@ mod tests {
 
         // "This time for sure !"
         let mut spend_tx = SpendTransaction::new(
-            &[(unvault_prevout, CSV_VALUE)],
+            &[(unvault_prevout.clone(), CSV_VALUE)],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             0,
         );
