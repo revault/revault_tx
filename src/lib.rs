@@ -9,7 +9,7 @@ pub mod error;
 
 pub mod scripts;
 
-pub mod prevouts;
+pub mod txins;
 
 pub mod txouts;
 

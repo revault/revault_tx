@@ -2,7 +2,7 @@
 //!
 //! Typesafe routines to create bare revault transactions.
 
-use crate::{error::Error, prevouts::*, txouts::*};
+use crate::{error::Error, txins::*, txouts::*};
 
 use bitcoin::{
     consensus::encode::{Encodable, Error as EncodeError},
@@ -514,7 +514,7 @@ mod tests {
         RevaultTransaction, SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction,
         VaultTransaction, RBF_SEQUENCE,
     };
-    use crate::{prevouts::*, scripts::*, txouts::*};
+    use crate::{scripts::*, txins::*, txouts::*};
 
     use std::str::FromStr;
 
