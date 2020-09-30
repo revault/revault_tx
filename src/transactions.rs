@@ -19,7 +19,7 @@ pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
 
 /// A Revault transaction. Apart from the VaultTransaction, all variants must be instanciated
 /// using the new_*() methods.
-pub trait RevaultTransaction: fmt::Debug {
+pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the inner transaction
     fn inner_tx(&self) -> &Transaction;
 
@@ -62,7 +62,7 @@ pub trait RevaultTransaction: fmt::Debug {
 macro_rules! impl_revault_transaction {
     ( $transaction_name:ident, $doc_comment:meta ) => {
         #[$doc_comment]
-        #[derive(Debug)]
+        #[derive(Debug, Clone, PartialEq)]
         pub struct $transaction_name(Transaction);
 
         impl RevaultTransaction for $transaction_name {

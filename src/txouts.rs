@@ -7,7 +7,7 @@ use bitcoin::TxOut;
 use std::fmt;
 
 /// A transaction output created by a Revault transaction.
-pub trait RevaultTxOut: fmt::Debug + Clone {
+pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
     /// Get a reference to the inner txout
     fn inner_txout(&self) -> &TxOut;
     /// Get the actual inner txout
@@ -17,7 +17,7 @@ pub trait RevaultTxOut: fmt::Debug + Clone {
 macro_rules! implem_revault_txout {
     ( $struct_name:ident, $doc_comment:meta ) => {
         #[$doc_comment]
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq)]
         pub struct $struct_name(TxOut);
 
         impl RevaultTxOut for $struct_name {
