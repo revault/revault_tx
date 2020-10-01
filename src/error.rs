@@ -9,8 +9,10 @@ use std::{error, fmt};
 pub enum Error {
     /// The script creation failed.
     ScriptCreation(String),
-    /// Miniscript satisfaction of a Revault transaction input failed.
+    /// Satisfaction (PSBT signer role) of a Revault transaction input failed.
     InputSatisfaction(String),
+    /// Completion (PSBT finalizer role) of the Revault transaction has failed.
+    TransactionFinalisation(String),
     /// The verification of the transaction against libbitcoinconsensus failed.
     TransactionVerification(String),
 }
@@ -22,6 +24,9 @@ impl fmt::Display for Error {
             Error::InputSatisfaction(ref e) => write!(f, "Revault input satisfaction error: {}", e),
             Error::TransactionVerification(ref e) => {
                 write!(f, "Revault transaction verification error: {}", e)
+            }
+            Error::TransactionFinalisation(ref e) => {
+                write!(f, "Revault transaction finalisation error: {}", e)
             }
         }
     }
