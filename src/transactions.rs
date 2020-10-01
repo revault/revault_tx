@@ -34,14 +34,79 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     fn inner_tx_mut(&mut self) -> &mut Psbt;
 
     /// Add a signature in order to eventually satisfy this input.
+    /// Some sanity checks against the PSBT Input are done here, but no signature check.
     /// The BIP174 Signer.
     fn add_signature(
         &mut self,
         input_index: usize,
         pubkey: bitcoin::PublicKey,
-        rawsig: Vec<u8>,
+        signature: BitcoinSig,
     ) -> Result<Option<Vec<u8>>, Error> {
         if let Some(ref mut psbtin) = self.inner_tx_mut().inputs.get_mut(input_index) {
+            // BIP174:
+            // For a Signer to only produce valid signatures for what it expects to sign, it must
+            // check that the following conditions are true:
+            // -- If a witness UTXO is provided, no non-witness signature may be created.
+            if psbtin.witness_utxo.is_none() {
+                return Err(Error::InputSatisfaction(format!(
+                    "No previous witness txo for psbtin: '{:?}'",
+                    psbtin
+                )));
+            }
+            if psbtin.non_witness_utxo.is_some() {
+                return Err(Error::InputSatisfaction(format!(
+                    "Unexpected non-witness txo for psbtin: '{:?}'",
+                    psbtin
+                )));
+            }
+
+            // -- If a witnessScript is provided, the scriptPubKey or the redeemScript must be for
+            // that witnessScript
+            if let Some(witness_script) = &psbtin.witness_script {
+                let expected_script_pubkey =
+                    bitcoin::Address::p2wsh(witness_script, bitcoin::Network::Bitcoin)
+                        .script_pubkey();
+                if expected_script_pubkey
+                    != psbtin
+                        .witness_utxo
+                        .as_ref()
+                        .expect("Just check it's not none")
+                        .script_pubkey
+                {
+                    return Err(Error::InputSatisfaction(format!(
+                        "Invalid witness script of previous txo ScriptPubKey for psbtin: '{:?}'",
+                        psbtin
+                    )));
+                }
+            }
+            if psbtin.redeem_script.is_some() {
+                return Err(Error::InputSatisfaction(format!(
+                    "Unexpected non native segwit txo for psbtin: '{:?}'",
+                    psbtin
+                )));
+            }
+
+            // -- If a sighash type is provided, the signer must check that the sighash is acceptable.
+            // If unacceptable, they must fail.
+            let (sig, sighash_type) = signature;
+            let expected_sighash_type = match psbtin.sighash_type {
+                Some(st) => st,
+                None => {
+                    return Err(Error::InputSatisfaction(format!(
+                        "Unknown expected sighash type for psbtin: '{:?}'",
+                        psbtin
+                    )))
+                }
+            };
+            if sighash_type != expected_sighash_type {
+                return Err(Error::InputSatisfaction(format!(
+                    "Unexpected sighash type for psbtin: '{:?}'",
+                    psbtin
+                )));
+            }
+
+            let mut rawsig = sig.serialize_der().to_vec();
+            rawsig.push(sighash_type.as_u32() as u8);
             Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
         } else {
             Err(Error::InputSatisfaction(format!(
@@ -64,8 +129,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 tx_inputs.len()
             )));
         }
-
-        // FIXME: Check sighash type and signatures
 
         for (psbtin, txin) in psbt_inputs.iter_mut().zip(tx_inputs.iter()) {
             let prev_txo = match psbtin.witness_utxo.clone() {
@@ -118,7 +181,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                     Error::TransactionFinalisation(format!("No signature for pubkey '{:x?}'", pk))
                 })?;
                 let mut sig_der = sig.0.serialize_der().to_vec();
-                // FIXME: Check the sighash here
                 sig_der.push(sig.1.as_u32() as u8);
 
                 psbtin.final_script_witness = Some(vec![sig_der, pk.to_public_key().to_bytes()]);
@@ -235,7 +297,7 @@ macro_rules! impl_revault_transaction {
 
 // Boilerplate for creating an actual (inner) transaction with a known number of prevouts / txouts.
 macro_rules! create_tx {
-    ( [$($revault_txin:expr),* $(,)?], [$($txout:expr),* $(,)?], $lock_time:expr $(,)?) => {
+    ( [$( ($revault_txin:expr, $sighash_type:expr) ),* $(,)?], [$($txout:expr),* $(,)?], $lock_time:expr $(,)?) => {
         Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
@@ -253,7 +315,7 @@ macro_rules! create_tx {
             inputs: vec![$(
                 PsbtIn {
                     witness_script: $revault_txin.clone().into_txout().into_witness_script(),
-                    sighash_type: None, // FIXME
+                    sighash_type: Some($sighash_type),
                     witness_utxo: Some($revault_txin.into_txout().get_txout()),
                     ..PsbtIn::default()
                 },
@@ -283,7 +345,7 @@ impl UnvaultTransaction {
         lock_time: u32,
     ) -> UnvaultTransaction {
         UnvaultTransaction(create_tx!(
-            [vault_input],
+            [(vault_input, SigHashType::All)],
             [unvault_txout, cpfp_txout],
             lock_time,
         ))
@@ -305,9 +367,20 @@ impl CancelTransaction {
         lock_time: u32,
     ) -> CancelTransaction {
         CancelTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!([unvault_input, feebump_input], [vault_txout], lock_time,)
+            create_tx!(
+                [
+                    (unvault_input, SigHashType::AllPlusAnyoneCanPay),
+                    (feebump_input, SigHashType::All),
+                ],
+                [vault_txout],
+                lock_time,
+            )
         } else {
-            create_tx!([unvault_input], [vault_txout], lock_time,)
+            create_tx!(
+                [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
+                [vault_txout],
+                lock_time,
+            )
         })
     }
 }
@@ -327,9 +400,20 @@ impl EmergencyTransaction {
         lock_time: u32,
     ) -> EmergencyTransaction {
         EmergencyTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!([vault_input, feebump_input], [emer_txout], lock_time,)
+            create_tx!(
+                [
+                    (vault_input, SigHashType::AllPlusAnyoneCanPay),
+                    (feebump_input, SigHashType::All)
+                ],
+                [emer_txout],
+                lock_time,
+            )
         } else {
-            create_tx!([vault_input], [emer_txout], lock_time,)
+            create_tx!(
+                [(vault_input, SigHashType::AllPlusAnyoneCanPay)],
+                [emer_txout],
+                lock_time,
+            )
         })
     }
 }
@@ -349,9 +433,20 @@ impl UnvaultEmergencyTransaction {
         lock_time: u32,
     ) -> UnvaultEmergencyTransaction {
         UnvaultEmergencyTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!([unvault_input, feebump_input], [emer_txout], lock_time,)
+            create_tx!(
+                [
+                    (unvault_input, SigHashType::AllPlusAnyoneCanPay),
+                    (feebump_input, SigHashType::All)
+                ],
+                [emer_txout],
+                lock_time,
+            )
         } else {
-            create_tx!([unvault_input], [emer_txout], lock_time,)
+            create_tx!(
+                [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
+                [emer_txout],
+                lock_time,
+            )
         })
     }
 }
@@ -395,7 +490,7 @@ impl SpendTransaction {
                     let prev_txout = input.into_txout();
                     PsbtIn {
                         witness_script: prev_txout.witness_script().clone(),
-                        sighash_type: None, // FIXME
+                        sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
                         witness_utxo: Some(prev_txout.get_txout()),
                         ..PsbtIn::default()
                     }
@@ -598,7 +693,6 @@ struct RevaultInputSatisfier<'a> {
     // Raw sig as pushed on the witness stack, same as in the Psbt input struct
     sigmap: &'a mut BTreeMap<bitcoin::PublicKey, Vec<u8>>,
     sequence: u32,
-    // FIXME: Add the sighash type from the PsbtIn here to be even more zealous!
 }
 
 impl<'a> RevaultInputSatisfier<'a> {
@@ -774,22 +868,21 @@ mod tests {
             vec![]
         });
         xprivs.iter().for_each(|xpriv| {
-            let mut sig = secp
-                .sign(
+            let sig = (
+                secp.sign(
                     &bitcoin::secp256k1::Message::from_slice(&tx_sighash).unwrap(),
                     &xpriv
                         .derive_priv(&secp, &derivation_path)
                         .unwrap()
                         .private_key
                         .key,
-                )
-                .serialize_der()
-                .to_vec();
-            sig.push(if is_anyonecanpay {
-                SigHashType::AllPlusAnyoneCanPay.as_u32() as u8
-            } else {
-                SigHashType::All.as_u32() as u8
-            });
+                ),
+                if is_anyonecanpay {
+                    SigHashType::AllPlusAnyoneCanPay
+                } else {
+                    SigHashType::All
+                },
+            );
 
             tx.add_signature(
                 input_index,
