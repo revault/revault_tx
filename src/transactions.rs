@@ -229,7 +229,50 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             }
         }
 
+        // TODO: think about state consistency here: should we instead operate on a clone() which
+        // we'd move only if the below check passes ?
+
+        // Needs to be separated because of above mutable borrows
+        for i in 0..psbt_inputs.len() {
+            // BIP174:
+            // For each input, the Input Finalizer determines if the input has enough data to pass
+            // validation.
+            self.verify_input(i)?;
+        }
+
         Ok(())
+    }
+
+    /// Verify an input of the transaction against libbitcoinconsensus out of the information
+    /// contained in the PSBT input.
+    fn verify_input(&self, input_index: usize) -> Result<(), Error> {
+        let (prev_scriptpubkey, prev_value) = self
+            .inner_tx()
+            .inputs
+            .get(input_index)
+            .and_then(|psbtin| {
+                psbtin
+                    .witness_utxo
+                    .as_ref()
+                    .and_then(|utxo| Some((utxo.script_pubkey.as_bytes(), utxo.value)))
+            })
+            .ok_or_else(|| {
+                Error::TransactionVerification(format!(
+                    "No psbt input or no previous witness txo for psbt input at index '{}'",
+                    input_index
+                ))
+            })?;
+        let serialized_tx = self.as_bitcoin_serialized().map_err(|e| {
+            Error::TransactionVerification(format!("Could not serialize transaction: '{}", e))
+        })?;
+
+        bitcoinconsensus::verify(
+            prev_scriptpubkey,
+            prev_value,
+            serialized_tx.as_slice(),
+            input_index,
+        )
+        .map_err(|e| Error::TransactionVerification(format!("Libbitcoinconsensus error: {:?}", e)))
     }
 
     /// Get the specified output of this transaction as an OutPoint to be referenced
@@ -899,34 +942,6 @@ mod tests {
         });
     }
 
-    // FIXME: make it return an error and expose it to the world
-    macro_rules! assert_libbitcoinconsensus_validity {
-        ( $tx:ident, [$($previous_tx:ident),*] ) => {
-            for (index, txin) in $tx.inner_tx().global.unsigned_tx.input.iter().enumerate() {
-                let prevout = &txin.previous_output;
-                $(
-                    let previous_tx = &$previous_tx.inner_tx().global.unsigned_tx;
-                    if previous_tx.txid() == prevout.txid {
-                        let (prev_script, prev_value) =
-                            previous_tx
-                                .output
-                                .get(prevout.vout as usize)
-                                .and_then(|txo| Some((txo.script_pubkey.as_bytes(), txo.value)))
-                                .expect("Refered output is inexistant");
-                        bitcoinconsensus::verify(
-                            prev_script,
-                            prev_value,
-                            $tx.as_bitcoin_serialized().expect("Serializing tx").as_slice(),
-                            index,
-                        ).expect("Libbitcoinconsensus error");
-                        continue;
-                    }
-                )*
-                panic!("Could not find output pointed by txin");
-            }
-        };
-    }
-
     #[test]
     fn test_transaction_chain_satisfaction() {
         const CSV_VALUE: u32 = 42;
@@ -1056,7 +1071,6 @@ mod tests {
             false,
         );
         emergency_tx.finalize().unwrap();
-        assert_libbitcoinconsensus_validity!(emergency_tx, [vault_tx, feebump_tx]);
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are
@@ -1104,7 +1118,6 @@ mod tests {
             false,
         );
         cancel_tx.finalize().unwrap();
-        assert_libbitcoinconsensus_validity!(cancel_tx, [unvault_tx, feebump_tx]);
 
         // Create and sign the second (unvault) emergency transaction
         let unvault_txin = UnvaultTxIn::new(
@@ -1141,9 +1154,6 @@ mod tests {
                 .contains("Could not find pubkey associated with hash")),
             Ok(_) => unreachable!(),
         }
-        // If we don't satisfy the feebump input, libbitcoinconsensus will yell
-        // uncommenting this should result in a failure:
-        //assert_libbitcoinconsensus_validity!(unemergency_tx, [unvault_tx, feebump_tx]);
 
         // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx.signature_hash(
@@ -1164,7 +1174,6 @@ mod tests {
         unemergency_tx
             .finalize()
             .expect("Finalizing the unvault emergency transaction");
-        assert_libbitcoinconsensus_validity!(unemergency_tx, [unvault_tx, feebump_tx]);
 
         // Now we can sign the unvault
         let unvault_tx_sighash =
@@ -1179,7 +1188,6 @@ mod tests {
             false,
         );
         unvault_tx.finalize().expect("Finalizing the unvault");
-        assert_libbitcoinconsensus_validity!(unvault_tx, [vault_tx]);
 
         // FIXME: We should test batching as well for the spend transaction
         // Create and sign a spend transaction
@@ -1245,7 +1253,6 @@ mod tests {
             false,
         );
         spend_tx.finalize().expect("Finalizing spend transaction");
-        assert_libbitcoinconsensus_validity!(spend_tx, [unvault_tx]);
 
         // Test that we can get the hexadecimal representation of each transaction without error
         vault_tx.hex().expect("Hex repr vault_tx");
