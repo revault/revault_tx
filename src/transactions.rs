@@ -985,7 +985,7 @@ mod tests {
         .derive(child_number);
 
         // The funding transaction does not matter (random txid from my mempool)
-        let vault_scriptpubkey = vault_descriptor.script_pubkey();
+        let vault_scriptpubkey = vault_descriptor.0.script_pubkey();
         let vault_raw_tx = Transaction {
             version: 2,
             lock_time: 0,
@@ -1048,7 +1048,7 @@ mod tests {
         let mut emergency_tx =
             EmergencyTransaction::new(vault_txin, Some(feebump_txin), emer_txo.clone(), 0);
         let emergency_tx_sighash_vault =
-            emergency_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script(), true);
+            emergency_tx.signature_hash(0, &vault_txo, &vault_descriptor.0.witness_script(), true);
         satisfy_transaction_input(
             &secp,
             &mut emergency_tx,
@@ -1094,8 +1094,12 @@ mod tests {
         let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
         let mut cancel_tx =
             CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
-        let cancel_tx_sighash =
-            cancel_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script(), true);
+        let cancel_tx_sighash = cancel_tx.signature_hash(
+            0,
+            &unvault_txo,
+            &unvault_descriptor.0.witness_script(),
+            true,
+        );
         satisfy_transaction_input(
             &secp,
             &mut cancel_tx,
@@ -1135,7 +1139,7 @@ mod tests {
         let unemergency_tx_sighash = unemergency_tx.signature_hash(
             0,
             &unvault_txo,
-            &unvault_descriptor.witness_script(),
+            &unvault_descriptor.0.witness_script(),
             true,
         );
         satisfy_transaction_input(
@@ -1177,7 +1181,7 @@ mod tests {
 
         // Now we can sign the unvault
         let unvault_tx_sighash =
-            unvault_tx.signature_hash(0, &vault_txo, &vault_descriptor.witness_script());
+            unvault_tx.signature_hash(0, &vault_txo, &vault_descriptor.0.witness_script());
         satisfy_transaction_input(
             &secp,
             &mut unvault_tx,
@@ -1207,7 +1211,7 @@ mod tests {
             0,
         );
         let spend_tx_sighash =
-            spend_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script());
+            spend_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.0.witness_script());
         satisfy_transaction_input(
             &secp,
             &mut spend_tx,
@@ -1238,7 +1242,7 @@ mod tests {
             0,
         );
         let spend_tx_sighash =
-            spend_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.witness_script());
+            spend_tx.signature_hash(0, &unvault_txo, &unvault_descriptor.0.witness_script());
         satisfy_transaction_input(
             &secp,
             &mut spend_tx,

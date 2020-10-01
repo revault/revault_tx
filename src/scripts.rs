@@ -10,9 +10,45 @@
 
 use crate::error::Error;
 
-use miniscript::{policy::concrete::Policy, Descriptor, MiniscriptKey, Segwitv0};
+use bitcoin::util::bip32;
+use miniscript::{
+    descriptor::DescriptorPublicKey, policy::concrete::Policy, Descriptor, MiniscriptKey, Segwitv0,
+};
 
-// FIXME: use extended pubkeys everywhere after https://github.com/rust-bitcoin/rust-miniscript/pull/116
+// These are useful to create TxOuts out of the right Script descriptor
+
+macro_rules! impl_descriptor_newtype {
+    ($struct_name:ident, $doc_comment:meta ) => {
+        #[$doc_comment]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct $struct_name<Pk: MiniscriptKey>(pub Descriptor<Pk>);
+
+        impl $struct_name<DescriptorPublicKey> {
+            /// Derives all wildcard keys in the descriptor using the supplied `child_number`
+            pub fn derive(
+                &self,
+                child_number: bip32::ChildNumber,
+            ) -> $struct_name<DescriptorPublicKey> {
+                $struct_name(self.0.derive(child_number))
+            }
+        }
+    };
+}
+
+impl_descriptor_newtype!(
+    VaultDescriptor,
+    doc = "The vault / deposit miniscript descriptor. See [vault_descriptor] for more information"
+);
+
+impl_descriptor_newtype!(
+    UnvaultDescriptor,
+    doc = "The unvault miniscript descriptor. See [unvault_descriptor] for more information"
+);
+
+impl_descriptor_newtype!(
+    CpfpDescriptor,
+    doc = "The unvault CPFP miniscript descriptor. See [unvault_cpfp_descriptor] for more information"
+);
 
 /// Get the miniscript descriptor for the vault outputs.
 ///
@@ -33,14 +69,16 @@ use miniscript::{policy::concrete::Policy, Descriptor, MiniscriptKey, Segwitv0};
 /// let vault_descriptor =
 ///     scripts::vault_descriptor(vec![public_key, public_key]).expect("Compiling descriptor");
 ///
-/// println!("Vault descriptor redeem script: {}", vault_descriptor.witness_script());
+/// println!("Vault descriptor redeem script: {}", vault_descriptor.0.witness_script());
 /// ```
 ///
 /// # Errors
 /// - If the passed slice contains less than 2 public keys.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn vault_descriptor<Pk: MiniscriptKey>(participants: Vec<Pk>) -> Result<Descriptor<Pk>, Error> {
+pub fn vault_descriptor<Pk: MiniscriptKey>(
+    participants: Vec<Pk>,
+) -> Result<VaultDescriptor<Pk>, Error> {
     if participants.len() < 2 {
         return Err(Error::ScriptCreation(
             "Vault: bad parameters. We need more than one participant.".to_string(),
@@ -60,7 +98,7 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(participants: Vec<Pk>) -> Result<Desc
             "Vault policy compilation error: {}",
             compile_err
         ))),
-        Ok(miniscript) => Ok(Descriptor::<Pk>::Wsh(miniscript)),
+        Ok(miniscript) => Ok(VaultDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
     }
 }
 
@@ -105,7 +143,7 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(participants: Vec<Pk>) -> Result<Desc
 ///     42
 /// ).expect("Compiling descriptor");
 ///
-/// println!("Unvault descriptor redeem script: {}", unvault_descriptor.witness_script());
+/// println!("Unvault descriptor redeem script: {}", unvault_descriptor.0.witness_script());
 /// ```
 ///
 /// # Errors
@@ -118,7 +156,7 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
     managers: Vec<Pk>,
     cosigners: Vec<Pk>,
     csv_value: u32,
-) -> Result<Descriptor<Pk>, Error> {
+) -> Result<UnvaultDescriptor<Pk>, Error> {
     if non_managers.is_empty() || managers.is_empty() || cosigners.len() != non_managers.len() {
         return Err(Error::ScriptCreation(
             "Unvault: bad parameters. There must be a non-zero \
@@ -164,7 +202,7 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
             "Unvault policy compilation error: {}",
             compile_err
         ))),
-        Ok(miniscript) => Ok(Descriptor::<Pk>::Wsh(miniscript)),
+        Ok(miniscript) => Ok(UnvaultDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
     }
 }
 
@@ -242,7 +280,7 @@ pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
 /// bug.
 pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
     managers: Vec<Pk>,
-) -> Result<Descriptor<Pk>, Error> {
+) -> Result<CpfpDescriptor<Pk>, Error> {
     let pubkeys = managers
         .into_iter()
         .map(Policy::Key)
@@ -256,7 +294,7 @@ pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
             "Unvault CPFP policy compilation error: {}",
             compile_err
         ))),
-        Ok(miniscript) => Ok(Descriptor::<Pk>::Wsh(miniscript)),
+        Ok(miniscript) => Ok(CpfpDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
     }
 }
 
@@ -464,6 +502,7 @@ mod tests {
                     CSV_VALUE
                 )
                 .unwrap()
+                .0
         );
 
         // But that's obviously a huge footgun:

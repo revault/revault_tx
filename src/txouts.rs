@@ -2,8 +2,10 @@
 //! Wrappers around bitcoin's TxOut to statically check Revault transaction creation and ease
 //! their PSBT management.
 
+use crate::scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor};
+
 use bitcoin::{Script, TxOut};
-use miniscript::{Descriptor, MiniscriptKey, ToPublicKey};
+use miniscript::{MiniscriptKey, ToPublicKey};
 
 use std::fmt;
 
@@ -56,15 +58,14 @@ impl VaultTxOut {
     /// Create a new VaultTxOut out of the given Vault script descriptor
     pub fn new<Pk: MiniscriptKey + ToPublicKey>(
         value: u64,
-        // FIXME: add VaultDescriptor newtype
-        script_descriptor: &Descriptor<Pk>,
+        script_descriptor: &VaultDescriptor<Pk>,
     ) -> VaultTxOut {
         VaultTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.script_pubkey(),
+                script_pubkey: script_descriptor.0.script_pubkey(),
             },
-            witness_script: Some(script_descriptor.witness_script()),
+            witness_script: Some(script_descriptor.0.witness_script()),
         }
     }
 }
@@ -74,15 +75,14 @@ impl UnvaultTxOut {
     /// Create a new UnvaultTxOut out of the given Unvault script descriptor
     pub fn new<Pk: MiniscriptKey + ToPublicKey>(
         value: u64,
-        // FIXME: add UnVaultDescriptor newtype
-        script_descriptor: &Descriptor<Pk>,
+        script_descriptor: &UnvaultDescriptor<Pk>,
     ) -> UnvaultTxOut {
         UnvaultTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.script_pubkey(),
+                script_pubkey: script_descriptor.0.script_pubkey(),
             },
-            witness_script: Some(script_descriptor.witness_script()),
+            witness_script: Some(script_descriptor.0.witness_script()),
         }
     }
 }
@@ -109,15 +109,14 @@ impl CpfpTxOut {
     /// Create a new CpfpTxOut out of the given Cpfp descriptor
     pub fn new<Pk: MiniscriptKey + ToPublicKey>(
         value: u64,
-        script_descriptor: &Descriptor<Pk>,
+        script_descriptor: &CpfpDescriptor<Pk>,
     ) -> CpfpTxOut {
         CpfpTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.script_pubkey(),
+                script_pubkey: script_descriptor.0.script_pubkey(),
             },
-            // FIXME: a CpfpDescriptor newtype here..
-            witness_script: Some(script_descriptor.witness_script()),
+            witness_script: Some(script_descriptor.0.witness_script()),
         }
     }
 }
