@@ -1,15 +1,14 @@
 [package]
-name = "revault"
+name = "revault_tx"
 version = "0.0.1"
 authors = ["Antoine Poinsot <darosior@protonmail.com>"]
 edition = "2018"
 
 
 [dependencies]
-bitcoin = { git = "https://github.com/darosior/rust-bitcoin", branch = "hack_sighashcache" }
+bitcoin = "0.24"
 bitcoinconsensus = "0.19.0-1"
-miniscript = { git = "https://github.com/darosior/rust-miniscript", branch = "hack_sighashcache", features = ["compiler"] }
-secp256k1 = { version = "0.17.2" }
+miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript", branch = "master", features = ["compiler"] }
 
 [dev-dependencies]
 rand = "0.7.3"
