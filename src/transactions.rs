@@ -350,7 +350,7 @@ macro_rules! create_tx {
                         $revault_txin.as_unsigned_txin(),
                     )*],
                     output: vec![$(
-                        $txout.clone().get_txout(),
+                        $txout.clone().into_txout(),
                     )*],
                 },
                 unknown: BTreeMap::new(),
@@ -359,7 +359,7 @@ macro_rules! create_tx {
                 PsbtIn {
                     witness_script: $revault_txin.clone().into_txout().into_witness_script(),
                     sighash_type: Some($sighash_type),
-                    witness_utxo: Some($revault_txin.into_txout().get_txout()),
+                    witness_utxo: Some($revault_txin.into_txout().into_txout()),
                     ..PsbtIn::default()
                 },
             )*],
@@ -520,8 +520,8 @@ impl SpendTransaction {
                     output: spend_txouts
                         .iter()
                         .map(|spend_txout| match spend_txout {
-                            SpendTxOut::Destination(ref txo) => txo.clone().get_txout(),
-                            SpendTxOut::Change(ref txo) => txo.clone().get_txout(),
+                            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
+                            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
                         })
                         .collect(),
                 },
@@ -534,7 +534,7 @@ impl SpendTransaction {
                     PsbtIn {
                         witness_script: prev_txout.witness_script().clone(),
                         sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
-                        witness_utxo: Some(prev_txout.get_txout()),
+                        witness_utxo: Some(prev_txout.into_txout()),
                         ..PsbtIn::default()
                     }
                 })
@@ -622,7 +622,7 @@ impl UnvaultTransaction {
         sighash(
             &self.0,
             input_index,
-            previous_txout.inner_txout(),
+            previous_txout.txout(),
             script_code,
             false,
         )
@@ -647,7 +647,7 @@ impl CancelTransaction {
         sighash(
             &self.0,
             input_index,
-            previous_txout.inner_txout(),
+            previous_txout.txout(),
             script_code,
             is_anyonecanpay,
         )
@@ -672,7 +672,7 @@ impl EmergencyTransaction {
         sighash(
             &self.0,
             input_index,
-            previous_txout.inner_txout(),
+            previous_txout.txout(),
             script_code,
             is_anyonecanpay,
         )
@@ -697,7 +697,7 @@ impl UnvaultEmergencyTransaction {
         sighash(
             &self.0,
             input_index,
-            previous_txout.inner_txout(),
+            previous_txout.txout(),
             script_code,
             is_anyonecanpay,
         )
@@ -716,7 +716,7 @@ impl SpendTransaction {
         sighash(
             &self.0,
             input_index,
-            previous_txout.inner_txout(),
+            previous_txout.txout(),
             script_code,
             false,
         )
