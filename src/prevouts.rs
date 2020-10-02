@@ -7,7 +7,7 @@ use bitcoin::OutPoint;
 use std::fmt;
 
 /// A transaction output spent by a Revault transaction.
-pub trait RevaultPrevout: fmt::Debug + Copy {
+pub trait RevaultPrevout: fmt::Debug + Copy + PartialEq {
     /// Get the actual outpoint
     fn outpoint(&self) -> OutPoint;
 }
@@ -15,7 +15,7 @@ pub trait RevaultPrevout: fmt::Debug + Copy {
 macro_rules! implem_revault_prevout {
     ( $struct_name:ident, $doc_comment:meta ) => {
         #[$doc_comment]
-        #[derive(Debug, Copy, Clone)]
+        #[derive(Debug, Copy, Clone, PartialEq)]
         pub struct $struct_name(OutPoint);
 
         impl $struct_name {
