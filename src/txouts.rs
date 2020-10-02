@@ -1,5 +1,5 @@
 //! Revault txouts
-//! Wrappers around bitcoin's TxOut to statically check Revault transaction creation and ease
+//! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
 use crate::scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor};

@@ -1,8 +1,11 @@
 //! Revault transactions
 //!
-//! Typesafe routines to create bare revault transactions.
+//! Typesafe routines to create Revault-specific Bitcoin transactions.
+//!
+//! We use PSBTs as defined in [bip-0174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki)
+//! for data structure as well as roles distribution.
 
-use crate::{error::Error, txins::*, txouts::*};
+use crate::{txins::*, txouts::*, Error};
 
 use bitcoin::{
     consensus::encode::{Encodable, Error as EncodeError},
@@ -21,11 +24,18 @@ use miniscript::{BitcoinSig, MiniscriptKey, Satisfier, ToPublicKey};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+// FIXME: Why do we even allow the caller to set the sequence apart for the spend tx ?
 /// TxIn's sequence to set for the tx to be bip125-replaceable
 pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
 
-/// A Revault transaction. Apart from the VaultTransaction, all variants must be instanciated
-/// using the new_*() methods.
+/// A Revault transaction.
+///
+/// Wraps a rust-bitcoin PSBT and defines some (what Revault needs today) BIP174 roles as methods.
+/// Namely:
+/// - Creator and updater
+/// - Signer
+/// - Finalizer
+/// - Extractor and serializer
 pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the inner transaction
     fn inner_tx(&self) -> &Psbt;
@@ -35,7 +45,10 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Add a signature in order to eventually satisfy this input.
     /// Some sanity checks against the PSBT Input are done here, but no signature check.
-    /// The BIP174 Signer.
+    ///
+    /// Bigger warning: **the signature is not checked for its validity**.
+    ///
+    /// The BIP174 Signer role.
     fn add_signature(
         &mut self,
         input_index: usize,
@@ -117,7 +130,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Check and satisfy the scripts, create the witnesses.
-    /// The BIP174 Input Finalizer
+    ///
+    /// The BIP174 Input Finalizer role.
     fn finalize(&mut self) -> Result<(), Error> {
         let psbt = self.inner_tx_mut();
         let (psbt_inputs, tx_inputs) = (&mut psbt.inputs, &psbt.global.unsigned_tx.input);
@@ -284,9 +298,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         }
     }
 
-    /// Get the network-serialized (inner) transaction. You likely want to call [finalize] before
-    /// serializing the transaction.
-    /// The BIP174 Transaction Extractor (without any check, which are done in [finalize]).
+    /// Get the network-serialized (inner) transaction. You likely want to call
+    /// [RevaultTransaction.finalize] before serializing the transaction.
+    ///
+    /// The BIP174 Transaction Extractor (without any check, which are done in
+    /// [RevaultTransaction.finalize]).
     fn as_bitcoin_serialized(&self) -> Result<Vec<u8>, EncodeError> {
         let mut buff = Vec::<u8>::new();
         self.inner_tx()
@@ -304,9 +320,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
-    ///
-    /// # Errors
-    /// - If we could not encode the transaction (should not happen).
     fn hex(&self) -> Result<String, EncodeError> {
         let buff = self.as_bitcoin_serialized()?;
         let mut as_hex = String::new();
@@ -380,7 +393,8 @@ impl_revault_transaction!(
 impl UnvaultTransaction {
     /// An unvault transaction always spends one vault output and contains one CPFP output in
     /// addition to the unvault one.
-    /// PSBT Creator and Updater.
+    ///
+    /// BIP174 Creator and Updater roles.
     pub fn new(
         vault_input: VaultTxIn,
         unvault_txout: UnvaultTxOut,
@@ -402,7 +416,8 @@ impl_revault_transaction!(
 impl CancelTransaction {
     /// A cancel transaction always pays to a vault output and spends the unvault output, and
     /// may have a fee-bumping input.
-    /// PSBT Creator and Updater.
+    ///
+    /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_input: UnvaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
@@ -435,7 +450,8 @@ impl_revault_transaction!(
 impl EmergencyTransaction {
     /// The first emergency transaction always spends a vault output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
-    /// PSBT Creator and Updater.
+    ///
+    /// BIP174 Creator and Updater roles.
     pub fn new(
         vault_input: VaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
@@ -468,7 +484,8 @@ impl_revault_transaction!(
 impl UnvaultEmergencyTransaction {
     /// The second emergency transaction always spends an unvault output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
-    /// PSBT Creator and Updater.
+    ///
+    /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_input: UnvaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
@@ -502,7 +519,8 @@ impl_revault_transaction!(
 impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
     /// txouts (including, but not restricted to, change).
-    /// PSBT Creator and Updater.
+    ///
+    /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
@@ -616,6 +634,7 @@ impl UnvaultTransaction {
     pub fn signature_hash(
         &self,
         input_index: usize,
+        // FIXME: we don't need it anymore !! Nor the macro above
         previous_txout: &VaultTxOut,
         script_code: &Script,
     ) -> SigHash {
@@ -743,7 +762,6 @@ impl<'a> RevaultInputSatisfier<'a> {
         sigmap: &'a mut BTreeMap<bitcoin::PublicKey, Vec<u8>>,
         sequence: u32,
     ) -> RevaultInputSatisfier {
-        // This hack isn't going to last, see above.
         let mut pkhashmap = HashMap::<Hash160, bitcoin::PublicKey>::new();
         sigmap.keys().for_each(|pubkey| {
             pkhashmap.insert(pubkey.to_pubkeyhash(), *pubkey);
@@ -780,8 +798,6 @@ impl Satisfier<bitcoin::PublicKey> for RevaultInputSatisfier<'_> {
         self.pkhashmap.get(keyhash).copied()
     }
 
-    // The policy compiler will often optimize the Script to use pkH, so we need this method to be
-    // implemented *both* for satisfaction and disatisfaction !
     fn lookup_pkh_sig(&self, keyhash: &Hash160) -> Option<(PublicKey, BitcoinSig)> {
         self.lookup_pkh_pk(keyhash).and_then(|key| {
             if let Some(sig) = self.lookup_sig(&key) {

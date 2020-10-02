@@ -1,7 +1,3 @@
-//! Revault errors
-//!
-//! Errors related to the management of Revault transactions and scripts.
-
 use std::{error, fmt};
 
 /// An error specific to the management of Revault transactions and scripts.
@@ -13,7 +9,7 @@ pub enum Error {
     InputSatisfaction(String),
     /// Completion (PSBT finalizer role) of the Revault transaction has failed.
     TransactionFinalisation(String),
-    /// The verification of the transaction against libbitcoinconsensus failed.
+    /// The verification of the PSBT input against libbitcoinconsensus failed.
     TransactionVerification(String),
 }
 
