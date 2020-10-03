@@ -33,10 +33,6 @@ use serde::ser::{self, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-// FIXME: Why do we even allow the caller to set the sequence apart for the spend tx ?
-/// TxIn's sequence to set for the tx to be bip125-replaceable
-pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
-
 /// A Revault transaction.
 ///
 /// Wraps a rust-bitcoin PSBT and defines some (what Revault needs today) BIP174 roles as methods.
@@ -957,12 +953,8 @@ mod tests {
         let feebump_tx = FeeBumpTransaction::new(Psbt::from_unsigned_tx(raw_feebump_tx).unwrap());
 
         // Create and sign the first (vault) emergency transaction
-        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone(), RBF_SEQUENCE);
-        let feebump_txin = FeeBumpTxIn::new(
-            feebump_tx.into_outpoint(0),
-            feebump_txo.clone(),
-            RBF_SEQUENCE,
-        );
+        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone());
+        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
         let emer_txo = EmergencyTxOut::new(TxOut {
             value: 450,
             ..TxOut::default()
@@ -1002,7 +994,7 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are
-        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone(), u32::MAX);
+        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone());
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor);
         let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
         let mut unvault_tx =
@@ -1014,11 +1006,7 @@ mod tests {
             unvault_txo.clone(),
             RBF_SEQUENCE,
         );
-        let feebump_txin = FeeBumpTxIn::new(
-            feebump_tx.into_outpoint(0),
-            feebump_txo.clone(),
-            RBF_SEQUENCE,
-        );
+        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
         let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
         let mut cancel_tx =
             CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
@@ -1059,11 +1047,7 @@ mod tests {
             unvault_txo.clone(),
             RBF_SEQUENCE,
         );
-        let feebump_txin = FeeBumpTxIn::new(
-            feebump_tx.into_outpoint(0),
-            feebump_txo.clone(),
-            RBF_SEQUENCE,
-        );
+        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
         let mut unemergency_tx =
             UnvaultEmergencyTransaction::new(unvault_txin, Some(feebump_txin), emer_txo, 0);
         let unemergency_tx_sighash = unemergency_tx
