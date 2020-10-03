@@ -1,5 +1,5 @@
 //! Revault txouts
-//! Wrappers around bitcoin's TxOut to statically check Revault transaction creation and ease
+//! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
 use crate::scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor};
@@ -12,9 +12,9 @@ use std::fmt;
 /// A transaction output created by a Revault transaction.
 pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
     /// Get a reference to the inner txout
-    fn inner_txout(&self) -> &TxOut;
+    fn txout(&self) -> &TxOut;
     /// Get the actual inner txout
-    fn get_txout(self) -> TxOut;
+    fn into_txout(self) -> TxOut;
     /// Get a reference to the inner witness script ("redeem Script of the witness program")
     fn witness_script(&self) -> &Option<Script>;
     /// Get the actual inner witness script ("redeem Script of the witness program")
@@ -31,11 +31,11 @@ macro_rules! implem_revault_txout {
         }
 
         impl RevaultTxOut for $struct_name {
-            fn inner_txout(&self) -> &TxOut {
+            fn txout(&self) -> &TxOut {
                 &self.txout
             }
 
-            fn get_txout(self) -> TxOut {
+            fn into_txout(self) -> TxOut {
                 self.txout
             }
 

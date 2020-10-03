@@ -1,14 +1,16 @@
-//! Revault scripts
+//! # Revault scripts
 //!
-//! Get the output and script descriptors for policies specific to the Revault architecture.
+//! Miniscript descriptors for policies specific to the Revault architecture.
+//!
 //! We use [miniscript](http://bitcoin.sipa.be/miniscript/) in order to "safely" derive
-//! scripts depending on the setup configuration (ie the number of overall participants and the
-//! number of fund managers).
+//! scripts depending on the setup configuration (ie the number of stakeholders, the
+//! number of fund managers, and the relative timelock).
 //!
-//! Note these functions are not safe to reuse once the architecture set up, as the
-//! returned descriptors are non-deterministically compiled from an abstract policy.
+//! Note these functions are not safe to reuse after initial set up, as the returned descriptors
+//! are non-deterministically compiled from an abstract policy.
+//! Backup the output Miniscript descriptors instead.
 
-use crate::error::Error;
+use crate::Error;
 
 use bitcoin::util::bip32;
 use miniscript::{
@@ -37,17 +39,17 @@ macro_rules! impl_descriptor_newtype {
 
 impl_descriptor_newtype!(
     VaultDescriptor,
-    doc = "The vault / deposit miniscript descriptor. See [vault_descriptor] for more information"
+    doc = "The vault / deposit miniscript descriptor. See the [vault_descriptor] function for more information."
 );
 
 impl_descriptor_newtype!(
     UnvaultDescriptor,
-    doc = "The unvault miniscript descriptor. See [unvault_descriptor] for more information"
+    doc = "The unvault miniscript descriptor. See the [unvault_descriptor] function for more information."
 );
 
 impl_descriptor_newtype!(
     CpfpDescriptor,
-    doc = "The unvault CPFP miniscript descriptor. See [unvault_cpfp_descriptor] for more information"
+    doc = "The unvault CPFP miniscript descriptor. See the [unvault_cpfp_descriptor] function for more information."
 );
 
 /// Get the miniscript descriptor for the vault outputs.

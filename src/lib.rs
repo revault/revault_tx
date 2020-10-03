@@ -1,11 +1,12 @@
-//! Revault
+//! # Revault_tx
 //!
-//! Generalistic routines to work with Revault-specific Bitcoin transactions and Scripts.
+//! Revault-specific Bitcoin scripts and transactions routines.
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod error;
+mod error;
+pub use error::Error;
 
 pub mod scripts;
 
