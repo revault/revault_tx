@@ -153,6 +153,10 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     ///
     /// The BIP174 Input Finalizer role.
     fn finalize(&mut self) -> Result<(), Error> {
+        // We could operate on a clone for state consistency in case of error. However we never
+        // leave the PSBT in an inconsistent state: worst case the final_script_witness will be set
+        // and libbitcoinconsensus verification will fail. In this case it'll just get overidden at
+        // the next call to finalize and nothing depends on it.
         let psbt = self.inner_tx_mut();
         let (psbt_inputs, tx_inputs) = (&mut psbt.inputs, &psbt.global.unsigned_tx.input);
 
@@ -165,7 +169,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         }
 
         for (psbtin, txin) in psbt_inputs.iter_mut().zip(tx_inputs.iter()) {
-            let prev_txo = match psbtin.witness_utxo.clone() {
+            let prev_txo = match psbtin.witness_utxo.as_ref() {
                 Some(utxo) => utxo,
                 None => {
                     return Err(Error::TransactionFinalisation(format!(
@@ -223,7 +227,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             // order to have a comprehensive and adequate satisfaction, then we push the actual
             // witness script.
             } else if prev_txo.script_pubkey.is_v0_p2wsh() {
-                let prev_script = match psbtin.witness_script {
+                let prev_script = match psbtin.witness_script.as_ref() {
                     Some(ref script) => {
                         match miniscript::Miniscript::<_, miniscript::Segwitv0>::parse(script) {
                             Ok(miniscript) => miniscript,
@@ -262,9 +266,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 )));
             }
         }
-
-        // TODO: think about state consistency here: should we instead operate on a clone() which
-        // we'd move only if the below check passes ?
 
         // Needs to be separated because of above mutable borrows
         for i in 0..psbt_inputs.len() {
