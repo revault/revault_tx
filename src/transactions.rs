@@ -60,12 +60,12 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             // For a Signer to only produce valid signatures for what it expects to sign, it must
             // check that the following conditions are true:
             // -- If a witness UTXO is provided, no non-witness signature may be created.
-            if psbtin.witness_utxo.is_none() {
-                return Err(Error::InputSatisfaction(format!(
+            let prev_txo = psbtin.witness_utxo.as_ref().ok_or_else(|| {
+                Error::InputSatisfaction(format!(
                     "No previous witness txo for psbtin: '{:?}'",
                     psbtin
-                )));
-            }
+                ))
+            })?;
             if psbtin.non_witness_utxo.is_some() {
                 return Err(Error::InputSatisfaction(format!(
                     "Unexpected non-witness txo for psbtin: '{:?}'",
@@ -79,13 +79,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 let expected_script_pubkey =
                     bitcoin::Address::p2wsh(witness_script, bitcoin::Network::Bitcoin)
                         .script_pubkey();
-                if expected_script_pubkey
-                    != psbtin
-                        .witness_utxo
-                        .as_ref()
-                        .expect("Just check it's not none")
-                        .script_pubkey
-                {
+                if expected_script_pubkey != prev_txo.script_pubkey {
                     return Err(Error::InputSatisfaction(format!(
                         "Invalid witness script of previous txo ScriptPubKey for psbtin: '{:?}'",
                         psbtin
