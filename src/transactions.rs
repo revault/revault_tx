@@ -848,6 +848,7 @@ mod tests {
         let unvault_descriptor = unvault_descriptor(
             stakeholders.clone(),
             managers.clone(),
+            managers.len(),
             cosigners.clone(),
             CSV_VALUE,
         )

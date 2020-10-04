@@ -135,10 +135,11 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(
 ///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
 /// };
 /// let unvault_descriptor = scripts::unvault_descriptor(
-///     // Non-managers
+///     // Stakeholders
 ///     vec![public_key, public_key, public_key],
 ///     // Managers
 ///     vec![public_key, public_key],
+///     2,
 ///     // Cosigners
 ///     vec![public_key, public_key, public_key],
 ///     // CSV
@@ -156,6 +157,7 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(
 pub fn unvault_descriptor<Pk: MiniscriptKey>(
     stakeholders: Vec<Pk>,
     managers: Vec<Pk>,
+    managers_threshold: usize,
     cosigners: Vec<Pk>,
     csv_value: u32,
 ) -> Result<UnvaultDescriptor<Pk>, Error> {
@@ -164,6 +166,14 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
             "Unvault: bad parameters. There must be a non-zero \
                 number of managers and non_managers, and as many cosigners as non_managers"
                 .to_string(),
+        ));
+    }
+
+    if managers_threshold > managers.len() {
+        return Err(Error::ScriptCreation(
+            "Unvault: bad parameters. The managers threshold is higher than \
+                the number of managers."
+                .to_owned(),
         ));
     }
 
@@ -177,7 +187,7 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
         .into_iter()
         .map(Policy::Key)
         .collect::<Vec<Policy<Pk>>>();
-    let spenders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
+    let spenders_thres = Policy::Threshold(managers_threshold, pubkeys);
 
     pubkeys = stakeholders
         .into_iter()
@@ -329,24 +339,24 @@ mod tests {
         // Policy compilation takes time, so just test some remarkable ones
         let configurations = [
             // Single-manager configurations
-            (1, 1),
-            (1, 2),
-            (1, 5),
-            // Multiple-manager configurations
-            (2, 3),
-            (4, 2),
-            (7, 1),
-            (3, 8),
+            ((1, 1), 1),
+            ((1, 1), 2),
+            ((1, 1), 5),
+            // Multiple-manager configurations (with threshold)
+            ((2, 2), 3),
+            ((3, 4), 2),
+            ((7, 7), 1),
+            ((2, 3), 8),
             // Huge configurations
-            (15, 5),
-            (20, 5),
-            (7, 13),
-            (8, 12),
-            (3, 18),
+            ((15, 15), 5),
+            ((20, 20), 5),
+            ((7, 7), 13),
+            ((8, 8), 12),
+            ((3, 3), 18),
         ];
 
         let mut rng = SmallRng::from_entropy();
-        for (n_managers, n_stakeholders) in configurations.iter() {
+        for ((thresh, n_managers), n_stakeholders) in configurations.iter() {
             let managers = (0..*n_managers)
                 .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
@@ -360,6 +370,7 @@ mod tests {
             unvault_descriptor(
                 stakeholders.clone(),
                 managers.clone(),
+                *thresh,
                 cosigners.clone(),
                 18,
             )
@@ -401,6 +412,7 @@ mod tests {
             unvault_descriptor(
                 vec![get_random_pubkey(&mut rng)],
                 vec![get_random_pubkey(&mut rng)],
+                1,
                 vec![get_random_pubkey(&mut rng), get_random_pubkey(&mut rng)],
                 6
             ),
@@ -415,11 +427,26 @@ mod tests {
             unvault_descriptor(
                 vec![get_random_pubkey(&mut rng)],
                 vec![get_random_pubkey(&mut rng)],
+                1,
                 vec![get_random_pubkey(&mut rng)],
                 4194305
             ),
             Err(Error::ScriptCreation(
                 "Unvault: bad parameters. The CSV must be specified in block granularity"
+                    .to_owned()
+            ))
+        );
+
+        assert_eq!(
+            unvault_descriptor(
+                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng)],
+                2,
+                vec![get_random_pubkey(&mut rng)],
+                4194305
+            ),
+            Err(Error::ScriptCreation(
+                "Unvault: bad parameters. The managers threshold is higher than the number of managers."
                     .to_owned()
             ))
         );
@@ -458,7 +485,7 @@ mod tests {
         let cosigners = (0..38)
             .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
-        unvault_descriptor(stakeholders, managers, cosigners, 145).unwrap();
+        unvault_descriptor(stakeholders, managers, 2, cosigners, 145).unwrap();
 
         // Now hit the limit
         let stakeholders = (0..39)
@@ -470,7 +497,14 @@ mod tests {
         let cosigners = (0..39)
             .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
-        assert_eq!(unvault_descriptor(stakeholders, managers, cosigners, 32), Err(Error::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        assert_eq!(
+            unvault_descriptor(stakeholders, managers, 2, cosigners, 32),
+            Err(Error::ScriptCreation(
+                "Unvault policy compilation error: Atleast one spending path \
+                    has more op codes executed than MAX_OPS_PER_SCRIPT"
+                    .to_string()
+            ))
+        );
     }
 
     #[test]
@@ -514,6 +548,7 @@ mod tests {
                 != unvault_descriptor(
                     stakeholders.clone(),
                     managers.clone(),
+                    managers.len(),
                     cosigners.clone(),
                     CSV_VALUE
                 )
