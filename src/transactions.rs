@@ -747,10 +747,10 @@ mod tests {
             })
             .collect::<Vec<DescriptorPublicKey>>();
 
-        let non_managers_priv = (0..8)
+        let stakeholders_priv = (0..8)
             .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
-        let non_managers = non_managers_priv
+        let stakeholders = stakeholders_priv
             .iter()
             .map(|xpriv| {
                 DescriptorPublicKey::XPub(DescriptorXPub {
@@ -779,7 +779,7 @@ mod tests {
 
         (
             (managers_priv, managers),
-            (non_managers_priv, non_managers),
+            (stakeholders_priv, stakeholders),
             (cosigners_priv, cosigners),
         )
     }
@@ -840,35 +840,25 @@ mod tests {
         // Keys, keys, keys everywhere !
         let (
             (managers_priv, managers),
-            (non_managers_priv, non_managers),
+            (stakeholders_priv, stakeholders),
             (cosigners_priv, cosigners),
         ) = get_participants_sets(&secp);
-        let all_participants_xpriv = managers_priv
-            .iter()
-            .chain(non_managers_priv.iter())
-            .cloned()
-            .collect::<Vec<bip32::ExtendedPrivKey>>();
 
         // Get the script descriptors for the txos we're going to create
         let unvault_descriptor = unvault_descriptor(
-            non_managers.clone(),
+            stakeholders.clone(),
             managers.clone(),
             cosigners.clone(),
             CSV_VALUE,
         )
         .expect("Unvault descriptor generation error")
         .derive(child_number);
-        let cpfp_descriptor = unvault_cpfp_descriptor(managers.clone())
+        let cpfp_descriptor = unvault_cpfp_descriptor(managers)
             .expect("Unvault CPFP descriptor generation error")
             .derive(child_number);
-        let vault_descriptor = vault_descriptor(
-            managers
-                .into_iter()
-                .chain(non_managers.into_iter())
-                .collect::<Vec<DescriptorPublicKey>>(),
-        )
-        .expect("Vault descriptor generation error")
-        .derive(child_number);
+        let vault_descriptor = vault_descriptor(stakeholders)
+            .expect("Vault descriptor generation error")
+            .derive(child_number);
 
         // The funding transaction does not matter (random txid from my mempool)
         let vault_scriptpubkey = vault_descriptor.0.script_pubkey();
@@ -945,7 +935,7 @@ mod tests {
             &mut emergency_tx,
             0,
             &emergency_tx_sighash_vault,
-            &all_participants_xpriv,
+            &stakeholders_priv,
             Some(child_number),
             SigHashType::AllPlusAnyoneCanPay,
         );
@@ -998,7 +988,7 @@ mod tests {
             &mut cancel_tx,
             0,
             &cancel_tx_sighash,
-            &all_participants_xpriv,
+            &stakeholders_priv,
             Some(child_number),
             SigHashType::AllPlusAnyoneCanPay,
         );
@@ -1042,7 +1032,7 @@ mod tests {
             &mut unemergency_tx,
             0,
             &unemergency_tx_sighash,
-            &all_participants_xpriv,
+            &stakeholders_priv,
             Some(child_number),
             SigHashType::AllPlusAnyoneCanPay,
         );
@@ -1080,7 +1070,7 @@ mod tests {
             &mut unvault_tx,
             0,
             &unvault_tx_sighash,
-            &all_participants_xpriv,
+            &stakeholders_priv,
             Some(child_number),
             SigHashType::All,
         );

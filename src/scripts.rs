@@ -154,12 +154,12 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
 pub fn unvault_descriptor<Pk: MiniscriptKey>(
-    non_managers: Vec<Pk>,
+    stakeholders: Vec<Pk>,
     managers: Vec<Pk>,
     cosigners: Vec<Pk>,
     csv_value: u32,
 ) -> Result<UnvaultDescriptor<Pk>, Error> {
-    if non_managers.is_empty() || managers.is_empty() || cosigners.len() != non_managers.len() {
+    if stakeholders.is_empty() || managers.is_empty() || cosigners.len() != stakeholders.len() {
         return Err(Error::ScriptCreation(
             "Unvault: bad parameters. There must be a non-zero \
                 number of managers and non_managers, and as many cosigners as non_managers"
@@ -179,11 +179,11 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
         .collect::<Vec<Policy<Pk>>>();
     let spenders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
-    pubkeys = non_managers
+    pubkeys = stakeholders
         .into_iter()
         .map(Policy::Key)
         .collect::<Vec<Policy<Pk>>>();
-    let non_spenders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
+    let stakeholders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
     pubkeys = cosigners
         .into_iter()
@@ -193,10 +193,12 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
 
     let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older(csv_value)]);
 
-    let cosigners_or_non_spenders =
-        Policy::Or(vec![(10, cosigners_and_csv), (1, non_spenders_thres)]);
+    let managers_and_cosigners_and_csv = Policy::And(vec![spenders_thres, cosigners_and_csv]);
 
-    let policy = Policy::And(vec![spenders_thres, cosigners_or_non_spenders]);
+    let policy = Policy::Or(vec![
+        (1, stakeholders_thres),
+        (9, managers_and_cosigners_and_csv),
+    ]);
 
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
@@ -213,7 +215,7 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
 /// == A boilerplate "prefer not using this" warning goes here.. ==
 /// The default [unvault_descriptor] is a safe(r) alternative.
 ///
-/// This basically abstracts the policy and does a `or(all_participants, and(managers, cosigners, CSV))`
+/// This basically abstracts the policy and does a `or(stakeholders, and(managers, cosigners, CSV))`
 /// in order to allow experiments with the set of keys of the managers not being included in
 /// the set of keys of all the participants (does not necessarily means that the managers
 /// *themselves* aren't part of this set).
@@ -226,9 +228,9 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
 /// - If the policy compilation to miniscript failed
 #[allow(clippy::too_many_arguments)]
 pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
-    all_participants_pubkeys: Vec<Pk>,
-    all_participants_thresh: usize,
-    all_participants_likelyhood: usize,
+    stakeholders_pubkeys: Vec<Pk>,
+    stakeholders_thresh: usize,
+    stakeholders_likelyhood: usize,
     managers_pubkeys: Vec<Pk>,
     managers_thresh: usize,
     cosigners_pubkeys: Vec<Pk>,
@@ -236,11 +238,11 @@ pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
     csv_value: u32,
     managers_alone_likelyhood: usize,
 ) -> Result<Descriptor<Pk>, Error> {
-    let all_participants_pubkeys = all_participants_pubkeys
+    let stakeholders_pubkeys = stakeholders_pubkeys
         .into_iter()
         .map(Policy::Key)
         .collect::<Vec<Policy<Pk>>>();
-    let all_participants = Policy::Threshold(all_participants_thresh, all_participants_pubkeys);
+    let stakeholders = Policy::Threshold(stakeholders_thresh, stakeholders_pubkeys);
 
     let managers_pubkeys = managers_pubkeys
         .into_iter()
@@ -260,7 +262,7 @@ pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
     ]);
 
     let final_policy = Policy::Or(vec![
-        (all_participants_likelyhood, all_participants),
+        (stakeholders_likelyhood, stakeholders),
         (managers_alone_likelyhood, managers_alone),
     ]);
 
@@ -344,42 +346,42 @@ mod tests {
         ];
 
         let mut rng = SmallRng::from_entropy();
-        for (n_managers, n_non_managers) in configurations.iter() {
+        for (n_managers, n_stakeholders) in configurations.iter() {
             let managers = (0..*n_managers)
                 .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
-            let non_managers = (0..*n_non_managers)
+            let stakeholders = (0..*n_stakeholders)
                 .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
-            let cosigners = (0..*n_non_managers)
+            let cosigners = (0..*n_stakeholders)
                 .map(|_| get_random_pubkey(&mut rng))
                 .collect::<Vec<PublicKey>>();
 
             unvault_descriptor(
-                non_managers.clone(),
+                stakeholders.clone(),
                 managers.clone(),
                 cosigners.clone(),
                 18,
             )
             .expect(&format!(
                 "Unvault descriptors creation error with ({}, {})",
-                n_managers, n_non_managers
+                n_managers, n_stakeholders
             ));
             vault_descriptor(
                 managers
                     .clone()
                     .iter()
-                    .chain(non_managers.iter())
+                    .chain(stakeholders.iter())
                     .copied()
                     .collect::<Vec<PublicKey>>(),
             )
             .expect(&format!(
                 "Vault descriptors creation error with ({}, {})",
-                n_managers, n_non_managers
+                n_managers, n_stakeholders
             ));
             unvault_cpfp_descriptor(managers).expect(&format!(
                 "Unvault CPFP descriptors creation error with ({}, {})",
-                n_managers, n_non_managers
+                n_managers, n_stakeholders
             ));
         }
     }
@@ -446,17 +448,29 @@ mod tests {
         //.collect::<Vec<PublicKey>>();
         //assert_eq!(unvault_cpfp_descriptor(&managers), Err(Error::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
-        // Maximum non-managers for 2 managers (+ 1)
-        //let managers = (0..2)
-        //.map(|_| get_random_pubkey(&mut rng))
-        //.collect::<Vec<PublicKey>>();
-        //let non_managers = (0..21)
-        //.map(|_| get_random_pubkey(&mut rng))
-        //.collect::<Vec<PublicKey>>();
-        //let cosigners = (0..21)
-        //.map(|_| get_random_pubkey(&mut rng))
-        //.collect::<Vec<PublicKey>>();
-        //assert_eq!(unvault_descriptor(&non_managers, &managers, &cosigners, 32), Err(Error::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        // Maximum non-managers for 2 managers
+        let stakeholders = (0..38)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        let managers = (0..2)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        let cosigners = (0..38)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        unvault_descriptor(stakeholders, managers, cosigners, 145).unwrap();
+
+        // Now hit the limit
+        let stakeholders = (0..39)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        let managers = (0..2)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        let cosigners = (0..39)
+            .map(|_| get_random_pubkey(&mut rng))
+            .collect::<Vec<PublicKey>>();
+        assert_eq!(unvault_descriptor(stakeholders, managers, cosigners, 32), Err(Error::ScriptCreation("Unvault policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
     }
 
     #[test]
@@ -464,7 +478,7 @@ mod tests {
         let mut rng = SmallRng::from_entropy();
         const CSV_VALUE: u32 = 33;
 
-        let non_managers = (0..5)
+        let stakeholders = (0..5)
             .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
         let managers = (0..3)
@@ -472,7 +486,7 @@ mod tests {
             .collect::<Vec<PublicKey>>();
         let all_participants = managers
             .iter()
-            .chain(non_managers.iter())
+            .chain(stakeholders.iter())
             .cloned()
             .collect::<Vec<PublicKey>>();
 
@@ -498,7 +512,7 @@ mod tests {
         assert!(
             default_policy
                 != unvault_descriptor(
-                    non_managers.clone(),
+                    stakeholders.clone(),
                     managers.clone(),
                     cosigners.clone(),
                     CSV_VALUE
@@ -523,8 +537,8 @@ mod tests {
 
         // What's cool however is that we can now separate our sets:
         raw_unvault_descriptor(
-            non_managers.clone(),
-            non_managers.len(),
+            stakeholders.clone(),
+            stakeholders.len(),
             1,
             managers.clone(),
             managers.len(),
@@ -554,8 +568,8 @@ mod tests {
 
         // Or both
         raw_unvault_descriptor(
-            non_managers.clone(),
-            non_managers.len() - 1,
+            stakeholders.clone(),
+            stakeholders.len() - 1,
             8,
             managers.clone(),
             managers.len() - 2,
