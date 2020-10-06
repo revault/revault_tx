@@ -8,7 +8,7 @@
 use crate::{txins::*, txouts::*, Error};
 
 use bitcoin::{
-    consensus::encode::{Encodable, Error as EncodeError},
+    consensus::encode::{Decodable, Encodable, Error as EncodeError},
     hashes::{hash160::Hash as Hash160, Hash},
     util::{
         bip143::SigHashCache,
@@ -20,6 +20,9 @@ use bitcoin::{
     OutPoint, PublicKey, Script, SigHash, SigHashType, Transaction,
 };
 use miniscript::{BitcoinSig, MiniscriptKey, Satisfier, ToPublicKey};
+
+use serde::de::{self, Deserialize, Deserializer, SeqAccess, Visitor};
+use serde::ser::{self, Serialize, SerializeSeq, Serializer};
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -369,6 +372,73 @@ macro_rules! impl_revault_transaction {
                 &mut self.0
             }
         }
+
+        impl Serialize for $transaction_name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                let mut buff = Vec::<u8>::new();
+                match self.inner_tx().consensus_encode(&mut buff) {
+                    Ok(_) => {
+                        // Follow 3 step pattern to serialize a rust data structure into the serde data model as a vector.
+                        let mut seq = serializer.serialize_seq(Some(buff.len()))?;
+                        for e in buff {
+                            seq.serialize_element(&e)?;
+                        }
+                        seq.end()
+                    }
+                    Err(e) => Err(ser::Error::custom(format!("Serialization Error {:?}", e))),
+                }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $transaction_name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                struct RevaultTxVisitor;
+
+                impl<'a> Visitor<'a> for RevaultTxVisitor {
+                    type Value = Vec<u8>;
+
+                    // Required method
+                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                        let name = std::any::type_name::<$transaction_name>();
+                        write!(formatter, "a serialized {} as a Vec<u8>", name)
+                    }
+
+                    // The deserializer found a sequence, so map that into the serde data model as a vector
+                    fn visit_seq<V>(self, mut visitor: V) -> Result<Vec<u8>, V::Error>
+                    where
+                        V: SeqAccess<'a>,
+                    {
+                        let mut vec = Vec::new();
+
+                        while let Some(elem) = visitor.next_element()? {
+                            vec.push(elem);
+                        }
+
+                        Ok(vec)
+                    }
+                }
+
+                // Turn this into a rust vector with deserialize_seq()
+                let vec: Vec<u8> = deserializer
+                    .deserialize_seq(RevaultTxVisitor)
+                    .expect("Deserialization Error");
+
+                // Then construct the PSBT with consensus_decode()
+                let res: Result<Psbt, EncodeError> = Decodable::consensus_decode(&vec[..]);
+
+                // Return an instance of the revault transaction
+                match res {
+                    Ok(psbt) => Ok($transaction_name(psbt)),
+                    Err(e) => Err(de::Error::custom(format!("Deserialization Error {:?}", e))),
+                }
+            }
+        }
     };
 }
 
@@ -708,6 +778,7 @@ mod tests {
         descriptor::{DescriptorPublicKey, DescriptorXPub},
         Descriptor, ToPublicKey,
     };
+    use serde_json;
 
     fn get_random_privkey(rng: &mut SmallRng) -> bip32::ExtendedPrivKey {
         let mut rand_bytes = [0u8; 64];
@@ -1151,5 +1222,11 @@ mod tests {
         cancel_tx.hex().expect("Hex repr cancel_tx");
         emergency_tx.hex().expect("Hex repr emergency_tx");
         feebump_tx.hex().expect("Hex repr feebump_tx");
+
+        // Test serialize method for a transaction
+        let serialized_tx = serde_json::to_string(&vault_tx).unwrap();
+        let deserialized_tx = serde_json::from_str(&serialized_tx).unwrap();
+
+        assert_eq!(vault_tx, deserialized_tx);
     }
 }

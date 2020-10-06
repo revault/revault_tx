@@ -9,6 +9,8 @@ edition = "2018"
 bitcoin = "0.24"
 bitcoinconsensus = "0.19.0-1"
 miniscript = { version = "2.0.0", features = ["compiler"] }
+serde = "1.0"
+serde_json = "1.0.58"
 
 [dev-dependencies]
 bitcoin = { version = "0.24", features = ["rand"] }
