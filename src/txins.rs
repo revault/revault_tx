@@ -8,6 +8,9 @@ use bitcoin::{OutPoint, TxIn};
 
 use std::fmt;
 
+/// The default sequence used by bitcoind to signal for RBF: 0xff_ff_ff_fd
+pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
+
 /// A transaction input used by a Revault transaction.
 pub trait RevaultTxIn<T>: fmt::Debug + Clone + PartialEq {
     /// Get the actual outpoint
@@ -60,12 +63,12 @@ implem_revault_txin!(
     doc = "A vault txo spent by the unvault transaction and the emergency transaction"
 );
 impl VaultTxIn {
-    /// Instanciate a TxIn referencing a vault txout
-    pub fn new(outpoint: OutPoint, prev_txout: VaultTxOut, sequence: u32) -> VaultTxIn {
+    /// Instanciate a TxIn referencing a vault txout which signals for RBF.
+    pub fn new(outpoint: OutPoint, prev_txout: VaultTxOut) -> VaultTxIn {
         VaultTxIn {
             outpoint,
             prev_txout,
-            sequence,
+            sequence: RBF_SEQUENCE,
         }
     }
 }
@@ -76,7 +79,8 @@ implem_revault_txin!(
     doc="An unvault txo spent by the cancel transaction, an emergency transaction, and the spend transaction."
 );
 impl UnvaultTxIn {
-    /// Instanciate a TxIn referencing an unvault txout
+    /// Instanciate a TxIn referencing an unvault txout. We need the sequence to be explicitly
+    /// specified for this one, as it may spend a CSV-encumbered path.
     pub fn new(outpoint: OutPoint, prev_txout: UnvaultTxOut, sequence: u32) -> UnvaultTxIn {
         UnvaultTxIn {
             outpoint,
@@ -94,12 +98,12 @@ implem_revault_txin!(
            utxo."
 );
 impl FeeBumpTxIn {
-    /// Instanciate a txin referencing a feebumpt txout
-    pub fn new(outpoint: OutPoint, prev_txout: FeeBumpTxOut, sequence: u32) -> FeeBumpTxIn {
+    /// Instanciate a txin referencing a feebumpt txout which signals for RBF.
+    pub fn new(outpoint: OutPoint, prev_txout: FeeBumpTxOut) -> FeeBumpTxIn {
         FeeBumpTxIn {
             outpoint,
             prev_txout,
-            sequence,
+            sequence: RBF_SEQUENCE,
         }
     }
 }
@@ -110,12 +114,12 @@ implem_revault_txin!(
     doc = "The unvault CPFP txo spent to accelerate the confirmation of the unvault transaction."
 );
 impl CpfpTxIn {
-    /// Instanciate a TxIn referencing a CPFP txout
-    pub fn new(outpoint: OutPoint, prev_txout: CpfpTxOut, sequence: u32) -> CpfpTxIn {
+    /// Instanciate a TxIn referencing a CPFP txout which signals for RBF.
+    pub fn new(outpoint: OutPoint, prev_txout: CpfpTxOut) -> CpfpTxIn {
         CpfpTxIn {
             outpoint,
             prev_txout,
-            sequence,
+            sequence: RBF_SEQUENCE,
         }
     }
 }

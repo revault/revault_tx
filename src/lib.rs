@@ -5,6 +5,9 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub use bitcoin;
+pub use miniscript;
+
 mod error;
 pub use error::Error;
 

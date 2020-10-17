@@ -33,10 +33,6 @@ use serde::ser::{self, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-// FIXME: Why do we even allow the caller to set the sequence apart for the spend tx ?
-/// TxIn's sequence to set for the tx to be bip125-replaceable
-pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
-
 /// A Revault transaction.
 ///
 /// Wraps a rust-bitcoin PSBT and defines some (what Revault needs today) BIP174 roles as methods.
@@ -96,12 +92,14 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             // check that the following conditions are true:
             // -- If a witness UTXO is provided, no non-witness signature may be created.
             let prev_txo = psbtin.witness_utxo.as_ref().ok_or_else(|| {
+                // Cannot be reached. We only create transactions with witness_utxo.
                 Error::InputSatisfaction(format!(
                     "No previous witness txo for psbtin: '{:?}'",
                     psbtin
                 ))
             })?;
             if psbtin.non_witness_utxo.is_some() {
+                // Cannot be reached. We never create transactions with witness_utxo.
                 return Err(Error::InputSatisfaction(format!(
                     "Unexpected non-witness txo for psbtin: '{:?}'",
                     psbtin
@@ -115,6 +113,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                     bitcoin::Address::p2wsh(witness_script, bitcoin::Network::Bitcoin)
                         .script_pubkey();
                 if expected_script_pubkey != prev_txo.script_pubkey {
+                    // Cannot be reached. We create TxOut scriptPubKey out of this exact witnessScript.
                     return Err(Error::InputSatisfaction(format!(
                         "Invalid witness script of previous txo ScriptPubKey for psbtin: '{:?}'",
                         psbtin
@@ -122,6 +121,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 }
             }
             if psbtin.redeem_script.is_some() {
+                // Cannot be reached. We never create Psbt input with legacy txos.
                 return Err(Error::InputSatisfaction(format!(
                     "Unexpected non native segwit txo for psbtin: '{:?}'",
                     psbtin
@@ -134,10 +134,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             let expected_sighash_type = match psbtin.sighash_type {
                 Some(st) => st,
                 None => {
+                    // Cannot be reached. We always set the SigHashType in the constructor.
                     return Err(Error::InputSatisfaction(format!(
                         "Unknown expected sighash type for psbtin: '{:?}'",
                         psbtin
-                    )))
+                    )));
                 }
             };
             if sighash_type != expected_sighash_type {
@@ -170,6 +171,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         let (psbt_inputs, tx_inputs) = (&mut psbt.inputs, &psbt.global.unsigned_tx.input);
 
         if psbt_inputs.len() != tx_inputs.len() {
+            // Cannot be reached. We create them from the same iterator in the constructor.
             return Err(Error::TransactionFinalisation(format!(
                 "Number of inputs mismatch. The PSBT has {}, the unsigned transaction has {}.",
                 psbt_inputs.len(),
@@ -181,10 +183,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             let prev_txo = match psbtin.witness_utxo.as_ref() {
                 Some(utxo) => utxo,
                 None => {
+                    // Cannot be reached. We only create transactions with witness_utxo.
                     return Err(Error::TransactionFinalisation(format!(
                         "Missing witness utxo for psbt input '{:?}'",
                         psbtin
-                    )))
+                    )));
                 }
             };
 
@@ -241,10 +244,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                         match miniscript::Miniscript::<_, miniscript::Segwitv0>::parse(script) {
                             Ok(miniscript) => miniscript,
                             Err(e) => {
+                                // Cannot be reached. We set it.
                                 return Err(Error::TransactionFinalisation(format!(
                                     "Could not parse witness script for psbt input '{:?}' : {:?}",
                                     psbtin, e
-                                )))
+                                )));
                             }
                         }
                     }
@@ -252,7 +256,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                         return Err(Error::TransactionFinalisation(format!(
                             "Missing witness script for psbt input '{:?}'",
                             psbtin
-                        )))
+                        )));
                     }
                 };
 
@@ -740,7 +744,7 @@ mod tests {
         SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, VaultTransaction,
         RBF_SEQUENCE,
     };
-    use crate::{scripts::*, txins::*, txouts::*};
+    use crate::{scripts::*, txins::*, txouts::*, Error};
 
     use std::str::FromStr;
 
@@ -838,14 +842,15 @@ mod tests {
         xprivs: &Vec<bip32::ExtendedPrivKey>,
         child_number: Option<bip32::ChildNumber>,
         sighash_type: SigHashType,
-    ) {
+    ) -> Result<(), Error> {
         // Can we agree that rustfmt does some nasty formatting now ??
         let derivation_path = bip32::DerivationPath::from(if let Some(cn) = child_number {
             vec![cn]
         } else {
             vec![]
         });
-        xprivs.iter().for_each(|xpriv| {
+
+        for xpriv in xprivs {
             let sig = (
                 secp.sign(
                     &bitcoin::secp256k1::Message::from_slice(&tx_sighash).unwrap(),
@@ -868,9 +873,10 @@ mod tests {
                 })
                 .to_public_key(),
                 sig,
-            )
-            .unwrap();
-        });
+            )?;
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -957,38 +963,77 @@ mod tests {
         let feebump_tx = FeeBumpTransaction::new(Psbt::from_unsigned_tx(raw_feebump_tx).unwrap());
 
         // Create and sign the first (vault) emergency transaction
-        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone(), RBF_SEQUENCE);
-        let feebump_txin = FeeBumpTxIn::new(
-            feebump_tx.into_outpoint(0),
-            feebump_txo.clone(),
-            RBF_SEQUENCE,
-        );
+        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone());
         let emer_txo = EmergencyTxOut::new(TxOut {
             value: 450,
             ..TxOut::default()
         });
-        let mut emergency_tx =
-            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emer_txo.clone(), 0);
-        let emergency_tx_sighash_vault = emergency_tx
+        // We can sign the transaction without the feebump input
+        let mut emergency_tx_no_feebump =
+            EmergencyTransaction::new(vault_txin.clone(), None, emer_txo.clone(), 0);
+        // We cannot get a sighash for a non-existing input
+        let sighash_err = emergency_tx_no_feebump.signature_hash(
+            10,
+            &vault_descriptor.0.witness_script(),
+            SigHashType::AllPlusAnyoneCanPay,
+        );
+        assert!(sighash_err
+            .expect_err("Sighash wrong input")
+            .to_string()
+            .contains("out of bonds or psbt input has no witness utxo"));
+        // But for an existing one, all good
+        let emergency_tx_sighash_vault = emergency_tx_no_feebump
             .signature_hash(
                 0,
                 &vault_descriptor.0.witness_script(),
                 SigHashType::AllPlusAnyoneCanPay,
             )
             .expect("Computing emergency tx vault sighash");
+        // We can't force it to accept a SIGHASH_ALL signature:
+        let err = satisfy_transaction_input(
+            &secp,
+            &mut emergency_tx_no_feebump,
+            0,
+            &emergency_tx_sighash_vault,
+            &stakeholders_priv,
+            Some(child_number),
+            SigHashType::All,
+        );
+        assert!(err
+            .expect_err("No error for invalid sighash ?")
+            .to_string()
+            .contains("Unexpected sighash type for psbtin:"));
+        // Now, that's the right SIGHASH
         satisfy_transaction_input(
             &secp,
-            &mut emergency_tx,
+            &mut emergency_tx_no_feebump,
             0,
             &emergency_tx_sighash_vault,
             &stakeholders_priv,
             Some(child_number),
             SigHashType::AllPlusAnyoneCanPay,
-        );
+        )
+        .unwrap();
+        // Without feebump it finalizes just fine
+        emergency_tx_no_feebump.finalize().unwrap();
 
+        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
+        let mut emergency_tx =
+            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emer_txo.clone(), 0);
         let emergency_tx_sighash_feebump = emergency_tx
             .signature_hash(1, &feebump_descriptor.script_code(), SigHashType::All)
             .expect("Computing emergency tx feebump sighash");
+        satisfy_transaction_input(
+            &secp,
+            &mut emergency_tx,
+            0,
+            // This sighash was created without knowledge of the feebump input. It's fine.
+            &emergency_tx_sighash_vault,
+            &stakeholders_priv,
+            Some(child_number),
+            SigHashType::AllPlusAnyoneCanPay,
+        )
+        .unwrap();
         satisfy_transaction_input(
             &secp,
             &mut emergency_tx,
@@ -997,12 +1042,13 @@ mod tests {
             &vec![feebump_xpriv],
             None,
             SigHashType::All,
-        );
+        )
+        .unwrap();
         emergency_tx.finalize().unwrap();
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are
-        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone(), u32::MAX);
+        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone());
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor);
         let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
         let mut unvault_tx =
@@ -1014,15 +1060,11 @@ mod tests {
             unvault_txo.clone(),
             RBF_SEQUENCE,
         );
-        let feebump_txin = FeeBumpTxIn::new(
-            feebump_tx.into_outpoint(0),
-            feebump_txo.clone(),
-            RBF_SEQUENCE,
-        );
         let revault_txo = VaultTxOut::new(6700, &vault_descriptor);
-        let mut cancel_tx =
-            CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
-        let cancel_tx_sighash = cancel_tx
+        // We can create it entirely without the feebump input
+        let mut cancel_tx_without_feebump =
+            CancelTransaction::new(unvault_txin.clone(), None, revault_txo.clone(), 0);
+        let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
             .signature_hash(
                 0,
                 &unvault_descriptor.0.witness_script(),
@@ -1031,17 +1073,32 @@ mod tests {
             .expect("Computing sighash for cancel tx unvault");
         satisfy_transaction_input(
             &secp,
-            &mut cancel_tx,
+            &mut cancel_tx_without_feebump,
             0,
-            &cancel_tx_sighash,
+            &cancel_tx_without_feebump_sighash,
             &stakeholders_priv,
             Some(child_number),
             SigHashType::AllPlusAnyoneCanPay,
-        );
+        )
+        .unwrap();
+        cancel_tx_without_feebump.finalize().unwrap();
+        // We can reuse the ANYONE_ALL sighash for the one with the feebump input
+        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
+        let mut cancel_tx =
+            CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
         let cancel_tx_sighash_feebump = cancel_tx
             .signature_hash(1, &feebump_descriptor.script_code(), SigHashType::All)
             .unwrap();
-
+        satisfy_transaction_input(
+            &secp,
+            &mut cancel_tx,
+            0,
+            &cancel_tx_without_feebump_sighash,
+            &stakeholders_priv,
+            Some(child_number),
+            SigHashType::AllPlusAnyoneCanPay,
+        )
+        .unwrap();
         satisfy_transaction_input(
             &secp,
             &mut cancel_tx,
@@ -1050,7 +1107,8 @@ mod tests {
             &vec![feebump_xpriv],
             None, // No derivation path for the feebump key
             SigHashType::All,
-        );
+        )
+        .unwrap();
         cancel_tx.finalize().unwrap();
 
         // Create and sign the second (unvault) emergency transaction
@@ -1059,14 +1117,10 @@ mod tests {
             unvault_txo.clone(),
             RBF_SEQUENCE,
         );
-        let feebump_txin = FeeBumpTxIn::new(
-            feebump_tx.into_outpoint(0),
-            feebump_txo.clone(),
-            RBF_SEQUENCE,
-        );
-        let mut unemergency_tx =
-            UnvaultEmergencyTransaction::new(unvault_txin, Some(feebump_txin), emer_txo, 0);
-        let unemergency_tx_sighash = unemergency_tx
+        // We can create it without the feebump input
+        let mut unemergency_tx_no_feebump =
+            UnvaultEmergencyTransaction::new(unvault_txin.clone(), None, emer_txo.clone(), 0);
+        let unemergency_tx_sighash = unemergency_tx_no_feebump
             .signature_hash(
                 0,
                 &unvault_descriptor.0.witness_script(),
@@ -1075,13 +1129,29 @@ mod tests {
             .unwrap();
         satisfy_transaction_input(
             &secp,
+            &mut unemergency_tx_no_feebump,
+            0,
+            &unemergency_tx_sighash,
+            &stakeholders_priv,
+            Some(child_number),
+            SigHashType::AllPlusAnyoneCanPay,
+        )
+        .unwrap();
+        unemergency_tx_no_feebump.finalize().unwrap();
+
+        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
+        let mut unemergency_tx =
+            UnvaultEmergencyTransaction::new(unvault_txin, Some(feebump_txin), emer_txo, 0);
+        satisfy_transaction_input(
+            &secp,
             &mut unemergency_tx,
             0,
             &unemergency_tx_sighash,
             &stakeholders_priv,
             Some(child_number),
             SigHashType::AllPlusAnyoneCanPay,
-        );
+        )
+        .unwrap();
         // We don't have satisfied the feebump input yet!
         match unemergency_tx.finalize() {
             Err(e) => assert!(e
@@ -1089,7 +1159,6 @@ mod tests {
                 .contains("Could not find pubkey associated with hash")),
             Ok(_) => unreachable!(),
         }
-
         // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx
             .signature_hash(1, &feebump_descriptor.script_code(), SigHashType::All)
@@ -1102,7 +1171,8 @@ mod tests {
             &vec![feebump_xpriv],
             None,
             SigHashType::All,
-        );
+        )
+        .unwrap();
         unemergency_tx
             .finalize()
             .expect("Finalizing the unvault emergency transaction");
@@ -1119,7 +1189,8 @@ mod tests {
             &stakeholders_priv,
             Some(child_number),
             SigHashType::All,
-        );
+        )
+        .unwrap();
         unvault_tx.finalize().expect("Finalizing the unvault");
 
         // FIXME: We should test batching as well for the spend transaction
@@ -1154,7 +1225,8 @@ mod tests {
                 .collect::<Vec<bip32::ExtendedPrivKey>>(),
             Some(child_number),
             SigHashType::All,
-        );
+        )
+        .unwrap();
         match spend_tx.finalize() {
             Err(e) => assert!(e.to_string().contains("Input satisfaction error")),
             Ok(_) => unreachable!(),
@@ -1186,7 +1258,70 @@ mod tests {
                 .collect::<Vec<bip32::ExtendedPrivKey>>(),
             Some(child_number),
             SigHashType::All,
+        )
+        .unwrap();
+        spend_tx.finalize().expect("Finalizing spend transaction");
+
+        // The spend transaction can also batch multiple unvault txos
+        let unvault_txins = vec![
+            UnvaultTxIn::new(
+                OutPoint::from_str(
+                    "0ed7dc14fe8d1364b3185fa46e940cb8e858f8de32e63f88353a2bd66eb99e2a:0",
+                )
+                .unwrap(),
+                unvault_txo.clone(),
+                CSV_VALUE,
+            ),
+            UnvaultTxIn::new(
+                OutPoint::from_str(
+                    "23aacfca328942892bb007a86db0bf5337005f642b3c46aef50c23af03ec333a:1",
+                )
+                .unwrap(),
+                unvault_txo.clone(),
+                CSV_VALUE,
+            ),
+            UnvaultTxIn::new(
+                OutPoint::from_str(
+                    "fccabf4077b7e44ba02378a97a84611b545c11a1ef2af16cbb6e1032aa059b1d:0",
+                )
+                .unwrap(),
+                unvault_txo.clone(),
+                CSV_VALUE,
+            ),
+            UnvaultTxIn::new(
+                OutPoint::from_str(
+                    "71dc04303184d54e6cc2f92d843282df2854d6dd66f10081147b84aeed830ae1:0",
+                )
+                .unwrap(),
+                unvault_txo.clone(),
+                CSV_VALUE,
+            ),
+        ];
+        let n_txins = unvault_txins.len();
+        let mut spend_tx = SpendTransaction::new(
+            unvault_txins,
+            vec![SpendTxOut::Destination(spend_txo.clone())],
+            0,
         );
+        for i in 0..n_txins {
+            let spend_tx_sighash = spend_tx
+                .signature_hash(i, &unvault_descriptor.0.witness_script(), SigHashType::All)
+                .unwrap();
+            satisfy_transaction_input(
+                &secp,
+                &mut spend_tx,
+                i,
+                &spend_tx_sighash,
+                &managers_priv
+                    .iter()
+                    .chain(cosigners_priv.iter())
+                    .copied()
+                    .collect::<Vec<bip32::ExtendedPrivKey>>(),
+                Some(child_number),
+                SigHashType::All,
+            )
+            .unwrap();
+        }
         spend_tx.finalize().expect("Finalizing spend transaction");
 
         // Test that we can get the hexadecimal representation of each transaction without error
