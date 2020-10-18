@@ -24,7 +24,7 @@ use miniscript::{BitcoinSig, MiniscriptKey, Satisfier, ToPublicKey};
 #[cfg(feature = "use-serde")]
 use base64;
 #[cfg(feature = "use-serde")]
-use bitcoin::consensus::encode::deserialize;
+use bitcoin::consensus::encode::Decodable;
 #[cfg(feature = "use-serde")]
 use serde::de::{self, Deserialize, Deserializer};
 #[cfg(feature = "use-serde")]
@@ -409,7 +409,8 @@ macro_rules! impl_revault_transaction {
                     Vec::<u8>::deserialize(deserializer)?
                 };
 
-                let psbt: Psbt = deserialize(&raw_psbt).map_err(de::Error::custom)?;
+                let psbt: Psbt =
+                    Decodable::consensus_decode(raw_psbt.as_slice()).map_err(de::Error::custom)?;
 
                 Ok($transaction_name(psbt))
             }
