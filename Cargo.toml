@@ -5,7 +5,7 @@ authors = ["Antoine Poinsot <darosior@protonmail.com>"]
 edition = "2018"
 
 [features]
-use-serde = ["serde", "serde_json", "base64"]
+use-serde = ["serde", "base64"]
 
 [dependencies]
 bitcoin = "0.24"
@@ -13,8 +13,8 @@ bitcoinconsensus = "0.19.0-1"
 miniscript = { version = "2.0.0", features = ["compiler"] }
 
 serde = { version = "1.0", optional = true }
-serde_json = { version = "1.0.58", optional = true }
 base64 = { version = "0.13.0", optional = true }
 
 [dev-dependencies]
 bitcoin = { version = "0.24", features = ["rand"] }
+serde_json = "1.0.58"
