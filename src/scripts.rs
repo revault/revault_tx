@@ -499,8 +499,8 @@ mod tests {
         assert_eq!(
             unvault_descriptor(stakeholders, managers, 2, cosigners, 32),
             Err(Error::ScriptCreation(
-                "Unvault policy compilation error: Atleast one spending path \
-                    has more op codes executed than MAX_OPS_PER_SCRIPT"
+                "Unvault policy compilation error: At least one spending path \
+                 has exceeded the standardness or consensus limits"
                     .to_string()
             ))
         );
