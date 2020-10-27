@@ -22,8 +22,6 @@ use bitcoin::{
 use miniscript::{BitcoinSig, MiniscriptKey, Satisfier, ToPublicKey};
 
 #[cfg(feature = "use-serde")]
-use base64;
-#[cfg(feature = "use-serde")]
 use bitcoin::consensus::encode::Decodable;
 #[cfg(feature = "use-serde")]
 use serde::de::{self, Deserialize, Deserializer};
@@ -302,7 +300,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 psbtin
                     .witness_utxo
                     .as_ref()
-                    .and_then(|utxo| Some((utxo.script_pubkey.as_bytes(), utxo.value)))
+                    .map(|utxo| (utxo.script_pubkey.as_bytes(), utxo.value))
             })
             .ok_or_else(|| {
                 Error::TransactionVerification(format!(
