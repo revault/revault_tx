@@ -640,29 +640,13 @@ impl SpendTransaction {
     }
 }
 
-impl_revault_transaction!(
-    VaultTransaction,
-    doc = "The funding transaction, we don't create nor sign it."
-);
-impl VaultTransaction {
-    /// We don't create nor are able to sign, it's just a type wrapper so explicitly no
-    /// restriction on the types here
-    pub fn new(psbt: Psbt) -> VaultTransaction {
-        VaultTransaction(psbt)
-    }
-}
+/// The funding transaction, we don't create nor sign it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VaultTransaction(pub Transaction);
 
-impl_revault_transaction!(
-    FeeBumpTransaction,
-    doc = "The fee-bumping transaction, we don't create nor sign it."
-);
-impl FeeBumpTransaction {
-    /// We don't create nor are able to sign, it's just a type wrapper so explicitly no
-    /// restriction on the types here
-    pub fn new(psbt: Psbt) -> FeeBumpTransaction {
-        FeeBumpTransaction(psbt)
-    }
-}
+/// The fee-bumping transaction, we don't create nor sign it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeeBumpTransaction(pub Transaction);
 
 // A small wrapper to ease input satisfaction that won't be needed after:
 // - https://github.com/rust-bitcoin/rust-bitcoin/pull/478
@@ -929,7 +913,7 @@ mod tests {
             }],
         };
         let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].value, &vault_descriptor);
-        let vault_tx = VaultTransaction::new(Psbt::from_unsigned_tx(vault_raw_tx).unwrap());
+        let vault_tx = VaultTransaction(vault_raw_tx);
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
@@ -959,10 +943,16 @@ mod tests {
             }],
         };
         let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
-        let feebump_tx = FeeBumpTransaction::new(Psbt::from_unsigned_tx(raw_feebump_tx).unwrap());
+        let feebump_tx = FeeBumpTransaction(raw_feebump_tx);
 
         // Create and sign the first (vault) emergency transaction
-        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone());
+        let vault_txin = VaultTxIn::new(
+            OutPoint {
+                txid: vault_tx.0.txid(),
+                vout: 0,
+            },
+            vault_txo.clone(),
+        );
         let emer_txo = EmergencyTxOut::new(TxOut {
             value: 450,
             ..TxOut::default()
@@ -1016,7 +1006,13 @@ mod tests {
         // Without feebump it finalizes just fine
         emergency_tx_no_feebump.finalize().unwrap();
 
-        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
+        let feebump_txin = FeeBumpTxIn::new(
+            OutPoint {
+                txid: feebump_tx.0.txid(),
+                vout: 0,
+            },
+            feebump_txo.clone(),
+        );
         let mut emergency_tx =
             EmergencyTransaction::new(vault_txin, Some(feebump_txin), emer_txo.clone(), 0);
         let emergency_tx_sighash_feebump = emergency_tx
@@ -1047,7 +1043,13 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are
-        let vault_txin = VaultTxIn::new(vault_tx.into_outpoint(0), vault_txo.clone());
+        let vault_txin = VaultTxIn::new(
+            OutPoint {
+                txid: vault_tx.0.txid(),
+                vout: 0,
+            },
+            vault_txo.clone(),
+        );
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor);
         let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
         let mut unvault_tx =
@@ -1082,7 +1084,13 @@ mod tests {
         .unwrap();
         cancel_tx_without_feebump.finalize().unwrap();
         // We can reuse the ANYONE_ALL sighash for the one with the feebump input
-        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
+        let feebump_txin = FeeBumpTxIn::new(
+            OutPoint {
+                txid: feebump_tx.0.txid(),
+                vout: 0,
+            },
+            feebump_txo.clone(),
+        );
         let mut cancel_tx =
             CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
         let cancel_tx_sighash_feebump = cancel_tx
@@ -1138,7 +1146,13 @@ mod tests {
         .unwrap();
         unemergency_tx_no_feebump.finalize().unwrap();
 
-        let feebump_txin = FeeBumpTxIn::new(feebump_tx.into_outpoint(0), feebump_txo.clone());
+        let feebump_txin = FeeBumpTxIn::new(
+            OutPoint {
+                txid: feebump_tx.0.txid(),
+                vout: 0,
+            },
+            feebump_txo.clone(),
+        );
         let mut unemergency_tx =
             UnvaultEmergencyTransaction::new(unvault_txin, Some(feebump_txin), emer_txo, 0);
         satisfy_transaction_input(
@@ -1324,12 +1338,10 @@ mod tests {
         spend_tx.finalize().expect("Finalizing spend transaction");
 
         // Test that we can get the hexadecimal representation of each transaction without error
-        vault_tx.hex().expect("Hex repr vault_tx");
         unvault_tx.hex().expect("Hex repr unvault_tx");
         spend_tx.hex().expect("Hex repr spend_tx");
         cancel_tx.hex().expect("Hex repr cancel_tx");
         emergency_tx.hex().expect("Hex repr emergency_tx");
-        feebump_tx.hex().expect("Hex repr feebump_tx");
 
         #[cfg(feature = "use-serde")]
         {
@@ -1343,8 +1355,6 @@ mod tests {
                 };
             }
 
-            roundtrip!(vault_tx);
-            roundtrip!(feebump_tx);
             roundtrip!(emergency_tx);
             roundtrip!(unvault_tx);
             roundtrip!(unemergency_tx);
@@ -1356,14 +1366,6 @@ mod tests {
     #[cfg(feature = "use-serde")]
     #[test]
     fn test_deserialize_psbt() {
-        let vault_psbt_str = "\"cHNidP8BAF4CAAAAAey7ySsrQ0rrSPX5YbfrH/5jgxu2Rz7UgHZGm2osIag5AAAAAAD/////AWgBAAAAAAAAIgAg6+2FViEaI3ADJgPrXOPXU49II+oMUrhVkgiLX8ZGjkkAAAAAAAAA\"";
-        let vault_tx: VaultTransaction = serde_json::from_str(&vault_psbt_str).unwrap();
-        assert_eq!(vault_tx.hex().unwrap().as_str(), "0200000001ecbbc92b2b434aeb48f5f961b7eb1ffe63831bb6473ed48076469b6a2c21a8390000000000ffffffff016801000000000000220020ebed8556211a2370032603eb5ce3d7538f4823ea0c52b85592088b5fc6468e4900000000");
-
-        let feebump_psbt_str = "\"cHNidP8BAFICAAAAAfhSW/TY0O5gk2CVfR7IgOj7d9aEKeQDy1OIvLRbVLRLAAAAAAD/////AZrdAAAAAAAAFgAUARCYqtgiH0Yo7AtLKYnSSGxJqv8AAAAAAAAA\"";
-        let feebump_tx: FeeBumpTransaction = serde_json::from_str(&feebump_psbt_str).unwrap();
-        assert_eq!(feebump_tx.hex().unwrap().as_str(), "0200000001f8525bf4d8d0ee609360957d1ec880e8fb77d68429e403cb5388bcb45b54b44b0000000000ffffffff019add000000000000160014011098aad8221f4628ec0b4b2989d2486c49aaff00000000");
-
         let emergency_psbt_str = "\"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\"";
         let emergency_tx: EmergencyTransaction = serde_json::from_str(&emergency_psbt_str).unwrap();
         assert_eq!(emergency_tx.hex().unwrap().as_str(), "020000000001021a332b693f957337550f80a1c5df33a6d361656ad431bc930184fda67495ffdb0000000000fdffffff874c9b51a61389439cae8b3a56c2458179e0b92628ca13b72d675e74594559420000000000fdffffff01c201000000000000000a0048304502210097ccce07c83c25246e612212c25439aa8373a6d8ba1e5821def424efc1f2123502203ce2596f255e3279b558b15a2ff90861aa67e901029bc84227b9dcc794607b9581483045022100c805af0b1a2b317476f140cdf044a70b19596afae433c7d100b070f8159b16100220302887cb1de4576f02fe6d0cae9c89a4b2da8b509f0c77d2c5be4ff3617cd92181483045022100e5bb43af9c1dad6d1a53663bf4b85a6e57f3dbd67bc3664097fca52c932307d302204897b75116f2f25f766114cca6adb5f1e5ff0c53d51834d23c5c86f29501f35081483045022100806d035bd06675c75c5d5e13959c1f7ba217bfc9a665646279390dcfdf7764d602207a852818f78c7984b251f8fefdb09c60d2f3f822c40088a16a413d026a0dccb981483045022100dc86c5d2d2c562cf5419a6ed65d6ee1c51741cdbb3302a2c91ec0b1b756341e9022052a80075227f3f30877d0f074fb1fc56404bacf9a47bf0b56de2bdef3a00c66581483045022100ad70b6dcbe2b0da7c466c268dd3c10e0d99e69b871a989be70c53857e3fe2d3d02207aaa86f0e07ce7a92c71222b283fbfbfcdc9fec2d39fd12e7ad1752ef8d69ef881483045022100e79061c8b06ea83386602b2350f3798a9cd03a624e6cd534eff18e1b19745ff102200d9906c1464d0dfc1788deb2ff31496e1ff53de96627c0af04c31cda68ebd2658147304402205be5f2861931f3b4f2dcf60eb30a890675fcbea89adf537740e5d507eccb75a202202a1b79229d313b09492f01206a5822afbab47865b651d7ad122e00da1f9b162c81fd130158210212b0f7c8dbd822defaf04863b1036218d09f4205b05a1b48b2f593e483f7a4f42102238f8f668ba39759a2e128b45e3e9a76a3625ee6b79610345c349cc5ee9b2eee2103123104586c00ea984b5b6048a4ed9ecfe788e2808c71632a3816de32eac4477c21027f973801f1793fca53d24a4edafcbce2cc8e5efa748c8d8cf3b9d0a71f516ca421021bffbf5c038953eb6a664e41876704bc41651a17411f1ac45bb40dedbb1cd61e2103eed74c020422cffe2ee0e46ae2502a71ca788121582b9499fe6e252c7722f8032103244685c918e3897f7499ecfaa7680c0f46ff1e29fe106efbbd1cc49ffdd5717c2102044834de773f158080a98a12c509a1e236eaab8fa9a45bdf6b2e9b7714b9205258ae0247304402204e8de6b4d8a445b83b2f7ae5fd0c80eab0238ba181e590097dbe1dd5cd18dea4022007537a770b3fc54a045c41d85c0567e20dd84872cbb3ada84a262b8152fd81a6012102fff7dfadab827a291e5b71c78106e3b6cdf891c2ccce6da80586a9560d262e1400000000");
