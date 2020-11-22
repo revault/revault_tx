@@ -587,14 +587,34 @@ impl_revault_transaction!(
 );
 impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
-    /// txouts (including, but not restricted to, change).
+    /// txouts (destination and change) in addition to the CPFP one..
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
+        cpfp_txo: CpfpTxOut,
         lock_time: u32,
     ) -> SpendTransaction {
+        let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
+        txos.push(cpfp_txo.clone().into_txout());
+        txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
+            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
+            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
+        }));
+
+        // For the PsbtOut s
+        let mut txos_wit_script = Vec::with_capacity(spend_txouts.len() + 1);
+        txos_wit_script.push(cpfp_txo.into_witness_script());
+        txos_wit_script.extend(
+            spend_txouts
+                .into_iter()
+                .map(|spend_txout| match spend_txout {
+                    SpendTxOut::Destination(txo) => txo.into_witness_script(),
+                    SpendTxOut::Change(txo) => txo.into_witness_script(),
+                }),
+        );
+
         SpendTransaction(Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
@@ -604,13 +624,7 @@ impl SpendTransaction {
                         .iter()
                         .map(|input| input.as_unsigned_txin())
                         .collect(),
-                    output: spend_txouts
-                        .iter()
-                        .map(|spend_txout| match spend_txout {
-                            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
-                            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
-                        })
-                        .collect(),
+                    output: txos,
                 },
                 unknown: BTreeMap::new(),
             },
@@ -626,13 +640,10 @@ impl SpendTransaction {
                     }
                 })
                 .collect(),
-            outputs: spend_txouts
+            outputs: txos_wit_script
                 .into_iter()
-                .map(|spend_txout| PsbtOut {
-                    witness_script: match spend_txout {
-                        SpendTxOut::Destination(txo) => txo.into_witness_script(),
-                        SpendTxOut::Change(txo) => txo.into_witness_script(),
-                    },
+                .map(|witness_script| PsbtOut {
+                    witness_script,
                     ..PsbtOut::default()
                 })
                 .collect(),
@@ -1217,10 +1228,12 @@ mod tests {
             value: 1,
             ..TxOut::default()
         });
+        let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor);
         // Test satisfaction failure with a wrong CSV value
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
+            cpfp_txo.clone(),
             0,
         );
         let spend_tx_sighash = spend_tx
@@ -1254,6 +1267,7 @@ mod tests {
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
+            cpfp_txo.clone(),
             0,
         );
         let spend_tx_sighash = spend_tx
@@ -1314,6 +1328,7 @@ mod tests {
         let mut spend_tx = SpendTransaction::new(
             unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],
+            cpfp_txo,
             0,
         );
         for i in 0..n_txins {
