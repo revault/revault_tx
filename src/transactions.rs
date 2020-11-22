@@ -33,7 +33,7 @@ use std::fmt;
 
 /// A Revault transaction.
 ///
-/// Wraps a rust-bitcoin PSBT and defines some (what Revault needs today) BIP174 roles as methods.
+/// Wraps a rust-bitcoin PSBT and defines some BIP174 roles as methods.
 /// Namely:
 /// - Creator and updater
 /// - Signer
@@ -429,7 +429,7 @@ macro_rules! create_tx {
                     version: 2,
                     lock_time: $lock_time,
                     input: vec![$(
-                        $revault_txin.as_unsigned_txin(),
+                        $revault_txin.unsigned_txin(),
                     )*],
                     output: vec![$(
                         $txout.clone().into_txout(),
@@ -622,7 +622,7 @@ impl SpendTransaction {
                     lock_time,
                     input: unvault_inputs
                         .iter()
-                        .map(|input| input.as_unsigned_txin())
+                        .map(|input| input.unsigned_txin())
                         .collect(),
                     output: txos,
                 },
@@ -734,7 +734,7 @@ impl Satisfier<bitcoin::PublicKey> for RevaultInputSatisfier<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelTransaction, EmergencyTransaction, FeeBumpTransaction, Psbt, RevaultTransaction,
+        CancelTransaction, EmergencyTransaction, FeeBumpTransaction, RevaultTransaction,
         SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, VaultTransaction,
         RBF_SEQUENCE,
     };

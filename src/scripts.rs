@@ -289,7 +289,7 @@ pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
 /// Get the miniscript descriptor for the CPFP outputs (used by managers for opportunistic
 /// fee-bumping).
 ///
-/// It's a basic N-of-N between the fund managers.
+/// It's a basic 1-of-N between the fund managers.
 ///
 /// # Errors
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
