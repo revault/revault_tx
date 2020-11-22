@@ -888,8 +888,8 @@ mod tests {
         )
         .expect("Unvault descriptor generation error")
         .derive(child_number);
-        let cpfp_descriptor = unvault_cpfp_descriptor(managers)
-            .expect("Unvault CPFP descriptor generation error")
+        let cpfp_descriptor = cpfp_descriptor(managers)
+            .expect("Unvaul CPFP descriptor generation error")
             .derive(child_number);
         let vault_descriptor = vault_descriptor(stakeholders)
             .expect("Vault descriptor generation error")

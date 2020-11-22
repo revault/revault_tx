@@ -49,7 +49,8 @@ impl_descriptor_newtype!(
 
 impl_descriptor_newtype!(
     CpfpDescriptor,
-    doc = "The unvault CPFP miniscript descriptor. See the [unvault_cpfp_descriptor] function for more information."
+    doc =
+        "The CPFP miniscript descriptor. See the [cpfp_descriptor] function for more information."
 );
 
 /// Get the miniscript descriptor for the vault outputs.
@@ -285,16 +286,15 @@ pub fn raw_unvault_descriptor<Pk: MiniscriptKey>(
     }
 }
 
-/// Get the miniscript descriptor for the unvault transaction CPFP output.
+/// Get the miniscript descriptor for the CPFP outputs (used by managers for opportunistic
+/// fee-bumping).
 ///
 /// It's a basic N-of-N between the fund managers.
 ///
 /// # Errors
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
-    managers: Vec<Pk>,
-) -> Result<CpfpDescriptor<Pk>, Error> {
+pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescriptor<Pk>, Error> {
     let pubkeys = managers
         .into_iter()
         .map(Policy::Key)
@@ -305,7 +305,7 @@ pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
         Err(compile_err) => Err(Error::ScriptCreation(format!(
-            "Unvault CPFP policy compilation error: {}",
+            "CPFP policy compilation error: {}",
             compile_err
         ))),
         Ok(miniscript) => Ok(CpfpDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
@@ -315,8 +315,7 @@ pub fn unvault_cpfp_descriptor<Pk: MiniscriptKey>(
 #[cfg(test)]
 mod tests {
     use super::{
-        raw_unvault_descriptor, unvault_cpfp_descriptor, unvault_descriptor, vault_descriptor,
-        Error,
+        cpfp_descriptor, raw_unvault_descriptor, unvault_descriptor, vault_descriptor, Error,
     };
 
     use bitcoin::{
@@ -390,8 +389,8 @@ mod tests {
                 "Vault descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
-            unvault_cpfp_descriptor(managers).expect(&format!(
-                "Unvault CPFP descriptors creation error with ({}, {})",
+            cpfp_descriptor(managers).expect(&format!(
+                "CPFP descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
         }
@@ -468,12 +467,12 @@ mod tests {
         let managers = (0..20)
             .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
-        unvault_cpfp_descriptor(managers).expect("Should be OK, that's the maximum allowed value");
+        cpfp_descriptor(managers).expect("Should be OK, that's the maximum allowed value");
         // Hit the limit
         //let managers = (0..21)
         //.map(|_| get_random_pubkey(&mut rng))
         //.collect::<Vec<PublicKey>>();
-        //assert_eq!(unvault_cpfp_descriptor(&managers), Err(Error::ScriptCreation("Unvault CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
+        //assert_eq!(cpfp_descriptor(&managers), Err(Error::ScriptCreation("CPFP policy compilation error: Atleast one spending path has more op codes executed than MAX_OPS_PER_SCRIPT".to_string())));
 
         // Maximum non-managers for 2 managers
         let stakeholders = (0..38)
