@@ -16,11 +16,11 @@ pub trait RevaultTxIn<T>: fmt::Debug + Clone + PartialEq {
     /// Get the actual outpoint
     fn outpoint(&self) -> OutPoint;
     /// Get a reference to the txout this txin refers
-    fn as_txout(&self) -> &T;
+    fn txout(&self) -> &T;
     /// Get the actual txout this txin refers
     fn into_txout(self) -> T;
     /// Get an actual Bitcoin TxIn out of the OutPoint and the nSequence
-    fn as_unsigned_txin(&self) -> TxIn;
+    fn unsigned_txin(&self) -> TxIn;
 }
 
 macro_rules! implem_revault_txin {
@@ -38,7 +38,7 @@ macro_rules! implem_revault_txin {
                 self.outpoint
             }
 
-            fn as_txout(&self) -> &$txout_struct_name {
+            fn txout(&self) -> &$txout_struct_name {
                 &self.prev_txout
             }
 
@@ -46,7 +46,7 @@ macro_rules! implem_revault_txin {
                 self.prev_txout
             }
 
-            fn as_unsigned_txin(&self) -> TxIn {
+            fn unsigned_txin(&self) -> TxIn {
                 TxIn {
                     previous_output: self.outpoint,
                     sequence: self.sequence,
