@@ -50,11 +50,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     fn inner_tx_mut(&mut self) -> &mut Psbt;
 
     /// Get the sighash for a specified input, provided the previous txout's scriptCode.
-    // TODO: find a *nice* way to get the scriptCode out of the previous scriptPubKey. I'd rather
-    // not retrieve the PkH as we do in finalize() below..
     fn signature_hash(
         &self,
         input_index: usize,
+        // In theory, we could deduce this from the PSBT input. In practice it's hacky af and the
+        // caller likely has the descriptor of this utxo already.
         script_code: &Script,
         sighash_type: SigHashType,
     ) -> Result<SigHash, Error> {
@@ -100,7 +100,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 ))
             })?;
             if psbtin.non_witness_utxo.is_some() {
-                // Cannot be reached. We never create transactions with witness_utxo.
+                // Cannot be reached. We never create transactions with non_witness_utxo.
                 return Err(Error::InputSatisfaction(format!(
                     "Unexpected non-witness txo for psbtin: '{:?}'",
                     psbtin
