@@ -164,10 +164,10 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Check and satisfy the scripts, create the witnesses.
     ///
     /// The BIP174 Input Finalizer role.
-    fn finalize(&mut self) -> Result<(), Error> {
-        // FIXME!
-        let ctx = secp256k1::Secp256k1::verification_only();
-
+    fn finalize(
+        &mut self,
+        ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>,
+    ) -> Result<(), Error> {
         // We could operate on a clone for state consistency in case of error. However we never
         // leave the PSBT in an inconsistent state: worst case the final_script_witness will be set
         // and libbitcoinconsensus verification will fail. In this case it'll just get overidden at
@@ -188,7 +188,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             .next()
             .is_none());
 
-        miniscript::psbt::finalize(&mut psbt, &ctx)
+        miniscript::psbt::finalize(&mut psbt, ctx)
             .map_err(|e| Error::TransactionFinalisation(e.to_string()))?;
 
         // Miniscript's finalize does not check against libbitcoinconsensus. And we are better safe
@@ -857,7 +857,7 @@ mod tests {
         .unwrap();
         // Without feebump it finalizes just fine
         emergency_tx_no_feebump
-            .finalize()
+            .finalize(&secp)
             .expect("Emergency tx finalization error");
 
         let feebump_txin = FeeBumpTxIn::new(
@@ -897,7 +897,7 @@ mod tests {
             SigHashType::All,
         )
         .unwrap();
-        emergency_tx.finalize().unwrap();
+        emergency_tx.finalize(&secp).unwrap();
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are finalized
@@ -940,7 +940,7 @@ mod tests {
             SigHashType::AllPlusAnyoneCanPay,
         )
         .unwrap();
-        cancel_tx_without_feebump.finalize().unwrap();
+        cancel_tx_without_feebump.finalize(&secp).unwrap();
         // We can reuse the ANYONE_ALL sighash for the one with the feebump input
         let feebump_txin = FeeBumpTxIn::new(
             OutPoint {
@@ -978,7 +978,7 @@ mod tests {
             SigHashType::All,
         )
         .unwrap();
-        cancel_tx.finalize().unwrap();
+        cancel_tx.finalize(&secp).unwrap();
 
         // Create and sign the second (unvault) emergency transaction
         let unvault_txin = UnvaultTxIn::new(
@@ -1006,7 +1006,7 @@ mod tests {
             SigHashType::AllPlusAnyoneCanPay,
         )
         .unwrap();
-        unemergency_tx_no_feebump.finalize().unwrap();
+        unemergency_tx_no_feebump.finalize(&secp).unwrap();
 
         let feebump_txin = FeeBumpTxIn::new(
             OutPoint {
@@ -1029,7 +1029,7 @@ mod tests {
         .unwrap();
         // We don't have satisfied the feebump input yet!
         // Note that we clone because Miniscript's finalize() will wipe the PSBT input..
-        match unemergency_tx.clone().finalize() {
+        match unemergency_tx.clone().finalize(&secp) {
             Err(e) => assert!(
                 e.to_string()
                     .contains("Missing pubkey for a pkh/wpkh at index 1"),
@@ -1057,7 +1057,7 @@ mod tests {
         )
         .unwrap();
         unemergency_tx
-            .finalize()
+            .finalize(&secp)
             .expect("Finalizing the unvault emergency transaction");
 
         // Now we can sign the unvault
@@ -1078,7 +1078,7 @@ mod tests {
             SigHashType::All,
         )
         .unwrap();
-        unvault_tx.finalize().expect("Finalizing the unvault");
+        unvault_tx.finalize(&secp).expect("Finalizing the unvault");
 
         // Create and sign a spend transaction
         let unvault_txin = UnvaultTxIn::new(
@@ -1119,7 +1119,7 @@ mod tests {
             SigHashType::All,
         )
         .unwrap();
-        match spend_tx.finalize() {
+        match spend_tx.finalize(&secp) {
             Err(e) => assert!(
                 e.to_string().contains("could not satisfy at index 0"),
                 "Invalid error: got '{}'",
@@ -1161,7 +1161,9 @@ mod tests {
             SigHashType::All,
         )
         .unwrap();
-        spend_tx.finalize().expect("Finalizing spend transaction");
+        spend_tx
+            .finalize(&secp)
+            .expect("Finalizing spend transaction");
 
         // The spend transaction can also batch multiple unvault txos
         let unvault_txins = vec![
@@ -1228,7 +1230,9 @@ mod tests {
             )
             .unwrap();
         }
-        spend_tx.finalize().expect("Finalizing spend transaction");
+        spend_tx
+            .finalize(&secp)
+            .expect("Finalizing spend transaction");
 
         // Test that we can get the hexadecimal representation of each transaction without error
         unvault_tx.hex().expect("Hex repr unvault_tx");
