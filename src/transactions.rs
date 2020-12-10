@@ -93,14 +93,20 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             // check that the following conditions are true:
             // -- If a witness UTXO is provided, no non-witness signature may be created.
             let prev_txo = psbtin.witness_utxo.as_ref().ok_or_else(|| {
-                // Cannot be reached. We only create transactions with witness_utxo.
+                debug_assert!(
+                    false,
+                    "Cannot be reached. We only create transactions with witness_utxo."
+                );
                 Error::InputSatisfaction(format!(
                     "No previous witness txo for psbtin: '{:?}'",
                     psbtin
                 ))
             })?;
             if psbtin.non_witness_utxo.is_some() {
-                // Cannot be reached. We never create transactions with non_witness_utxo.
+                debug_assert!(
+                    false,
+                    "Cannot be reached. We never create transactions with non_witness_utxo."
+                );
                 return Err(Error::InputSatisfaction(format!(
                     "Unexpected non-witness txo for psbtin: '{:?}'",
                     psbtin
@@ -114,15 +120,20 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
                 let expected_script_pubkey =
                     Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
                 if expected_script_pubkey != prev_txo.script_pubkey {
-                    // Cannot be reached. We create TxOut scriptPubKey out of this exact witnessScript.
+                    debug_assert!(false, "Cannot be reached. We create TxOut scriptPubKey out of this exact witnessScript.");
                     return Err(Error::InputSatisfaction(format!(
                         "Invalid witness script of previous txo ScriptPubKey for psbtin: '{:?}'",
                         psbtin
                     )));
                 }
+            } else {
+                debug_assert!(prev_txo.script_pubkey.is_v0_p2wpkh());
             }
             if psbtin.redeem_script.is_some() {
-                // Cannot be reached. We never create Psbt input with legacy txos.
+                debug_assert!(
+                    false,
+                    "Cannot be reached. We never create Psbt input with legacy txos."
+                );
                 return Err(Error::InputSatisfaction(format!(
                     "Unexpected non native segwit txo for psbtin: '{:?}'",
                     psbtin
@@ -135,7 +146,10 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             let expected_sighash_type = match psbtin.sighash_type {
                 Some(st) => st,
                 None => {
-                    // Cannot be reached. We always set the SigHashType in the constructor.
+                    debug_assert!(
+                        false,
+                        "Cannot be reached. We always set the SigHashType in the constructor."
+                    );
                     return Err(Error::InputSatisfaction(format!(
                         "Unknown expected sighash type for psbtin: '{:?}'",
                         psbtin
