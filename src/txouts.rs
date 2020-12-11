@@ -4,8 +4,10 @@
 
 use crate::scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor};
 
-use bitcoin::{Script, TxOut};
-use miniscript::{MiniscriptKey, ToPublicKey};
+use miniscript::{
+    bitcoin::{Script, TxOut},
+    MiniscriptKey, ToPublicKey,
+};
 
 use std::fmt;
 
@@ -56,16 +58,17 @@ implem_revault_txout!(
 );
 impl VaultTxOut {
     /// Create a new VaultTxOut out of the given Vault script descriptor
-    pub fn new<Pk: MiniscriptKey + ToPublicKey>(
+    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         value: u64,
         script_descriptor: &VaultDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
     ) -> VaultTxOut {
         VaultTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(),
+                script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
             },
-            witness_script: Some(script_descriptor.0.witness_script()),
+            witness_script: Some(script_descriptor.0.witness_script(to_pk_ctx)),
         }
     }
 }
@@ -73,16 +76,17 @@ impl VaultTxOut {
 implem_revault_txout!(UnvaultTxOut, doc = "*The* unvault transaction output.");
 impl UnvaultTxOut {
     /// Create a new UnvaultTxOut out of the given Unvault script descriptor
-    pub fn new<Pk: MiniscriptKey + ToPublicKey>(
+    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         value: u64,
         script_descriptor: &UnvaultDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
     ) -> UnvaultTxOut {
         UnvaultTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(),
+                script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
             },
-            witness_script: Some(script_descriptor.0.witness_script()),
+            witness_script: Some(script_descriptor.0.witness_script(to_pk_ctx)),
         }
     }
 }
@@ -107,16 +111,17 @@ implem_revault_txout!(
 );
 impl CpfpTxOut {
     /// Create a new CpfpTxOut out of the given Cpfp descriptor
-    pub fn new<Pk: MiniscriptKey + ToPublicKey>(
+    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         value: u64,
         script_descriptor: &CpfpDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
     ) -> CpfpTxOut {
         CpfpTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(),
+                script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
             },
-            witness_script: Some(script_descriptor.0.witness_script()),
+            witness_script: Some(script_descriptor.0.witness_script(to_pk_ctx)),
         }
     }
 }

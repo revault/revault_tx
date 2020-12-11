@@ -4,7 +4,7 @@
 
 use crate::txouts::{CpfpTxOut, FeeBumpTxOut, UnvaultTxOut, VaultTxOut};
 
-use bitcoin::{OutPoint, TxIn};
+use miniscript::bitcoin::{OutPoint, TxIn};
 
 use std::fmt;
 
