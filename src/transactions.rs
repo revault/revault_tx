@@ -624,6 +624,8 @@ mod tests {
     /// This generates the master private keys to derive directly from master, so it's
     /// [None]<xpub_goes_here>m/* descriptor pubkeys
     fn get_participants_sets(
+        n_stk: usize,
+        n_man: usize,
         secp: &secp256k1::Secp256k1<secp256k1::All>,
     ) -> (
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
@@ -632,7 +634,7 @@ mod tests {
     ) {
         let mut rng = SmallRng::from_entropy();
 
-        let managers_priv = (0..3)
+        let managers_priv = (0..n_man)
             .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
         let managers = managers_priv
@@ -647,7 +649,7 @@ mod tests {
             })
             .collect::<Vec<DescriptorPublicKey>>();
 
-        let stakeholders_priv = (0..8)
+        let stakeholders_priv = (0..n_stk)
             .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
         let stakeholders = stakeholders_priv
@@ -662,7 +664,7 @@ mod tests {
             })
             .collect::<Vec<DescriptorPublicKey>>();
 
-        let cosigners_priv = (0..8)
+        let cosigners_priv = (0..n_stk)
             .map(|_| get_random_privkey(&mut rng))
             .collect::<Vec<bip32::ExtendedPrivKey>>();
         let cosigners = cosigners_priv
@@ -733,9 +735,26 @@ mod tests {
 
     #[test]
     fn test_transaction_chain() {
-        const CSV_VALUE: u32 = 42;
-
         let secp = secp256k1::Secp256k1::new();
+        let mut rng = SmallRng::from_entropy();
+        // FIXME: if the CSV is high enough it would trigger a different error in the invalid
+        // spend!
+        // let csv = rng.next_u32() % (1 << 22);
+        let csv = rng.next_u32() % (1 << 16);
+        // In case it fails, so we can reproduce
+        eprintln!("CSV is {}", csv);
+
+        transaction_chain(2, 1, csv, &secp);
+        transaction_chain(8, 3, csv, &secp);
+        transaction_chain(38, 5, csv, &secp);
+    }
+
+    fn transaction_chain(
+        n_stk: usize,
+        n_man: usize,
+        csv: u32,
+        secp: &secp256k1::Secp256k1<secp256k1::All>,
+    ) {
         // Let's get the 10th key of each
         let child_number = bip32::ChildNumber::from(10);
         let xpub_ctx = DescriptorPublicKeyCtx::new(&secp, child_number);
@@ -745,7 +764,7 @@ mod tests {
             (managers_priv, managers),
             (stakeholders_priv, stakeholders),
             (cosigners_priv, cosigners),
-        ) = get_participants_sets(&secp);
+        ) = get_participants_sets(n_stk, n_man, secp);
 
         // Get the script descriptors for the txos we're going to create
         let unvault_descriptor = unvault_descriptor(
@@ -753,7 +772,7 @@ mod tests {
             managers.clone(),
             managers.len(),
             cosigners.clone(),
-            CSV_VALUE,
+            csv,
         )
         .expect("Unvault descriptor generation error");
         let cpfp_descriptor =
@@ -1095,11 +1114,8 @@ mod tests {
         unvault_tx.finalize(&secp).expect("Finalizing the unvault");
 
         // Create and sign a spend transaction
-        let unvault_txin = UnvaultTxIn::new(
-            unvault_tx.into_outpoint(0),
-            unvault_txo.clone(),
-            CSV_VALUE - 1,
-        );
+        let unvault_txin =
+            UnvaultTxIn::new(unvault_tx.into_outpoint(0), unvault_txo.clone(), csv - 1);
         let spend_txo = ExternalTxOut::new(TxOut {
             value: 1,
             ..TxOut::default()
@@ -1146,7 +1162,7 @@ mod tests {
         let unvault_txin = UnvaultTxIn::new(
             unvault_tx.into_outpoint(0),
             unvault_txo.clone(),
-            CSV_VALUE, // The valid sequence this time
+            csv, // The valid sequence this time
         );
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
@@ -1187,7 +1203,7 @@ mod tests {
                 )
                 .unwrap(),
                 unvault_txo.clone(),
-                CSV_VALUE,
+                csv,
             ),
             UnvaultTxIn::new(
                 OutPoint::from_str(
@@ -1195,7 +1211,7 @@ mod tests {
                 )
                 .unwrap(),
                 unvault_txo.clone(),
-                CSV_VALUE,
+                csv,
             ),
             UnvaultTxIn::new(
                 OutPoint::from_str(
@@ -1203,7 +1219,7 @@ mod tests {
                 )
                 .unwrap(),
                 unvault_txo.clone(),
-                CSV_VALUE,
+                csv,
             ),
             UnvaultTxIn::new(
                 OutPoint::from_str(
@@ -1211,7 +1227,7 @@ mod tests {
                 )
                 .unwrap(),
                 unvault_txo.clone(),
-                CSV_VALUE,
+                csv,
             ),
         ];
         let n_txins = unvault_txins.len();
@@ -1256,8 +1272,6 @@ mod tests {
 
         #[cfg(feature = "use-serde")]
         {
-            use serde_json;
-
             macro_rules! roundtrip {
                 ($tx:ident) => {
                     let serialized_tx = serde_json::to_string(&$tx).unwrap();
