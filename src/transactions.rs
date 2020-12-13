@@ -824,6 +824,55 @@ pub struct VaultTransaction(pub Transaction);
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeeBumpTransaction(pub Transaction);
 
+/// Get the entire chain of pre-signed transaction out of a deposit. No feebump input.
+pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    deposit_txin: VaultTxIn,
+    vault_descriptor: &VaultDescriptor<Pk>,
+    unvault_descriptor: &UnvaultDescriptor<Pk>,
+    cpfp_descriptor: &CpfpDescriptor<Pk>,
+    emer_address: EmergencyAddress,
+    to_pk_ctx: ToPkCtx,
+    lock_time: u32,
+    unvault_csv: u32,
+) -> Result<
+    (
+        UnvaultTransaction,
+        CancelTransaction,
+        EmergencyTransaction,
+        UnvaultEmergencyTransaction,
+    ),
+    Error,
+> {
+    let unvault_tx = UnvaultTransaction::new(
+        deposit_txin.clone(),
+        &unvault_descriptor,
+        &cpfp_descriptor,
+        to_pk_ctx,
+        lock_time,
+    )?;
+    let cancel_tx = CancelTransaction::new(
+        unvault_tx
+            .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
+            .expect("We just created it."),
+        None,
+        &vault_descriptor,
+        to_pk_ctx,
+        lock_time,
+    );
+    let emergency_tx =
+        EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time);
+    let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
+        unvault_tx
+            .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
+            .expect("We just created it."),
+        None,
+        emer_address,
+        lock_time,
+    );
+
+    Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
