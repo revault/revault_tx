@@ -6,7 +6,7 @@
 //! for data structure as well as roles distribution.
 
 use crate::{
-    scripts::{CpfpDescriptor, UnvaultDescriptor},
+    scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor},
     txins::*,
     txouts::*,
     Error,
@@ -565,25 +565,64 @@ impl CancelTransaction {
     /// may have a fee-bumping input.
     ///
     /// BIP174 Creator and Updater roles.
-    pub fn new(
+    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         unvault_input: UnvaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
-        vault_txout: VaultTxOut,
+        vault_descriptor: &VaultDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
         lock_time: u32,
     ) -> CancelTransaction {
+        // First, create a dummy transaction to get its weight without Witness. Note that we always
+        // account for the weight *without* feebump input. It pays for itself.
+        let vault_txo = VaultTxOut::new(u64::MAX, vault_descriptor, to_pk_ctx);
+        let dummy_tx = CancelTransaction(create_tx!(
+            [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
+            [vault_txo],
+            lock_time,
+        ))
+        .into_tx();
+        let wit_strip_weight = dummy_tx.get_weight();
+
+        // Then get the maximum weight of the unvault input
+        let wit_weight = miniscript::Descriptor::Wsh(
+            miniscript::Miniscript::parse(
+                unvault_input
+                    .txout()
+                    .witness_script()
+                    .as_ref()
+                    .expect("UnvaultTxOut always comport a witness_script"),
+            )
+            .expect("The witscript in UnvaultTxOut is created from a Miniscript"),
+        )
+        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("It is sane, created from a Miniscript");
+
+        // The weight of the cancel transaction without a feebump input is the weight of the
+        // witness-stripped transaction plus the weight required to satisfy the unvault txin
+        let total_weight = wit_strip_weight + wit_weight;
+        let total_weight: u64 = total_weight.try_into().expect("usize in u64");
+        let fees = REVAULTING_TX_FEERATE * total_weight;
+        // Without the feebump input, it should not be reachable.
+        debug_assert!(fees < INSANE_FEES);
+
+        // Now, get the revaulting output value out of it.
+        let unvault_value = unvault_input.txout().txout().value;
+        let revault_value = unvault_value - fees;
+        let vault_txo = VaultTxOut::new(revault_value, vault_descriptor, to_pk_ctx);
+
         CancelTransaction(if let Some(feebump_input) = feebump_input {
             create_tx!(
                 [
                     (unvault_input, SigHashType::AllPlusAnyoneCanPay),
                     (feebump_input, SigHashType::All),
                 ],
-                [vault_txout],
+                [vault_txo],
                 lock_time,
             )
         } else {
             create_tx!(
                 [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [vault_txout],
+                [vault_txo],
                 lock_time,
             )
         })
@@ -1106,10 +1145,17 @@ mod tests {
         let unvault_txin = unvault_tx
             .unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE)
             .unwrap();
-        let revault_txo = VaultTxOut::new(6700, &vault_descriptor, xpub_ctx);
         // We can create it entirely without the feebump input
         let mut cancel_tx_without_feebump =
-            CancelTransaction::new(unvault_txin.clone(), None, revault_txo.clone(), 0);
+            CancelTransaction::new(unvault_txin.clone(), None, &vault_descriptor, xpub_ctx, 0);
+        // Keep track of the fees we computed..
+        let value_no_feebump = cancel_tx_without_feebump
+            .inner_tx()
+            .global
+            .unsigned_tx
+            .output[0]
+            .value;
+        assert!(value_no_feebump < unvault_txin.txout().txout().value);
         let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
             .signature_hash(
                 0,
@@ -1136,8 +1182,24 @@ mod tests {
             },
             feebump_txo.clone(),
         );
-        let mut cancel_tx =
-            CancelTransaction::new(unvault_txin, Some(feebump_txin), revault_txo, 0);
+        let mut cancel_tx = CancelTransaction::new(
+            unvault_txin,
+            Some(feebump_txin),
+            &vault_descriptor,
+            xpub_ctx,
+            0,
+        );
+        // It really is a belt-and-suspenders check as the sighash would differ too.
+        assert_eq!(
+            cancel_tx_without_feebump
+                .inner_tx()
+                .global
+                .unsigned_tx
+                .output[0]
+                .value,
+            value_no_feebump,
+            "Base fees when computing with with feebump differ !!"
+        );
         let cancel_tx_sighash_feebump = cancel_tx
             .signature_hash(
                 1,
