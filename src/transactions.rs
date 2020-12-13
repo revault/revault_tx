@@ -723,14 +723,27 @@ impl SpendTransaction {
     /// txouts (destination and change) in addition to the CPFP one..
     ///
     /// BIP174 Creator and Updater roles.
-    pub fn new(
+    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
-        cpfp_txo: CpfpTxOut,
+        cpfp_descriptor: &CpfpDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
         lock_time: u32,
     ) -> SpendTransaction {
+        // The spend transaction CPFP output value depends on its size. See practical-revault for
+        // more details. Here we append a dummy one, and we'll modify it in place afterwards.
+        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor, to_pk_ctx);
+
+        // Record the satisfaction cost before moving the inputs
+        let sat_weight: u64 = unvault_inputs
+            .iter()
+            .map(|txin| txin.max_sat_weight())
+            .sum::<usize>()
+            .try_into()
+            .expect("An usize doesn't fit in an u64?");
+
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
-        txos.push(cpfp_txo.clone().into_txout());
+        txos.push(dummy_cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
             SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
             SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
@@ -738,17 +751,17 @@ impl SpendTransaction {
 
         // For the PsbtOut s
         let mut txos_wit_script = Vec::with_capacity(spend_txouts.len() + 1);
-        txos_wit_script.push(cpfp_txo.into_witness_script());
+        txos_wit_script.push(dummy_cpfp_txo.into_witness_script());
         txos_wit_script.extend(
             spend_txouts
                 .into_iter()
                 .map(|spend_txout| match spend_txout {
-                    SpendTxOut::Destination(txo) => txo.into_witness_script(),
+                    SpendTxOut::Destination(txo) => txo.into_witness_script(), // None
                     SpendTxOut::Change(txo) => txo.into_witness_script(),
                 }),
         );
 
-        SpendTransaction(Psbt {
+        let mut psbt = Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: 2,
@@ -780,7 +793,26 @@ impl SpendTransaction {
                     ..PsbtOut::default()
                 })
                 .collect(),
-        })
+        };
+
+        // We only need to modify the unsigned_tx global's output value as the PSBT outputs only
+        // contain the witness script.
+        let witstrip_weight: u64 = psbt.global.unsigned_tx.get_weight().try_into().unwrap();
+        let total_weight = sat_weight + witstrip_weight;
+        // See https://github.com/re-vault/practical-revault/blob/master/transactions.md#cancel_tx
+        // for this arbirtrary value.
+        let cpfp_value = 2 * 32 * total_weight as u64;
+        // We could just use output[0], but be careful.
+        let mut cpfp_txo = psbt
+            .global
+            .unsigned_tx
+            .output
+            .iter_mut()
+            .find(|txo| txo.script_pubkey == cpfp_descriptor.0.script_pubkey(to_pk_ctx))
+            .expect("We just created it!");
+        cpfp_txo.value = cpfp_value;
+
+        SpendTransaction(psbt)
     }
 }
 
@@ -1362,12 +1394,12 @@ mod tests {
             value: 1,
             ..TxOut::default()
         });
-        let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor, xpub_ctx);
         // Test satisfaction failure with a wrong CSV value
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
-            cpfp_txo.clone(),
+            &cpfp_descriptor,
+            xpub_ctx,
             0,
         );
         let spend_tx_sighash = spend_tx
@@ -1407,7 +1439,8 @@ mod tests {
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
-            cpfp_txo.clone(),
+            &cpfp_descriptor,
+            xpub_ctx,
             0,
         );
         let spend_tx_sighash = spend_tx
@@ -1474,7 +1507,8 @@ mod tests {
         let mut spend_tx = SpendTransaction::new(
             unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],
-            cpfp_txo,
+            &cpfp_descriptor,
+            xpub_ctx,
             0,
         );
         for i in 0..n_txins {
