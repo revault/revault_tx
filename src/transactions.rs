@@ -5,7 +5,12 @@
 //! We use PSBTs as defined in [bip-0174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki)
 //! for data structure as well as roles distribution.
 
-use crate::{txins::*, txouts::*, Error};
+use crate::{
+    scripts::{CpfpDescriptor, UnvaultDescriptor},
+    txins::*,
+    txouts::*,
+    Error,
+};
 
 use miniscript::{
     bitcoin::{
@@ -21,7 +26,7 @@ use miniscript::{
         Address, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
         Transaction,
     },
-    BitcoinSig,
+    BitcoinSig, MiniscriptKey, ToPublicKey,
 };
 
 #[cfg(feature = "use-serde")]
@@ -31,8 +36,26 @@ use {
     serde::ser::{self, Serialize, Serializer},
 };
 
-use std::collections::BTreeMap;
-use std::fmt;
+use std::{collections::BTreeMap, convert::TryInto, fmt};
+
+/// The value of the CPFP output in the Unvault transaction.
+/// See https://github.com/re-vault/practical-revault/blob/master/transactions.md#unvault_tx
+pub const UNVAULT_CPFP_VALUE: u64 = 30000;
+
+/// The feerate, in sat / W, to create the unvaulting transactions with.
+pub const UNVAULT_TX_FEERATE: u64 = 6;
+
+/// The feerate, in sat / W, to create the revaulting transactions (both emergency and the
+/// cancel) with.
+pub const REVAULTING_TX_FEERATE: u64 = 22;
+
+/// We refuse to create a stakeholder-pre-signed transaction that would create an output worth
+/// less than this amount of sats. This is worth 30€ for 15k€/btc.
+pub const DUST_LIMIT: u64 = 200_000;
+
+/// We can't safely error for insane fees on revaulting transactions, but we can for the unvault
+/// and the spend. This is 0.2BTC, or 3k€ currently.
+pub const INSANE_FEES: u64 = 20_000_000;
 
 /// A Revault transaction.
 ///
@@ -48,6 +71,9 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Get the inner transaction
     fn inner_tx_mut(&mut self) -> &mut Psbt;
+
+    /// Extract the inner unsigned transaction. Useful for fee computation.
+    fn into_tx(self) -> Transaction;
 
     /// Get the sighash for a specified input, provided the previous txout's scriptCode.
     fn signature_hash(
@@ -258,6 +284,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         }
     }
 
+    // FIXME: should probably be into_bitcoin_serialized and not clone()
     /// Get the network-serialized (inner) transaction. You likely want to call
     /// [RevaultTransaction.finalize] before serializing the transaction.
     ///
@@ -306,6 +333,10 @@ macro_rules! impl_revault_transaction {
 
             fn inner_tx_mut(&mut self) -> &mut Psbt {
                 &mut self.0
+            }
+
+            fn into_tx(self) -> Transaction {
+                self.0.extract_tx()
             }
         }
 
@@ -390,19 +421,71 @@ impl_revault_transaction!(
 impl UnvaultTransaction {
     /// An unvault transaction always spends one vault output and contains one CPFP output in
     /// addition to the unvault one.
+    /// It's always created using a fixed feerate and the CPFP output value is fixed as well.
     ///
     /// BIP174 Creator and Updater roles.
-    pub fn new(
+    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         vault_input: VaultTxIn,
-        unvault_txout: UnvaultTxOut,
-        cpfp_txout: CpfpTxOut,
+        unvault_descriptor: &UnvaultDescriptor<Pk>,
+        cpfp_descriptor: &CpfpDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
         lock_time: u32,
-    ) -> UnvaultTransaction {
-        UnvaultTransaction(create_tx!(
+    ) -> Result<UnvaultTransaction, Error> {
+        // First, create a dummy transaction to get its weight without Witness
+        let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor, to_pk_ctx);
+        let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor, to_pk_ctx);
+        let dummy_tx = UnvaultTransaction(create_tx!(
+            [(vault_input.clone(), SigHashType::All)],
+            [dummy_unvault_txout, dummy_cpfp_txout],
+            lock_time,
+        ))
+        .into_tx();
+        let wit_strip_weight = dummy_tx.get_weight();
+
+        // Then get the maximum witness size of the single input
+        let wit_weight = miniscript::Descriptor::Wsh(
+            miniscript::Miniscript::parse(
+                vault_input
+                    .txout()
+                    .witness_script()
+                    .as_ref()
+                    .expect("VaultTxIn has a witness_script"),
+            )
+            .expect("VaultTxIn witness_script is created from a Miniscript"),
+        )
+        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("It's a sane Script, derived from a Miniscript");
+
+        // The weight of the transaction once signed will be the size of the witness-stripped
+        // transaction plus the size of the single input's witness.
+        let total_weight = wit_strip_weight + wit_weight;
+        let total_weight: u64 = total_weight.try_into().expect("usize in u64");
+        let fees = UNVAULT_TX_FEERATE * total_weight;
+        // Nobody wants to pay 3k€ fees if we had a bug.
+        if fees > INSANE_FEES {
+            return Err(Error::TransactionCreation(format!(
+                "Insane fee computation: {}sats > {}sats",
+                fees, INSANE_FEES
+            )));
+        }
+
+        // The unvault output value is then equal to the deposit value minus the fees and the CPFP.
+        let deposit_value = vault_input.txout().txout().value;
+        if fees + UNVAULT_CPFP_VALUE + DUST_LIMIT > deposit_value {
+            return Err(Error::TransactionCreation(format!(
+                "Deposit is {}sats but we need  at least {} (fees) + {} (cpfp) + {} (dust limit)",
+                deposit_value, fees, UNVAULT_CPFP_VALUE, DUST_LIMIT
+            )));
+        }
+        let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE;
+
+        let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor, to_pk_ctx);
+        let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor, to_pk_ctx);
+        Ok(UnvaultTransaction(create_tx!(
             [(vault_input, SigHashType::All)],
             [unvault_txout, cpfp_txout],
             lock_time,
-        ))
+        )))
     }
 }
 
@@ -744,15 +827,16 @@ mod tests {
         // In case it fails, so we can reproduce
         eprintln!("CSV is {}", csv);
 
-        transaction_chain(2, 1, csv, &secp);
-        transaction_chain(8, 3, csv, &secp);
-        transaction_chain(38, 5, csv, &secp);
+        transaction_chain(2, 1, csv, 1_000_000, &secp);
+        transaction_chain(8, 3, csv, 1_000_000, &secp);
+        transaction_chain(38, 5, csv, 1_000_000, &secp);
     }
 
     fn transaction_chain(
         n_stk: usize,
         n_man: usize,
         csv: u32,
+        deposit_value: u64,
         secp: &secp256k1::Secp256k1<secp256k1::All>,
     ) {
         // Let's get the 10th key of each
@@ -793,7 +877,7 @@ mod tests {
                 ..TxIn::default()
             }],
             output: vec![TxOut {
-                value: 360,
+                value: deposit_value,
                 script_pubkey: vault_scriptpubkey.clone(),
             }],
         };
@@ -942,9 +1026,14 @@ mod tests {
             vault_txo.clone(),
         );
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor, xpub_ctx);
-        let cpfp_txo = CpfpTxOut::new(330, &cpfp_descriptor, xpub_ctx);
-        let mut unvault_tx =
-            UnvaultTransaction::new(vault_txin, unvault_txo.clone(), cpfp_txo.clone(), 0);
+        let mut unvault_tx = UnvaultTransaction::new(
+            vault_txin,
+            &unvault_descriptor,
+            &cpfp_descriptor,
+            xpub_ctx,
+            0,
+        )
+        .expect("Creating unvault transaction.");
 
         // Create and sign the cancel transaction
         let unvault_txin = UnvaultTxIn::new(
