@@ -2,7 +2,7 @@
 //! Wrappers around bitcoin's OutPoint and previous TxOut to statically check Revault transaction
 //! creation and ease PSBT management.
 
-use crate::txouts::{CpfpTxOut, FeeBumpTxOut, UnvaultTxOut, VaultTxOut};
+use crate::txouts::{CpfpTxOut, FeeBumpTxOut, RevaultTxOut, UnvaultTxOut, VaultTxOut};
 
 use miniscript::bitcoin::{OutPoint, TxIn};
 
@@ -71,6 +71,21 @@ impl VaultTxIn {
             sequence: RBF_SEQUENCE,
         }
     }
+
+    /// Get the maximum size, in weight units, a satisfaction for this input would cost.
+    pub fn max_sat_weight(&self) -> usize {
+        miniscript::Descriptor::Wsh(
+            miniscript::Miniscript::parse(
+                self.prev_txout
+                    .witness_script()
+                    .as_ref()
+                    .expect("VaultTxOut has a witness_script"),
+            )
+            .expect("VaultTxIn witness_script is created from a Miniscript"),
+        )
+        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("It's a sane Script, derived from a Miniscript")
+    }
 }
 
 implem_revault_txin!(
@@ -87,6 +102,21 @@ impl UnvaultTxIn {
             prev_txout,
             sequence,
         }
+    }
+
+    /// Get the maximum size, in weight units, a satisfaction for this input would cost.
+    pub fn max_sat_weight(&self) -> usize {
+        miniscript::Descriptor::Wsh(
+            miniscript::Miniscript::parse(
+                self.prev_txout
+                    .witness_script()
+                    .as_ref()
+                    .expect("UnvaultTxOut has a witness_script"),
+            )
+            .expect("UnvaultTxIn witness_script is created from a Miniscript"),
+        )
+        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("It's a sane Script, derived from a Miniscript")
     }
 }
 

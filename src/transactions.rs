@@ -6,7 +6,7 @@
 //! for data structure as well as roles distribution.
 
 use crate::{
-    scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor},
+    scripts::{CpfpDescriptor, EmergencyAddress, UnvaultDescriptor, VaultDescriptor},
     txins::*,
     txouts::*,
     Error,
@@ -431,25 +431,10 @@ impl UnvaultTransaction {
             lock_time,
         ))
         .into_tx();
-        let wit_strip_weight = dummy_tx.get_weight();
-
-        // Then get the maximum witness size of the single input
-        let wit_weight = miniscript::Descriptor::Wsh(
-            miniscript::Miniscript::parse(
-                vault_input
-                    .txout()
-                    .witness_script()
-                    .as_ref()
-                    .expect("VaultTxIn has a witness_script"),
-            )
-            .expect("VaultTxIn witness_script is created from a Miniscript"),
-        )
-        .max_satisfaction_weight(miniscript::NullCtx)
-        .expect("It's a sane Script, derived from a Miniscript");
 
         // The weight of the transaction once signed will be the size of the witness-stripped
         // transaction plus the size of the single input's witness.
-        let total_weight = wit_strip_weight + wit_weight;
+        let total_weight = dummy_tx.get_weight() + vault_input.max_sat_weight();
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = UNVAULT_TX_FEERATE * total_weight;
         // Nobody wants to pay 3k€ fees if we had a bug.
@@ -581,25 +566,10 @@ impl CancelTransaction {
             lock_time,
         ))
         .into_tx();
-        let wit_strip_weight = dummy_tx.get_weight();
-
-        // Then get the maximum weight of the unvault input
-        let wit_weight = miniscript::Descriptor::Wsh(
-            miniscript::Miniscript::parse(
-                unvault_input
-                    .txout()
-                    .witness_script()
-                    .as_ref()
-                    .expect("UnvaultTxOut always comport a witness_script"),
-            )
-            .expect("The witscript in UnvaultTxOut is created from a Miniscript"),
-        )
-        .max_satisfaction_weight(miniscript::NullCtx)
-        .expect("It is sane, created from a Miniscript");
 
         // The weight of the cancel transaction without a feebump input is the weight of the
         // witness-stripped transaction plus the weight required to satisfy the unvault txin
-        let total_weight = wit_strip_weight + wit_weight;
+        let total_weight = dummy_tx.get_weight() + unvault_input.max_sat_weight();
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = REVAULTING_TX_FEERATE * total_weight;
         // Without the feebump input, it should not be reachable.
@@ -641,22 +611,45 @@ impl EmergencyTransaction {
     pub fn new(
         vault_input: VaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
-        emer_txout: EmergencyTxOut,
+        emer_address: EmergencyAddress,
         lock_time: u32,
     ) -> EmergencyTransaction {
+        // First, create a dummy transaction to get its weight without Witness. Note that we always
+        // account for the weight *without* feebump input. It has to pay for itself.
+        let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
+        let dummy_tx = EmergencyTransaction(create_tx!(
+            [(vault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
+            [emer_txo],
+            lock_time,
+        ))
+        .into_tx();
+
+        // The weight of the emergency transaction without a feebump input is the weight of the
+        // witness-stripped transaction plus the weight required to satisfy the vault txin
+        let total_weight = dummy_tx.get_weight() + vault_input.max_sat_weight();
+        let total_weight: u64 = total_weight.try_into().expect("usize in u64");
+        let fees = REVAULTING_TX_FEERATE * total_weight;
+        // Without the feebump input, it should not be reachable.
+        debug_assert!(fees < INSANE_FEES);
+
+        // Now, get the emergency output value out of it.
+        let deposit_value = vault_input.txout().txout().value;
+        let emer_value = deposit_value - fees;
+        let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
+
         EmergencyTransaction(if let Some(feebump_input) = feebump_input {
             create_tx!(
                 [
                     (vault_input, SigHashType::AllPlusAnyoneCanPay),
                     (feebump_input, SigHashType::All)
                 ],
-                [emer_txout],
+                [emer_txo],
                 lock_time,
             )
         } else {
             create_tx!(
                 [(vault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [emer_txout],
+                [emer_txo],
                 lock_time,
             )
         })
@@ -675,22 +668,45 @@ impl UnvaultEmergencyTransaction {
     pub fn new(
         unvault_input: UnvaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
-        emer_txout: EmergencyTxOut,
+        emer_address: EmergencyAddress,
         lock_time: u32,
     ) -> UnvaultEmergencyTransaction {
+        // First, create a dummy transaction to get its weight without Witness. Note that we always
+        // account for the weight *without* feebump input. It has to pay for itself.
+        let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
+        let dummy_tx = UnvaultEmergencyTransaction(create_tx!(
+            [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
+            [emer_txo],
+            lock_time,
+        ))
+        .into_tx();
+
+        // The weight of the unvault emergency transaction without a feebump input is the weight of
+        // the witness-stripped transaction plus the weight required to satisfy the unvault txin
+        let total_weight = dummy_tx.get_weight() + unvault_input.max_sat_weight();
+        let total_weight: u64 = total_weight.try_into().expect("usize in u64");
+        let fees = REVAULTING_TX_FEERATE * total_weight;
+        // Without the feebump input, it should not be reachable.
+        debug_assert!(fees < INSANE_FEES);
+
+        // Now, get the emergency output value out of it.
+        let deposit_value = unvault_input.txout().txout().value;
+        let emer_value = deposit_value - fees;
+        let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
+
         UnvaultEmergencyTransaction(if let Some(feebump_input) = feebump_input {
             create_tx!(
                 [
                     (unvault_input, SigHashType::AllPlusAnyoneCanPay),
                     (feebump_input, SigHashType::All)
                 ],
-                [emer_txout],
+                [emer_txo],
                 lock_time,
             )
         } else {
             create_tx!(
                 [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [emer_txout],
+                [emer_txo],
                 lock_time,
             )
         })
@@ -779,9 +795,9 @@ pub struct FeeBumpTransaction(pub Transaction);
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelTransaction, EmergencyTransaction, FeeBumpTransaction, RevaultTransaction,
-        SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, VaultTransaction,
-        RBF_SEQUENCE,
+        CancelTransaction, EmergencyAddress, EmergencyTransaction, FeeBumpTransaction,
+        RevaultTransaction, SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction,
+        VaultTransaction, RBF_SEQUENCE,
     };
     use crate::{scripts::*, txins::*, txouts::*, Error};
 
@@ -792,7 +808,7 @@ mod tests {
             secp256k1,
             secp256k1::rand::{rngs::SmallRng, FromEntropy, RngCore},
             util::bip32,
-            OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
+            Address, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey},
         Descriptor, DescriptorPublicKeyCtx, ToPublicKey,
@@ -970,6 +986,13 @@ mod tests {
         let vault_descriptor =
             vault_descriptor(stakeholders).expect("Vault descriptor generation error");
 
+        // We reuse the deposit descriptor for the emergency address
+        let emergency_address = EmergencyAddress::from(Address::p2wsh(
+            &vault_descriptor.0.witness_script(xpub_ctx),
+            Network::Bitcoin,
+        ))
+        .expect("It's a P2WSH");
+
         // The funding transaction does not matter (random txid from my mempool)
         let vault_scriptpubkey = vault_descriptor.0.script_pubkey(xpub_ctx);
         let vault_raw_tx = Transaction {
@@ -1028,13 +1051,9 @@ mod tests {
             },
             vault_txo.clone(),
         );
-        let emer_txo = EmergencyTxOut::new(TxOut {
-            value: 450,
-            ..TxOut::default()
-        });
         // We can sign the transaction without the feebump input
         let mut emergency_tx_no_feebump =
-            EmergencyTransaction::new(vault_txin.clone(), None, emer_txo.clone(), 0);
+            EmergencyTransaction::new(vault_txin.clone(), None, emergency_address.clone(), 0);
         // We cannot get a sighash for a non-existing input
         let sighash_err = emergency_tx_no_feebump.signature_hash(
             10,
@@ -1091,7 +1110,7 @@ mod tests {
             feebump_txo.clone(),
         );
         let mut emergency_tx =
-            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emer_txo.clone(), 0);
+            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emergency_address.clone(), 0);
         let emergency_tx_sighash_feebump = emergency_tx
             .signature_hash(
                 1,
@@ -1234,8 +1253,12 @@ mod tests {
             .unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE)
             .unwrap();
         // We can create it without the feebump input
-        let mut unemergency_tx_no_feebump =
-            UnvaultEmergencyTransaction::new(unvault_txin.clone(), None, emer_txo.clone(), 0);
+        let mut unemergency_tx_no_feebump = UnvaultEmergencyTransaction::new(
+            unvault_txin.clone(),
+            None,
+            emergency_address.clone(),
+            0,
+        );
         let unemergency_tx_sighash = unemergency_tx_no_feebump
             .signature_hash(
                 0,
@@ -1262,8 +1285,12 @@ mod tests {
             },
             feebump_txo.clone(),
         );
-        let mut unemergency_tx =
-            UnvaultEmergencyTransaction::new(unvault_txin, Some(feebump_txin), emer_txo, 0);
+        let mut unemergency_tx = UnvaultEmergencyTransaction::new(
+            unvault_txin,
+            Some(feebump_txin),
+            emergency_address,
+            0,
+        );
         satisfy_transaction_input(
             &secp,
             &mut unemergency_tx,
