@@ -4,7 +4,8 @@
 //!
 //! We use [miniscript](http://bitcoin.sipa.be/miniscript/) in order to "safely" derive
 //! scripts depending on the setup configuration (ie the number of stakeholders, the
-//! number of fund managers, and the relative timelock).
+//! number of fund managers, and the relative timelock) for all script but the (unknown Emergency
+//! one).
 //!
 //! Note these functions are not safe to reuse after initial set up, as the returned descriptors
 //! are non-deterministically compiled from an abstract policy.
@@ -13,9 +14,13 @@
 use crate::Error;
 
 use miniscript::{
-    bitcoin::util::bip32, descriptor::DescriptorPublicKey, policy::concrete::Policy, Descriptor,
-    MiniscriptKey, Segwitv0,
+    bitcoin::{util::bip32, Address},
+    descriptor::DescriptorPublicKey,
+    policy::concrete::Policy,
+    Descriptor, MiniscriptKey, Segwitv0,
 };
+
+use std::fmt;
 
 // These are useful to create TxOuts out of the right Script descriptor
 
@@ -251,6 +256,39 @@ pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescr
             compile_err
         ))),
         Ok(miniscript) => Ok(CpfpDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
+    }
+}
+
+/// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
+/// necessarily a v0 P2WSH
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EmergencyAddress(Address);
+impl EmergencyAddress {
+    /// Create a new Emergency Address. Will error if the address isn't a v0 P2WSH
+    pub fn from(address: Address) -> Result<EmergencyAddress, Error> {
+        if address.script_pubkey().is_v0_p2wsh() {
+            Ok(EmergencyAddress(address))
+        } else {
+            Err(Error::ScriptCreation(
+                "The Emergency address must be a v0 P2WSH".to_string(),
+            ))
+        }
+    }
+
+    /// Get the address
+    pub fn address(&self) -> &Address {
+        &self.0
+    }
+
+    /// Get the address
+    pub fn into_address(self) -> Address {
+        self.0
+    }
+}
+
+impl fmt::Display for EmergencyAddress {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{}", &self.0)
     }
 }
 
