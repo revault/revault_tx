@@ -873,6 +873,43 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
 
+/// Get a spend transaction out of a list of deposits.
+pub fn spend_tx_from_deposit<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    deposit_txins: Vec<VaultTxIn>,
+    spend_txos: Vec<SpendTxOut>,
+    unvault_descriptor: &UnvaultDescriptor<Pk>,
+    cpfp_descriptor: &CpfpDescriptor<Pk>,
+    to_pk_ctx: ToPkCtx,
+    unvault_csv: u32,
+    lock_time: u32,
+) -> Result<SpendTransaction, Error> {
+    let unvault_txins = deposit_txins
+        .into_iter()
+        .map(|dep| {
+            UnvaultTransaction::new(
+                dep,
+                &unvault_descriptor,
+                &cpfp_descriptor,
+                to_pk_ctx,
+                lock_time,
+            )
+            .and_then(|unvault_tx| {
+                Ok(unvault_tx
+                    .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
+                    .expect("We just created it"))
+            })
+        })
+        .collect::<Result<Vec<UnvaultTxIn>, Error>>()?;
+
+    Ok(SpendTransaction::new(
+        unvault_txins,
+        spend_txos,
+        cpfp_descriptor,
+        to_pk_ctx,
+        lock_time,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
