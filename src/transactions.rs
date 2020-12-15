@@ -830,6 +830,23 @@ impl SpendTransaction {
 /// The funding transaction, we don't create nor sign it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VaultTransaction(pub Transaction);
+impl VaultTransaction {
+    /// Assumes that the outpoint actually refers to this transaction. Will panic otherwise.
+    pub fn vault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+        &self,
+        outpoint: OutPoint,
+        deposit_descriptor: &VaultDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
+    ) -> VaultTxIn {
+        assert!(outpoint.txid == self.0.txid());
+        let txo = self.0.output[outpoint.vout as usize].clone();
+
+        VaultTxIn::new(
+            outpoint,
+            VaultTxOut::new(txo.value, deposit_descriptor, to_pk_ctx),
+        )
+    }
+}
 
 /// The fee-bumping transaction, we don't create nor sign it.
 #[derive(Debug, Clone, PartialEq)]
