@@ -14,7 +14,7 @@ use crate::{
 
 use miniscript::{
     bitcoin::{
-        consensus::encode::{Encodable, Error as EncodeError},
+        consensus::encode::{Decodable, Encodable},
         secp256k1,
         util::{
             bip143::SigHashCache,
@@ -31,7 +31,6 @@ use miniscript::{
 
 #[cfg(feature = "use-serde")]
 use {
-    miniscript::bitcoin::consensus::encode::Decodable,
     serde::de::{self, Deserialize, Deserializer},
     serde::ser::{self, Serialize, Serializer},
 };
@@ -281,7 +280,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     ///
     /// The BIP174 Transaction Extractor (without any check, which are done in
     /// [RevaultTransaction.finalize]).
-    fn as_bitcoin_serialized(&self) -> Result<Vec<u8>, EncodeError> {
+    fn as_bitcoin_serialized(&self) -> Result<Vec<u8>, Error> {
         let mut buff = Vec::<u8>::new();
         self.inner_tx()
             .clone()
@@ -291,14 +290,27 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Get the BIP174-serialized (inner) transaction.
-    fn as_psbt_serialized(&self) -> Result<Vec<u8>, EncodeError> {
+    fn as_psbt_serialized(&self) -> Result<Vec<u8>, Error> {
         let mut buff = Vec::<u8>::new();
         self.inner_tx().consensus_encode(&mut buff)?;
         Ok(buff)
     }
 
+    /// Create a RevaultTransaction from a BIP174-serialized transaction.
+    fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, Error>;
+
+    /// Get the BIP174-serialized (inner) transaction encoded in base64.
+    fn as_psbt_string(&self) -> Result<String, Error> {
+        self.as_psbt_serialized().map(base64::encode)
+    }
+
+    /// Create a RevaultTransaction from a base64-encoded BIP174-serialized transaction.
+    fn from_psbt_str(psbt_str: &str) -> Result<Self, Error> {
+        Self::from_psbt_serialized(&base64::decode(&psbt_str)?)
+    }
+
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
-    fn hex(&self) -> Result<String, EncodeError> {
+    fn hex(&self) -> Result<String, Error> {
         let buff = self.as_bitcoin_serialized()?;
         let mut as_hex = String::new();
 
@@ -329,6 +341,11 @@ macro_rules! impl_revault_transaction {
             fn into_tx(self) -> Transaction {
                 self.0.extract_tx()
             }
+
+            // TODO: move this to each transaction and perform actual checks..
+            fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, Error> {
+                Ok(Decodable::consensus_decode(raw_psbt).map(|psbt| $transaction_name(psbt))?)
+            }
         }
 
         #[cfg(feature = "use-serde")]
@@ -337,15 +354,12 @@ macro_rules! impl_revault_transaction {
             where
                 S: Serializer,
             {
-                self.as_psbt_serialized()
-                    .map_err(ser::Error::custom)
-                    .and_then(|psbt_ser| {
-                        if serializer.is_human_readable() {
-                            serializer.serialize_str(&base64::encode(psbt_ser))
-                        } else {
-                            serializer.serialize_bytes(&psbt_ser)
-                        }
-                    })
+                if serializer.is_human_readable() {
+                    serializer.serialize_str(&self.as_psbt_string().map_err(ser::Error::custom)?)
+                } else {
+                    serializer
+                        .serialize_bytes(&self.as_psbt_serialized().map_err(ser::Error::custom)?)
+                }
             }
         }
 
@@ -355,16 +369,13 @@ macro_rules! impl_revault_transaction {
             where
                 D: Deserializer<'de>,
             {
-                let raw_psbt = if deserializer.is_human_readable() {
-                    base64::decode(String::deserialize(deserializer)?).map_err(de::Error::custom)?
+                if deserializer.is_human_readable() {
+                    $transaction_name::from_psbt_str(&String::deserialize(deserializer)?)
+                        .map_err(de::Error::custom)
                 } else {
-                    Vec::<u8>::deserialize(deserializer)?
-                };
-
-                let psbt: Psbt =
-                    Decodable::consensus_decode(raw_psbt.as_slice()).map_err(de::Error::custom)?;
-
-                Ok($transaction_name(psbt))
+                    $transaction_name::from_psbt_serialized(&Vec::<u8>::deserialize(deserializer)?)
+                        .map_err(de::Error::custom)
+                }
             }
         }
     };
