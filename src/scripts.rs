@@ -261,7 +261,7 @@ pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescr
 
 /// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
 /// necessarily a v0 P2WSH
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EmergencyAddress(Address);
 impl EmergencyAddress {
     /// Create a new Emergency Address. Will error if the address isn't a v0 P2WSH
