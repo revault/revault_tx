@@ -439,9 +439,14 @@ impl UnvaultTransaction {
 
         // The weight of the transaction once signed will be the size of the witness-stripped
         // transaction plus the size of the single input's witness.
-        let total_weight = dummy_tx.get_weight() + vault_input.max_sat_weight();
+        let total_weight = dummy_tx
+            .get_weight()
+            .checked_add(vault_input.max_sat_weight())
+            .expect("Properly-computed weights cannot overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = UNVAULT_TX_FEERATE * total_weight;
+        let fees = UNVAULT_TX_FEERATE
+            .checked_mul(total_weight)
+            .expect("Properly-computed weights cannot overflow");
         // Nobody wants to pay 3k€ fees if we had a bug.
         if fees > INSANE_FEES {
             return Err(Error::TransactionCreation(format!(
@@ -458,7 +463,7 @@ impl UnvaultTransaction {
                 deposit_value, fees, UNVAULT_CPFP_VALUE, DUST_LIMIT
             )));
         }
-        let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE;
+        let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE; // Arithmetic checked above
 
         let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor, to_pk_ctx);
         let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor, to_pk_ctx);
@@ -575,15 +580,22 @@ impl CancelTransaction {
 
         // The weight of the cancel transaction without a feebump input is the weight of the
         // witness-stripped transaction plus the weight required to satisfy the unvault txin
-        let total_weight = dummy_tx.get_weight() + unvault_input.max_sat_weight();
+        let total_weight = dummy_tx
+            .get_weight()
+            .checked_add(unvault_input.max_sat_weight())
+            .expect("Properly computed weight won't overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = REVAULTING_TX_FEERATE * total_weight;
+        let fees = REVAULTING_TX_FEERATE
+            .checked_mul(total_weight)
+            .expect("Properly computed weight won't overflow");
         // Without the feebump input, it should not be reachable.
         debug_assert!(fees < INSANE_FEES);
 
         // Now, get the revaulting output value out of it.
         let unvault_value = unvault_input.txout().txout().value;
-        let revault_value = unvault_value - fees;
+        let revault_value = unvault_value
+            .checked_sub(fees)
+            .expect("We would not create a dust unvault txo");
         let vault_txo = VaultTxOut::new(revault_value, vault_descriptor, to_pk_ctx);
 
         CancelTransaction(if let Some(feebump_input) = feebump_input {
@@ -612,6 +624,7 @@ impl_revault_transaction!(
 impl EmergencyTransaction {
     /// The first emergency transaction always spends a vault output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
+    /// Will error **only** when trying to spend a dust deposit.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new(
@@ -619,7 +632,7 @@ impl EmergencyTransaction {
         feebump_input: Option<FeeBumpTxIn>,
         emer_address: EmergencyAddress,
         lock_time: u32,
-    ) -> EmergencyTransaction {
+    ) -> Result<EmergencyTransaction, Error> {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
@@ -633,33 +646,42 @@ impl EmergencyTransaction {
 
         // The weight of the emergency transaction without a feebump input is the weight of the
         // witness-stripped transaction plus the weight required to satisfy the vault txin
-        let total_weight = dummy_tx.get_weight() + vault_input.max_sat_weight();
+        let total_weight = dummy_tx
+            .get_weight()
+            .checked_add(vault_input.max_sat_weight())
+            .expect("Weight computation bug");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = REVAULTING_TX_FEERATE * total_weight;
+        let fees = REVAULTING_TX_FEERATE
+            .checked_mul(total_weight)
+            .expect("Weight computation bug");
         // Without the feebump input, it should not be reachable.
         debug_assert!(fees < INSANE_FEES);
 
         // Now, get the emergency output value out of it.
         let deposit_value = vault_input.txout().txout().value;
-        let emer_value = deposit_value - fees;
+        let emer_value = deposit_value.checked_sub(fees).ok_or_else(|| {
+            Error::TransactionCreation("Creating an emergency tx for a dust deposit?".to_string())
+        })?;
         let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
 
-        EmergencyTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!(
-                [
-                    (vault_input, SigHashType::AllPlusAnyoneCanPay),
-                    (feebump_input, SigHashType::All)
-                ],
-                [emer_txo],
-                lock_time,
-            )
-        } else {
-            create_tx!(
-                [(vault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [emer_txo],
-                lock_time,
-            )
-        })
+        Ok(EmergencyTransaction(
+            if let Some(feebump_input) = feebump_input {
+                create_tx!(
+                    [
+                        (vault_input, SigHashType::AllPlusAnyoneCanPay),
+                        (feebump_input, SigHashType::All)
+                    ],
+                    [emer_txo],
+                    lock_time,
+                )
+            } else {
+                create_tx!(
+                    [(vault_input, SigHashType::AllPlusAnyoneCanPay)],
+                    [emer_txo],
+                    lock_time,
+                )
+            },
+        ))
     }
 }
 
@@ -691,15 +713,22 @@ impl UnvaultEmergencyTransaction {
 
         // The weight of the unvault emergency transaction without a feebump input is the weight of
         // the witness-stripped transaction plus the weight required to satisfy the unvault txin
-        let total_weight = dummy_tx.get_weight() + unvault_input.max_sat_weight();
+        let total_weight = dummy_tx
+            .get_weight()
+            .checked_add(unvault_input.max_sat_weight())
+            .expect("Weight computation bug");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = REVAULTING_TX_FEERATE * total_weight;
+        let fees = REVAULTING_TX_FEERATE
+            .checked_mul(total_weight)
+            .expect("Weight computation bug");
         // Without the feebump input, it should not be reachable.
         debug_assert!(fees < INSANE_FEES);
 
         // Now, get the emergency output value out of it.
         let deposit_value = unvault_input.txout().txout().value;
-        let emer_value = deposit_value - fees;
+        let emer_value = deposit_value
+            .checked_sub(fees)
+            .expect("We would never create a dust unvault txo");
         let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
 
         UnvaultEmergencyTransaction(if let Some(feebump_input) = feebump_input {
@@ -806,10 +835,12 @@ impl SpendTransaction {
         // We only need to modify the unsigned_tx global's output value as the PSBT outputs only
         // contain the witness script.
         let witstrip_weight: u64 = psbt.global.unsigned_tx.get_weight().try_into().unwrap();
-        let total_weight = sat_weight + witstrip_weight;
+        let total_weight = sat_weight
+            .checked_add(witstrip_weight)
+            .expect("Weight computation bug");
         // See https://github.com/re-vault/practical-revault/blob/master/transactions.md#cancel_tx
         // for this arbirtrary value.
-        let cpfp_value = 2 * 32 * total_weight as u64;
+        let cpfp_value = 2 * 32 * total_weight;
         // We could just use output[0], but be careful.
         let mut cpfp_txo = psbt
             .global
@@ -885,7 +916,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
         lock_time,
     );
     let emergency_tx =
-        EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time);
+        EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
         unvault_tx
             .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
@@ -1217,7 +1248,8 @@ mod tests {
         );
         // We can sign the transaction without the feebump input
         let mut emergency_tx_no_feebump =
-            EmergencyTransaction::new(vault_txin.clone(), None, emergency_address.clone(), 0);
+            EmergencyTransaction::new(vault_txin.clone(), None, emergency_address.clone(), 0)
+                .unwrap();
         let value_no_feebump =
             emergency_tx_no_feebump.inner_tx().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
@@ -1276,7 +1308,8 @@ mod tests {
             feebump_txo.clone(),
         );
         let mut emergency_tx =
-            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emergency_address.clone(), 0);
+            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emergency_address.clone(), 0)
+                .unwrap();
         let emergency_tx_sighash_feebump = emergency_tx.signature_hash(
             1,
             &feebump_descriptor.script_code(xpub_ctx),
