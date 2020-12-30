@@ -962,11 +962,8 @@ mod tests {
 
         rng.fill_bytes(&mut rand_bytes);
 
-        bip32::ExtendedPrivKey::new_master(
-            bitcoin::network::constants::Network::Bitcoin,
-            &rand_bytes,
-        )
-        .unwrap_or_else(|_| get_random_privkey(rng))
+        bip32::ExtendedPrivKey::new_master(Network::Bitcoin, &rand_bytes)
+            .unwrap_or_else(|_| get_random_privkey(rng))
     }
 
     /// This generates the master private keys to derive directly from master, so it's
