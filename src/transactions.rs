@@ -71,9 +71,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the inner transaction
     fn inner_tx_mut(&mut self) -> &mut Psbt;
 
-    /// Extract the inner unsigned transaction. Useful for fee computation.
-    fn into_tx(self) -> Transaction;
-
     /// Get the sighash for a specified input, provided the previous txout's scriptCode.
     fn signature_hash(
         &self,
@@ -338,10 +335,6 @@ macro_rules! impl_revault_transaction {
                 &mut self.0
             }
 
-            fn into_tx(self) -> Transaction {
-                self.0.extract_tx()
-            }
-
             // TODO: move this to each transaction and perform actual checks..
             fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, Error> {
                 Ok(Decodable::consensus_decode(raw_psbt).map(|psbt| $transaction_name(psbt))?)
@@ -436,12 +429,13 @@ impl UnvaultTransaction {
         // First, create a dummy transaction to get its weight without Witness
         let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor, to_pk_ctx);
         let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor, to_pk_ctx);
-        let dummy_tx = UnvaultTransaction(create_tx!(
+        let dummy_tx = create_tx!(
             [(vault_input.clone(), SigHashType::All)],
             [dummy_unvault_txout, dummy_cpfp_txout],
             lock_time,
-        ))
-        .into_tx();
+        )
+        .global
+        .unsigned_tx;
 
         // The weight of the transaction once signed will be the size of the witness-stripped
         // transaction plus the size of the single input's witness.
@@ -571,12 +565,13 @@ impl CancelTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It pays for itself.
         let vault_txo = VaultTxOut::new(u64::MAX, vault_descriptor, to_pk_ctx);
-        let dummy_tx = CancelTransaction(create_tx!(
+        let dummy_tx = create_tx!(
             [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
             [vault_txo],
             lock_time,
-        ))
-        .into_tx();
+        )
+        .global
+        .unsigned_tx;
 
         // The weight of the cancel transaction without a feebump input is the weight of the
         // witness-stripped transaction plus the weight required to satisfy the unvault txin
@@ -628,12 +623,13 @@ impl EmergencyTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
-        let dummy_tx = EmergencyTransaction(create_tx!(
+        let dummy_tx = create_tx!(
             [(vault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
             [emer_txo],
             lock_time,
-        ))
-        .into_tx();
+        )
+        .global
+        .unsigned_tx;
 
         // The weight of the emergency transaction without a feebump input is the weight of the
         // witness-stripped transaction plus the weight required to satisfy the vault txin
@@ -685,12 +681,13 @@ impl UnvaultEmergencyTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
-        let dummy_tx = UnvaultEmergencyTransaction(create_tx!(
+        let dummy_tx = create_tx!(
             [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
             [emer_txo],
             lock_time,
-        ))
-        .into_tx();
+        )
+        .global
+        .unsigned_tx;
 
         // The weight of the unvault emergency transaction without a feebump input is the weight of
         // the witness-stripped transaction plus the weight required to satisfy the unvault txin
