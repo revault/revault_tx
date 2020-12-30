@@ -10,7 +10,7 @@ description = "Bitcoin Script descriptors and transactions creation routines for
 exclude = [".github/"]
 
 [features]
-use-serde = ["serde"]
+use-serde = ["serde", "miniscript/use-serde"]
 
 [dependencies]
 bitcoinconsensus = "0.19.0-2"
