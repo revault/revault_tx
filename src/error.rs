@@ -5,6 +5,8 @@ use std::{error, fmt};
 pub enum Error {
     /// The script creation failed.
     ScriptCreation(String),
+    /// The transaction creation failed.
+    TransactionCreation(String),
     /// Satisfaction (PSBT signer role) of a Revault transaction input failed.
     InputSatisfaction(String),
     /// Completion (PSBT finalizer role) of the Revault transaction has failed.
@@ -17,6 +19,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::ScriptCreation(ref e) => write!(f, "Revault script creation error: {}", e),
+            Error::TransactionCreation(ref e) => {
+                write!(f, "Revault transaction creation error: {}", e)
+            }
             Error::InputSatisfaction(ref e) => write!(f, "Revault input satisfaction error: {}", e),
             Error::TransactionVerification(ref e) => {
                 write!(f, "Revault transaction verification error: {}", e)

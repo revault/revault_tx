@@ -2,7 +2,7 @@
 //! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
-use crate::scripts::{CpfpDescriptor, UnvaultDescriptor, VaultDescriptor};
+use crate::scripts::{CpfpDescriptor, EmergencyAddress, UnvaultDescriptor, VaultDescriptor};
 
 use miniscript::{
     bitcoin::{Script, TxOut},
@@ -97,9 +97,12 @@ implem_revault_txout!(
 );
 impl EmergencyTxOut {
     /// Create a new EmergencyTxOut, note that we don't know the witness_script!
-    pub fn new(txout: TxOut) -> EmergencyTxOut {
+    pub fn new(address: EmergencyAddress, value: u64) -> EmergencyTxOut {
         EmergencyTxOut {
-            txout,
+            txout: TxOut {
+                script_pubkey: address.address().script_pubkey(),
+                value,
+            },
             witness_script: None,
         }
     }
