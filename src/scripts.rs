@@ -64,9 +64,7 @@ impl_descriptor_newtype!(
 ///
 /// # Examples
 /// ```rust
-/// use revault_tx::{scripts, miniscript::NullCtx};
-/// use bitcoin;
-/// use bitcoin::secp256k1;
+/// use revault_tx::{scripts, miniscript::{NullCtx, bitcoin::{self, secp256k1}}};
 ///
 /// let secp = secp256k1::Secp256k1::new();
 /// let secret_key = secp256k1::SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
@@ -135,9 +133,7 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(
 ///
 /// # Examples
 /// ```rust
-/// use revault_tx::{scripts, miniscript::NullCtx};
-/// use bitcoin;
-/// use bitcoin::secp256k1;
+/// use revault_tx::{scripts, miniscript::{NullCtx, bitcoin::{self, secp256k1}}};
 ///
 /// let secp = secp256k1::Secp256k1::new();
 /// let keys: Vec<bitcoin::PublicKey> = (0..7)
@@ -261,7 +257,7 @@ pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescr
 
 /// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
 /// necessarily a v0 P2WSH
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EmergencyAddress(Address);
 impl EmergencyAddress {
     /// Create a new Emergency Address. Will error if the address isn't a v0 P2WSH
@@ -296,13 +292,16 @@ impl fmt::Display for EmergencyAddress {
 mod tests {
     use super::{cpfp_descriptor, unvault_descriptor, vault_descriptor, Error};
 
-    use bitcoin::{
-        secp256k1::rand::{rngs::SmallRng, FromEntropy},
+    use miniscript::bitcoin::{
+        secp256k1::{
+            self,
+            rand::{rngs::SmallRng, FromEntropy},
+        },
         PublicKey,
     };
 
     fn get_random_pubkey(rng: &mut SmallRng) -> PublicKey {
-        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let secp = secp256k1::Secp256k1::new();
         let (_, public_key) = secp.generate_keypair(rng);
 
         PublicKey {

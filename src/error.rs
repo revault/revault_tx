@@ -1,4 +1,6 @@
-use std::{error, fmt};
+use miniscript::bitcoin::consensus::encode::Error as EncodeError;
+
+use std::{convert::From, error, fmt};
 
 /// An error specific to the management of Revault transactions and scripts.
 #[derive(PartialEq, Eq, Debug)]
@@ -13,6 +15,8 @@ pub enum Error {
     TransactionFinalisation(String),
     /// The verification of the PSBT input against libbitcoinconsensus failed.
     TransactionVerification(String),
+    /// The serialization or deserialization of the transaction failed.
+    TransactionSerialisation(String),
 }
 
 impl fmt::Display for Error {
@@ -29,8 +33,23 @@ impl fmt::Display for Error {
             Error::TransactionFinalisation(ref e) => {
                 write!(f, "Revault transaction finalisation error: {}", e)
             }
+            Error::TransactionSerialisation(ref e) => {
+                write!(f, "Revault transaction serialisation error: {}", e)
+            }
         }
     }
 }
 
 impl error::Error for Error {}
+
+impl From<EncodeError> for Error {
+    fn from(e: EncodeError) -> Self {
+        Self::TransactionSerialisation(e.to_string())
+    }
+}
+
+impl From<base64::DecodeError> for Error {
+    fn from(e: base64::DecodeError) -> Self {
+        Self::TransactionSerialisation(e.to_string())
+    }
+}
