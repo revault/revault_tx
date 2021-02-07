@@ -97,6 +97,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         Ok(cache.signature_hash(input_index, &script_code, prev_txo.value, sighash_type))
     }
 
+    // FIXME: parsing time checks! This function may (for now) panic when applied to an insane
+    // parsed PSBT
     /// Add a signature in order to eventually satisfy this input.
     /// Some sanity checks against the PSBT Input are done here, but no signature check.
     ///
@@ -109,92 +111,65 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         pubkey: BitcoinPubKey,
         signature: BitcoinSig,
     ) -> Result<Option<Vec<u8>>, Error> {
-        if let Some(ref mut psbtin) = self.inner_tx_mut().inputs.get_mut(input_index) {
-            // BIP174:
-            // For a Signer to only produce valid signatures for what it expects to sign, it must
-            // check that the following conditions are true:
-            // -- If a witness UTXO is provided, no non-witness signature may be created.
-            let prev_txo = psbtin.witness_utxo.as_ref().ok_or_else(|| {
-                debug_assert!(
-                    false,
-                    "Cannot be reached. We only create transactions with witness_utxo."
-                );
-                Error::InputSatisfaction(format!(
-                    "No previous witness txo for psbtin: '{:?}'",
-                    psbtin
-                ))
-            })?;
-            if psbtin.non_witness_utxo.is_some() {
-                debug_assert!(
-                    false,
-                    "Cannot be reached. We never create transactions with non_witness_utxo."
-                );
+        let psbtin = match self.inner_tx_mut().inputs.get_mut(input_index) {
+            Some(i) => i,
+            None => {
                 return Err(Error::InputSatisfaction(format!(
-                    "Unexpected non-witness txo for psbtin: '{:?}'",
-                    psbtin
-                )));
+                    "Input out of bonds of PSBT inputs: {:?}",
+                    self.inner_tx().inputs
+                )))
             }
+        };
+        // BIP174:
+        // For a Signer to only produce valid signatures for what it expects to sign, it must
+        // check that the following conditions are true:
+        // -- If a witness UTXO is provided, no non-witness signature may be created.
+        let prev_txo = psbtin
+            .witness_utxo
+            .as_ref()
+            .expect("Cannot be reached. We only create transactions with witness_utxo.");
+        assert!(
+            psbtin.non_witness_utxo.is_none(),
+            "We never create transactions with non_witness_utxo."
+        );
 
-            // -- If a witnessScript is provided, the scriptPubKey or the redeemScript must be for
-            // that witnessScript
-            if let Some(witness_script) = &psbtin.witness_script {
-                // Note the network is irrelevant here.
-                let expected_script_pubkey =
-                    Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
-                if expected_script_pubkey != prev_txo.script_pubkey {
-                    debug_assert!(false, "Cannot be reached. We create TxOut scriptPubKey out of this exact witnessScript.");
-                    return Err(Error::InputSatisfaction(format!(
-                        "Invalid witness script of previous txo ScriptPubKey for psbtin: '{:?}'",
-                        psbtin
-                    )));
-                }
-            } else {
-                debug_assert!(prev_txo.script_pubkey.is_v0_p2wpkh());
-            }
-            if psbtin.redeem_script.is_some() {
-                debug_assert!(
-                    false,
-                    "Cannot be reached. We never create Psbt input with legacy txos."
-                );
-                return Err(Error::InputSatisfaction(format!(
-                    "Unexpected non native segwit txo for psbtin: '{:?}'",
-                    psbtin
-                )));
-            }
-
-            // -- If a sighash type is provided, the signer must check that the sighash is acceptable.
-            // If unacceptable, they must fail.
-            let (sig, sighash_type) = signature;
-            let expected_sighash_type = match psbtin.sighash_type {
-                Some(st) => st,
-                None => {
-                    debug_assert!(
-                        false,
-                        "Cannot be reached. We always set the SigHashType in the constructor."
-                    );
-                    return Err(Error::InputSatisfaction(format!(
-                        "Unknown expected sighash type for psbtin: '{:?}'",
-                        psbtin
-                    )));
-                }
-            };
-            if sighash_type != expected_sighash_type {
-                return Err(Error::InputSatisfaction(format!(
-                    "Unexpected sighash type for psbtin: '{:?}'",
-                    psbtin
-                )));
-            }
-
-            let mut rawsig = sig.serialize_der().to_vec();
-            rawsig.push(sighash_type.as_u32() as u8);
-
-            Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
+        // -- If a witnessScript is provided, the scriptPubKey or the redeemScript must be for
+        // that witnessScript
+        if let Some(witness_script) = &psbtin.witness_script {
+            // Note the network is irrelevant here.
+            let expected_script_pubkey =
+                Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
+            assert!(
+                expected_script_pubkey == prev_txo.script_pubkey,
+                "We create TxOut scriptPubKey out of this exact witnessScript."
+            );
         } else {
-            Err(Error::InputSatisfaction(format!(
-                "Input out of bonds of PSBT inputs: {:?}",
-                self.inner_tx().inputs
-            )))
+            // We only use P2WSH utxos internally. External inputs are only ever added for fee
+            // bumping, for which we require P2WPKH.
+            assert!(prev_txo.script_pubkey.is_v0_p2wpkh());
         }
+        assert!(
+            psbtin.redeem_script.is_none(),
+            "We never create Psbt input with legacy txos."
+        );
+
+        // -- If a sighash type is provided, the signer must check that the sighash is acceptable.
+        // If unacceptable, they must fail.
+        let (sig, sighash_type) = signature;
+        let expected_sighash_type = psbtin
+            .sighash_type
+            .expect("We always set the SigHashType in the constructor.");
+        if sighash_type != expected_sighash_type {
+            return Err(Error::InputSatisfaction(format!(
+                "Unexpected sighash type for psbtin: '{:?}'",
+                psbtin
+            )));
+        }
+
+        let mut rawsig = sig.serialize_der().to_vec();
+        rawsig.push(sighash_type.as_u32() as u8);
+
+        Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
     }
 
     /// Check and satisfy the scripts, create the witnesses.
