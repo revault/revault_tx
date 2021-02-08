@@ -71,32 +71,59 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the inner transaction
     fn inner_tx_mut(&mut self) -> &mut Psbt;
 
-    /// Get the sighash for a specified input, provided the previous txout's scriptCode.
-    fn signature_hash(
+    /// Get the sighash for an input spending an internal Revault TXO.
+    /// **Do not use it for fee bumping inputs, use [signature_hash_feebump_input] instead**
+    ///
+    /// Returns `None` if the input does not exist.
+    fn signature_hash_internal_input(
         &self,
         input_index: usize,
-        // In theory, we could deduce this from the PSBT input. In practice it's hacky af and the
-        // caller likely has the descriptor of this utxo already.
-        script_code: &Script,
         sighash_type: SigHashType,
-    ) -> Result<SigHash, Error> {
+    ) -> Option<SigHash> {
         let psbt = self.inner_tx();
         // TODO: maybe cache the cache at some point (for huge spend txs)
         let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
-        let prev_txo = psbt
-            .inputs
-            .get(input_index)
-            .and_then(|psbtin| psbtin.witness_utxo.as_ref())
-            .ok_or_else(|| {
-                Error::InputSatisfaction(format!(
-                    "Input index {} is out of bonds or psbt input has no witness utxo",
-                    input_index
-                ))
-            })?;
 
-        Ok(cache.signature_hash(input_index, &script_code, prev_txo.value, sighash_type))
+        psbt.inputs.get(input_index).map(|psbtin| {
+            let prev_txo = psbtin
+                .witness_utxo
+                .as_ref()
+                .expect("We always set witness_txo");
+            // We always create transactions' PSBT inputs with a witness_script, and this script is
+            // always the script code as we always spend P2WSH outputs.
+            // FIXME: it's untrue until we have decent parsing checks !!
+            let witscript = psbtin
+                .witness_script
+                .as_ref()
+                .expect("We always set the witness_script (but only for UTXOs we manage!!)");
+            cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type)
+        })
     }
 
+    /// Get the signature hash for an externally-managed fee-bumping input.
+    ///
+    /// Returns `None` if the input does not exist.
+    fn signature_hash_feebump_input(
+        &self,
+        input_index: usize,
+        script_code: &Script,
+        sighash_type: SigHashType,
+    ) -> Option<SigHash> {
+        let psbt = self.inner_tx();
+        // TODO: maybe cache the cache at some point (for huge spend txs)
+        let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
+
+        psbt.inputs.get(input_index).map(|psbtin| {
+            let prev_txo = psbtin
+                .witness_utxo
+                .as_ref()
+                .expect("We always set witness_utxo");
+            cache.signature_hash(input_index, &script_code, prev_txo.value, sighash_type)
+        })
+    }
+
+    // FIXME: parsing time checks! This function may (for now) panic when applied to an insane
+    // parsed PSBT
     /// Add a signature in order to eventually satisfy this input.
     /// Some sanity checks against the PSBT Input are done here, but no signature check.
     ///
@@ -109,92 +136,65 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         pubkey: BitcoinPubKey,
         signature: BitcoinSig,
     ) -> Result<Option<Vec<u8>>, Error> {
-        if let Some(ref mut psbtin) = self.inner_tx_mut().inputs.get_mut(input_index) {
-            // BIP174:
-            // For a Signer to only produce valid signatures for what it expects to sign, it must
-            // check that the following conditions are true:
-            // -- If a witness UTXO is provided, no non-witness signature may be created.
-            let prev_txo = psbtin.witness_utxo.as_ref().ok_or_else(|| {
-                debug_assert!(
-                    false,
-                    "Cannot be reached. We only create transactions with witness_utxo."
-                );
-                Error::InputSatisfaction(format!(
-                    "No previous witness txo for psbtin: '{:?}'",
-                    psbtin
-                ))
-            })?;
-            if psbtin.non_witness_utxo.is_some() {
-                debug_assert!(
-                    false,
-                    "Cannot be reached. We never create transactions with non_witness_utxo."
-                );
+        let psbtin = match self.inner_tx_mut().inputs.get_mut(input_index) {
+            Some(i) => i,
+            None => {
                 return Err(Error::InputSatisfaction(format!(
-                    "Unexpected non-witness txo for psbtin: '{:?}'",
-                    psbtin
-                )));
+                    "Input out of bonds of PSBT inputs: {:?}",
+                    self.inner_tx().inputs
+                )))
             }
+        };
+        // BIP174:
+        // For a Signer to only produce valid signatures for what it expects to sign, it must
+        // check that the following conditions are true:
+        // -- If a witness UTXO is provided, no non-witness signature may be created.
+        let prev_txo = psbtin
+            .witness_utxo
+            .as_ref()
+            .expect("Cannot be reached. We only create transactions with witness_utxo.");
+        assert!(
+            psbtin.non_witness_utxo.is_none(),
+            "We never create transactions with non_witness_utxo."
+        );
 
-            // -- If a witnessScript is provided, the scriptPubKey or the redeemScript must be for
-            // that witnessScript
-            if let Some(witness_script) = &psbtin.witness_script {
-                // Note the network is irrelevant here.
-                let expected_script_pubkey =
-                    Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
-                if expected_script_pubkey != prev_txo.script_pubkey {
-                    debug_assert!(false, "Cannot be reached. We create TxOut scriptPubKey out of this exact witnessScript.");
-                    return Err(Error::InputSatisfaction(format!(
-                        "Invalid witness script of previous txo ScriptPubKey for psbtin: '{:?}'",
-                        psbtin
-                    )));
-                }
-            } else {
-                debug_assert!(prev_txo.script_pubkey.is_v0_p2wpkh());
-            }
-            if psbtin.redeem_script.is_some() {
-                debug_assert!(
-                    false,
-                    "Cannot be reached. We never create Psbt input with legacy txos."
-                );
-                return Err(Error::InputSatisfaction(format!(
-                    "Unexpected non native segwit txo for psbtin: '{:?}'",
-                    psbtin
-                )));
-            }
-
-            // -- If a sighash type is provided, the signer must check that the sighash is acceptable.
-            // If unacceptable, they must fail.
-            let (sig, sighash_type) = signature;
-            let expected_sighash_type = match psbtin.sighash_type {
-                Some(st) => st,
-                None => {
-                    debug_assert!(
-                        false,
-                        "Cannot be reached. We always set the SigHashType in the constructor."
-                    );
-                    return Err(Error::InputSatisfaction(format!(
-                        "Unknown expected sighash type for psbtin: '{:?}'",
-                        psbtin
-                    )));
-                }
-            };
-            if sighash_type != expected_sighash_type {
-                return Err(Error::InputSatisfaction(format!(
-                    "Unexpected sighash type for psbtin: '{:?}'",
-                    psbtin
-                )));
-            }
-
-            let mut rawsig = sig.serialize_der().to_vec();
-            rawsig.push(sighash_type.as_u32() as u8);
-
-            Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
+        // -- If a witnessScript is provided, the scriptPubKey or the redeemScript must be for
+        // that witnessScript
+        if let Some(witness_script) = &psbtin.witness_script {
+            // Note the network is irrelevant here.
+            let expected_script_pubkey =
+                Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
+            assert!(
+                expected_script_pubkey == prev_txo.script_pubkey,
+                "We create TxOut scriptPubKey out of this exact witnessScript."
+            );
         } else {
-            Err(Error::InputSatisfaction(format!(
-                "Input out of bonds of PSBT inputs: {:?}",
-                self.inner_tx().inputs
-            )))
+            // We only use P2WSH utxos internally. External inputs are only ever added for fee
+            // bumping, for which we require P2WPKH.
+            assert!(prev_txo.script_pubkey.is_v0_p2wpkh());
         }
+        assert!(
+            psbtin.redeem_script.is_none(),
+            "We never create Psbt input with legacy txos."
+        );
+
+        // -- If a sighash type is provided, the signer must check that the sighash is acceptable.
+        // If unacceptable, they must fail.
+        let (sig, sighash_type) = signature;
+        let expected_sighash_type = psbtin
+            .sighash_type
+            .expect("We always set the SigHashType in the constructor.");
+        if sighash_type != expected_sighash_type {
+            return Err(Error::InputSatisfaction(format!(
+                "Unexpected sighash type for psbtin: '{:?}'",
+                psbtin
+            )));
+        }
+
+        let mut rawsig = sig.serialize_der().to_vec();
+        rawsig.push(sighash_type.as_u32() as u8);
+
+        Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
     }
 
     /// Check and satisfy the scripts, create the witnesses.
@@ -1258,21 +1258,15 @@ mod tests {
             deposit_value,
         );
         // We cannot get a sighash for a non-existing input
-        let sighash_err = emergency_tx_no_feebump.signature_hash(
-            10,
-            &vault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::AllPlusAnyoneCanPay,
+        assert_eq!(
+            emergency_tx_no_feebump
+                .signature_hash_internal_input(10, SigHashType::AllPlusAnyoneCanPay),
+            None
         );
-        assert!(sighash_err
-            .expect_err("Sighash wrong input")
-            .to_string()
-            .contains("out of bonds or psbt input has no witness utxo"));
         // But for an existing one, all good
-        let emergency_tx_sighash_vault = emergency_tx_no_feebump.signature_hash(
-            0,
-            &vault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::AllPlusAnyoneCanPay,
-        )?;
+        let emergency_tx_sighash_vault = emergency_tx_no_feebump
+            .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
+            .expect("Input exists");
         // We can't force it to accept a SIGHASH_ALL signature:
         let err = satisfy_transaction_input(
             &secp,
@@ -1310,11 +1304,13 @@ mod tests {
         let mut emergency_tx =
             EmergencyTransaction::new(vault_txin, Some(feebump_txin), emergency_address.clone(), 0)
                 .unwrap();
-        let emergency_tx_sighash_feebump = emergency_tx.signature_hash(
-            1,
-            &feebump_descriptor.script_code(xpub_ctx),
-            SigHashType::All,
-        )?;
+        let emergency_tx_sighash_feebump = emergency_tx
+            .signature_hash_feebump_input(
+                1,
+                &feebump_descriptor.script_code(xpub_ctx),
+                SigHashType::All,
+            )
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut emergency_tx,
@@ -1382,11 +1378,9 @@ mod tests {
             value_no_feebump + (376 + unvault_txin.max_sat_weight() as u64) * 22,
             unvault_txin.txout().txout().value,
         );
-        let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump.signature_hash(
-            0,
-            &unvault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::AllPlusAnyoneCanPay,
-        )?;
+        let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
+            .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut cancel_tx_without_feebump,
@@ -1423,11 +1417,13 @@ mod tests {
             value_no_feebump,
             "Base fees when computing with with feebump differ !!"
         );
-        let cancel_tx_sighash_feebump = cancel_tx.signature_hash(
-            1,
-            &feebump_descriptor.script_code(xpub_ctx),
-            SigHashType::All,
-        )?;
+        let cancel_tx_sighash_feebump = cancel_tx
+            .signature_hash_feebump_input(
+                1,
+                &feebump_descriptor.script_code(xpub_ctx),
+                SigHashType::All,
+            )
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut cancel_tx,
@@ -1470,11 +1466,9 @@ mod tests {
             value_no_feebump + (376 + unvault_txin.max_sat_weight() as u64) * 22,
             unvault_txin.txout().txout().value,
         );
-        let unemergency_tx_sighash = unemergency_tx_no_feebump.signature_hash(
-            0,
-            &unvault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::AllPlusAnyoneCanPay,
-        )?;
+        let unemergency_tx_sighash = unemergency_tx_no_feebump
+            .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut unemergency_tx_no_feebump,
@@ -1520,11 +1514,13 @@ mod tests {
             Ok(_) => unreachable!(),
         }
         // Now actually satisfy it, libbitcoinconsensus should not yell
-        let unemer_tx_sighash_feebump = unemergency_tx.signature_hash(
-            1,
-            &feebump_descriptor.script_code(xpub_ctx),
-            SigHashType::All,
-        )?;
+        let unemer_tx_sighash_feebump = unemergency_tx
+            .signature_hash_feebump_input(
+                1,
+                &feebump_descriptor.script_code(xpub_ctx),
+                SigHashType::All,
+            )
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut unemergency_tx,
@@ -1537,11 +1533,9 @@ mod tests {
         unemergency_tx.finalize(&secp)?;
 
         // Now we can sign the unvault
-        let unvault_tx_sighash = unvault_tx.signature_hash(
-            0,
-            &vault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::All,
-        )?;
+        let unvault_tx_sighash = unvault_tx
+            .signature_hash_internal_input(0, SigHashType::All)
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut unvault_tx,
@@ -1569,11 +1563,9 @@ mod tests {
             xpub_ctx,
             0,
         );
-        let spend_tx_sighash = spend_tx.signature_hash(
-            0,
-            &unvault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::All,
-        )?;
+        let spend_tx_sighash = spend_tx
+            .signature_hash_internal_input(0, SigHashType::All)
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut spend_tx,
@@ -1607,11 +1599,9 @@ mod tests {
             xpub_ctx,
             0,
         );
-        let spend_tx_sighash = spend_tx.signature_hash(
-            0,
-            &unvault_descriptor.0.witness_script(xpub_ctx),
-            SigHashType::All,
-        )?;
+        let spend_tx_sighash = spend_tx
+            .signature_hash_internal_input(0, SigHashType::All)
+            .expect("Input exists");
         satisfy_transaction_input(
             &secp,
             &mut spend_tx,
@@ -1671,11 +1661,9 @@ mod tests {
             0,
         );
         for i in 0..n_txins {
-            let spend_tx_sighash = spend_tx.signature_hash(
-                i,
-                &unvault_descriptor.0.witness_script(xpub_ctx),
-                SigHashType::All,
-            )?;
+            let spend_tx_sighash = spend_tx
+                .signature_hash_internal_input(i, SigHashType::All)
+                .expect("Input exists");
             satisfy_transaction_input(
                 &secp,
                 &mut spend_tx,
