@@ -2,7 +2,7 @@
 //! Wrappers around bitcoin's OutPoint and previous TxOut to statically check Revault transaction
 //! creation and ease PSBT management.
 
-use crate::txouts::{CpfpTxOut, FeeBumpTxOut, RevaultTxOut, UnvaultTxOut, VaultTxOut};
+use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, RevaultTxOut, UnvaultTxOut};
 
 use miniscript::bitcoin::{OutPoint, TxIn};
 
@@ -58,14 +58,14 @@ macro_rules! implem_revault_txin {
 }
 
 implem_revault_txin!(
-    VaultTxIn,
-    VaultTxOut,
-    doc = "A vault txo spent by the unvault transaction and the emergency transaction"
+    DepositTxIn,
+    DepositTxOut,
+    doc = "A deposit txo spent by the unvault transaction and the emergency transaction"
 );
-impl VaultTxIn {
-    /// Instanciate a TxIn referencing a vault txout which signals for RBF.
-    pub fn new(outpoint: OutPoint, prev_txout: VaultTxOut) -> VaultTxIn {
-        VaultTxIn {
+impl DepositTxIn {
+    /// Instanciate a TxIn referencing a deposit txout which signals for RBF.
+    pub fn new(outpoint: OutPoint, prev_txout: DepositTxOut) -> DepositTxIn {
+        DepositTxIn {
             outpoint,
             prev_txout,
             sequence: RBF_SEQUENCE,
@@ -79,9 +79,9 @@ impl VaultTxIn {
                 self.prev_txout
                     .witness_script()
                     .as_ref()
-                    .expect("VaultTxOut has a witness_script"),
+                    .expect("DepositTxOut has a witness_script"),
             )
-            .expect("VaultTxIn witness_script is created from a Miniscript"),
+            .expect("DepositTxIn witness_script is created from a Miniscript"),
         )
         .max_satisfaction_weight(miniscript::NullCtx)
         .expect("It's a sane Script, derived from a Miniscript")

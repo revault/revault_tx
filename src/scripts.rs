@@ -43,8 +43,8 @@ macro_rules! impl_descriptor_newtype {
 }
 
 impl_descriptor_newtype!(
-    VaultDescriptor,
-    doc = "The vault / deposit miniscript descriptor. See the [vault_descriptor] function for more information."
+    DepositDescriptor,
+    doc = "The vault / deposit miniscript descriptor. See the [deposit_descriptor] function for more information."
 );
 
 impl_descriptor_newtype!(
@@ -58,9 +58,9 @@ impl_descriptor_newtype!(
         "The CPFP miniscript descriptor. See the [cpfp_descriptor] function for more information."
 );
 
-/// Get the miniscript descriptor for the vault outputs.
+/// Get the miniscript descriptor for the deposit outputs.
 ///
-/// The vault policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
+/// The deposit policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
 ///
 /// # Examples
 /// ```rust
@@ -77,22 +77,22 @@ impl_descriptor_newtype!(
 ///     compressed: true,
 ///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key_b),
 /// };
-/// let vault_descriptor =
-///     scripts::vault_descriptor(vec![public_key, public_key_b]).expect("Compiling descriptor");
+/// let deposit_descriptor =
+///     scripts::deposit_descriptor(vec![public_key, public_key_b]).expect("Compiling descriptor");
 ///
-/// println!("Vault descriptor redeem script: {}", vault_descriptor.0.witness_script(NullCtx));
+/// println!("Deposit descriptor redeem script: {}", deposit_descriptor.0.witness_script(NullCtx));
 /// ```
 ///
 /// # Errors
 /// - If the passed slice contains less than 2 public keys.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn vault_descriptor<Pk: MiniscriptKey>(
+pub fn deposit_descriptor<Pk: MiniscriptKey>(
     participants: Vec<Pk>,
-) -> Result<VaultDescriptor<Pk>, Error> {
+) -> Result<DepositDescriptor<Pk>, Error> {
     if participants.len() < 2 {
         return Err(Error::ScriptCreation(
-            "Vault: bad parameters. We need more than one participant.".to_string(),
+            "Deposit: bad parameters. We need more than one participant.".to_string(),
         ));
     }
 
@@ -106,10 +106,10 @@ pub fn vault_descriptor<Pk: MiniscriptKey>(
     // This handles the non-safe or malleable cases.
     match policy.compile::<Segwitv0>() {
         Err(compile_err) => Err(Error::ScriptCreation(format!(
-            "Vault policy compilation error: {}",
+            "Deposit policy compilation error: {}",
             compile_err
         ))),
-        Ok(miniscript) => Ok(VaultDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
+        Ok(miniscript) => Ok(DepositDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
     }
 }
 
@@ -290,7 +290,7 @@ impl fmt::Display for EmergencyAddress {
 
 #[cfg(test)]
 mod tests {
-    use super::{cpfp_descriptor, unvault_descriptor, vault_descriptor, Error};
+    use super::{cpfp_descriptor, deposit_descriptor, unvault_descriptor, Error};
 
     use miniscript::bitcoin::{
         secp256k1::{
@@ -354,7 +354,7 @@ mod tests {
                 "Unvault descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
-            vault_descriptor(
+            deposit_descriptor(
                 managers
                     .clone()
                     .iter()
@@ -363,7 +363,7 @@ mod tests {
                     .collect::<Vec<PublicKey>>(),
             )
             .expect(&format!(
-                "Vault descriptors creation error with ({}, {})",
+                "Deposit descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
             cpfp_descriptor(managers).expect(&format!(
@@ -378,9 +378,9 @@ mod tests {
         let mut rng = SmallRng::from_entropy();
 
         assert_eq!(
-            vault_descriptor(vec![get_random_pubkey(&mut rng)]),
+            deposit_descriptor(vec![get_random_pubkey(&mut rng)]),
             Err(Error::ScriptCreation(
-                "Vault: bad parameters. We need more than one participant.".to_string()
+                "Deposit: bad parameters. We need more than one participant.".to_string()
             ))
         );
 
@@ -431,15 +431,15 @@ mod tests {
         let participants = (0..99)
             .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
-        vault_descriptor(participants).expect("Should be OK: max allowed value");
+        deposit_descriptor(participants).expect("Should be OK: max allowed value");
         // Now hit the limit
         let participants = (0..100)
             .map(|_| get_random_pubkey(&mut rng))
             .collect::<Vec<PublicKey>>();
         assert_eq!(
-            vault_descriptor(participants),
+            deposit_descriptor(participants),
             Err(Error::ScriptCreation(
-                "Vault policy compilation error: At least one spending path \
+                "Deposit policy compilation error: At least one spending path \
                     has exceeded the standardness or consensus limits"
                     .to_string()
             ))
