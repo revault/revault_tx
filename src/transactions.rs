@@ -81,26 +81,26 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         sighash_type: SigHashType,
     ) -> Result<SigHash, InputSatisfactionError> {
         let psbt = self.inner_tx();
+        let psbtin = psbt
+            .inputs
+            .get(input_index)
+            .ok_or(InputSatisfactionError::OutOfBounds)?;
+
+        let prev_txo = psbtin
+            .witness_utxo
+            .as_ref()
+            .expect("We always set witness_txo");
+        // We always create transactions' PSBT inputs with a witness_script, and this script is
+        // always the script code as we always spend P2WSH outputs.
+        let witscript = psbtin
+            .witness_script
+            .as_ref()
+            .ok_or(InputSatisfactionError::MissingWitnessScript)?;
+        assert!(prev_txo.script_pubkey.is_v0_p2wsh());
+
         // TODO: maybe cache the cache at some point (for huge spend txs)
         let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
-
-        psbt.inputs
-            .get(input_index)
-            .map(|psbtin| {
-                let prev_txo = psbtin
-                    .witness_utxo
-                    .as_ref()
-                    .expect("We always set witness_txo");
-                // We always create transactions' PSBT inputs with a witness_script, and this script is
-                // always the script code as we always spend P2WSH outputs.
-                // FIXME: it's untrue until we have decent parsing checks !!
-                let witscript = psbtin
-                    .witness_script
-                    .as_ref()
-                    .expect("We always set the witness_script (but only for UTXOs we manage!!)");
-                cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type)
-            })
-            .ok_or(InputSatisfactionError::OutOfBounds)
+        Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
     }
 
     /// Get the signature hash for an externally-managed fee-bumping input.
@@ -470,7 +470,7 @@ impl UnvaultTransaction {
         unvault_descriptor: &UnvaultDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
         csv: u32,
-    ) -> Option<UnvaultTxIn> {
+    ) -> UnvaultTxIn {
         let spk = unvault_descriptor.0.script_pubkey(to_pk_ctx);
         let index = self
             .inner_tx()
@@ -478,29 +478,20 @@ impl UnvaultTransaction {
             .unsigned_tx
             .output
             .iter()
-            .position(|txo| txo.script_pubkey == spk)?;
+            .position(|txo| txo.script_pubkey == spk)
+            .expect("UnvaultTransaction is always created with an Unvault txo");
 
-        // If we don't have both at this point, there is a consequent logic error..
-        debug_assert!(
-            self.inner_tx()
-                .global
-                .unsigned_tx
-                .output
-                .get(index)
-                .is_some()
-                && self.inner_tx().outputs.get(index).is_some()
-        );
-
-        let txo = self.inner_tx().global.unsigned_tx.output.get(index)?;
+        // Unwraped above
+        let txo = &self.inner_tx().global.unsigned_tx.output[index];
         let prev_txout = UnvaultTxOut::new(txo.value, unvault_descriptor, to_pk_ctx);
-        Some(UnvaultTxIn::new(
+        UnvaultTxIn::new(
             OutPoint {
                 txid: self.inner_tx().global.unsigned_tx.txid(),
                 vout: index.try_into().expect("There are two outputs"),
             },
             prev_txout,
             csv,
-        ))
+        )
     }
 
     /// Get the CPFP txo to be referenced in a spending transaction
@@ -508,7 +499,7 @@ impl UnvaultTransaction {
         &self,
         cpfp_descriptor: &CpfpDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
-    ) -> Option<CpfpTxIn> {
+    ) -> CpfpTxIn {
         let spk = cpfp_descriptor.0.script_pubkey(to_pk_ctx);
         let index = self
             .inner_tx()
@@ -516,28 +507,19 @@ impl UnvaultTransaction {
             .unsigned_tx
             .output
             .iter()
-            .position(|txo| txo.script_pubkey == spk)?;
+            .position(|txo| txo.script_pubkey == spk)
+            .expect("We always create UnvaultTransaction with a CPFP output");
 
-        // If we don't have both at this point, there is a consequent logic error..
-        debug_assert!(
-            self.inner_tx()
-                .global
-                .unsigned_tx
-                .output
-                .get(index)
-                .is_some()
-                && self.inner_tx().outputs.get(index).is_some()
-        );
-
-        let txo = self.inner_tx().global.unsigned_tx.output.get(index)?;
+        // Unwraped above
+        let txo = &self.inner_tx().global.unsigned_tx.output[index];
         let prev_txout = CpfpTxOut::new(txo.value, cpfp_descriptor, to_pk_ctx);
-        Some(CpfpTxIn::new(
+        CpfpTxIn::new(
             OutPoint {
                 txid: self.inner_tx().global.unsigned_tx.txid(),
                 vout: index.try_into().expect("There are two outputs"),
             },
             prev_txout,
-        ))
+        )
     }
 }
 
@@ -899,9 +881,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
         lock_time,
     )?;
     let cancel_tx = CancelTransaction::new(
-        unvault_tx
-            .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
-            .expect("We just created it."),
+        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
         None,
         &deposit_descriptor,
         to_pk_ctx,
@@ -910,9 +890,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
-        unvault_tx
-            .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
-            .expect("We just created it."),
+        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
         None,
         emer_address,
         lock_time,
@@ -942,9 +920,7 @@ pub fn spend_tx_from_deposit<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPk
                 lock_time,
             )
             .and_then(|unvault_tx| {
-                Ok(unvault_tx
-                    .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
-                    .expect("We just created it"))
+                Ok(unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv))
             })
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
@@ -1357,9 +1333,7 @@ mod tests {
         );
 
         // Create and sign the cancel transaction
-        let unvault_txin = unvault_tx
-            .unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE)
-            .unwrap();
+        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
         assert_eq!(unvault_txin.txout().txout().value, unvault_value);
         // We can create it entirely without the feebump input
         let mut cancel_tx_without_feebump =
@@ -1443,9 +1417,7 @@ mod tests {
         cancel_tx.finalize(&secp)?;
 
         // Create and sign the second (unvault) emergency transaction
-        let unvault_txin = unvault_tx
-            .unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE)
-            .unwrap();
+        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
         // We can create it without the feebump input
         let mut unemergency_tx_no_feebump = UnvaultEmergencyTransaction::new(
             unvault_txin.clone(),
@@ -1546,9 +1518,7 @@ mod tests {
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let unvault_txin = unvault_tx
-            .unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1) // Off-by-one
-            .unwrap();
+        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
         let spend_txo = ExternalTxOut::new(TxOut {
             value: 1,
             ..TxOut::default()
@@ -1587,9 +1557,7 @@ mod tests {
         }
 
         // "This time for sure !"
-        let unvault_txin = unvault_tx
-            .unvault_txin(&unvault_descriptor, xpub_ctx, csv) // Right csv
-            .unwrap();
+        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, csv); // Right csv
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],

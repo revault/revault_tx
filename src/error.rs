@@ -62,6 +62,10 @@ pub enum InputSatisfactionError {
     OutOfBounds,
     /// Provided signature's sighash byte is different from PSBT input's type
     UnexpectedSighashType,
+    /// This input was already finalized and its witness map wiped
+    AlreadyFinalized,
+    /// The PSBT input does not comport a witness_script field
+    MissingWitnessScript,
 }
 
 impl fmt::Display for InputSatisfactionError {
@@ -71,6 +75,11 @@ impl fmt::Display for InputSatisfactionError {
             Self::UnexpectedSighashType => {
                 write!(f, "Signature's sighash byte differ from PSBT input's type")
             }
+            Self::AlreadyFinalized => write!(f, "Input was already finalized"),
+            Self::MissingWitnessScript => write!(
+                f,
+                "Missing witness_script field in PSBT input. Wrong sighash function used?"
+            ),
         }
     }
 }
