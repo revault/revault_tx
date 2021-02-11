@@ -2,7 +2,7 @@
 //! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
-use crate::scripts::{CpfpDescriptor, EmergencyAddress, UnvaultDescriptor, VaultDescriptor};
+use crate::scripts::{CpfpDescriptor, DepositDescriptor, EmergencyAddress, UnvaultDescriptor};
 
 use miniscript::{
     bitcoin::{Script, TxOut},
@@ -53,17 +53,17 @@ macro_rules! implem_revault_txout {
 }
 
 implem_revault_txout!(
-    VaultTxOut,
-    doc = "A vault transaction output. Used by the funding / deposit transactions, the cancel transactions, and the spend transactions (for the change)."
+    DepositTxOut,
+    doc = "A deposit transaction output. Used by the funding / deposit transactions, the cancel transactions, and the spend transactions (for the change)."
 );
-impl VaultTxOut {
-    /// Create a new VaultTxOut out of the given Vault script descriptor
+impl DepositTxOut {
+    /// Create a new DepositTxOut out of the given Deposit script descriptor
     pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         value: u64,
-        script_descriptor: &VaultDescriptor<Pk>,
+        script_descriptor: &DepositDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
-    ) -> VaultTxOut {
-        VaultTxOut {
+    ) -> DepositTxOut {
+        DepositTxOut {
             txout: TxOut {
                 value,
                 script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
@@ -146,7 +146,7 @@ impl FeeBumpTxOut {
 
 implem_revault_txout!(
     ExternalTxOut,
-    doc = "An untagged external output, as spent by the vault transaction or created by the spend transaction."
+    doc = "An untagged external output, as spent by the deposit transaction or created by the spend transaction."
 );
 impl ExternalTxOut {
     /// Create a new ExternalTxOut, note that it's managed externally so we don't need a witness
@@ -159,12 +159,12 @@ impl ExternalTxOut {
     }
 }
 
-/// A spend transaction output can be either a change one (VaultTxOut) or a payee-controlled
+/// A spend transaction output can be either a change one (DepositTxOut) or a payee-controlled
 /// one (ExternalTxOut).
 pub enum SpendTxOut {
     /// The actual destination of the funds, many such output can be present in a Spend
     /// transaction
     Destination(ExternalTxOut),
     /// The change output, usually only one such output is present in a Spend transaction
-    Change(VaultTxOut),
+    Change(DepositTxOut),
 }

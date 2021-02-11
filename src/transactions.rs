@@ -6,7 +6,7 @@
 //! for data structure as well as roles distribution.
 
 use crate::{
-    scripts::{CpfpDescriptor, EmergencyAddress, UnvaultDescriptor, VaultDescriptor},
+    scripts::{CpfpDescriptor, DepositDescriptor, EmergencyAddress, UnvaultDescriptor},
     txins::*,
     txouts::*,
     Error,
@@ -411,16 +411,16 @@ macro_rules! create_tx {
 
 impl_revault_transaction!(
     UnvaultTransaction,
-    doc = "The unvaulting transaction, spending a vault and being eventually spent by a spend transaction (if not revaulted)."
+    doc = "The unvaulting transaction, spending a deposit and being eventually spent by a spend transaction (if not revaulted)."
 );
 impl UnvaultTransaction {
-    /// An unvault transaction always spends one vault output and contains one CPFP output in
+    /// An unvault transaction always spends one deposit output and contains one CPFP output in
     /// addition to the unvault one.
     /// It's always created using a fixed feerate and the CPFP output value is fixed as well.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-        vault_input: VaultTxIn,
+        deposit_input: DepositTxIn,
         unvault_descriptor: &UnvaultDescriptor<Pk>,
         cpfp_descriptor: &CpfpDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
@@ -430,7 +430,7 @@ impl UnvaultTransaction {
         let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor, to_pk_ctx);
         let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor, to_pk_ctx);
         let dummy_tx = create_tx!(
-            [(vault_input.clone(), SigHashType::All)],
+            [(deposit_input.clone(), SigHashType::All)],
             [dummy_unvault_txout, dummy_cpfp_txout],
             lock_time,
         )
@@ -441,7 +441,7 @@ impl UnvaultTransaction {
         // transaction plus the size of the single input's witness.
         let total_weight = dummy_tx
             .get_weight()
-            .checked_add(vault_input.max_sat_weight())
+            .checked_add(deposit_input.max_sat_weight())
             .expect("Properly-computed weights cannot overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = UNVAULT_TX_FEERATE
@@ -456,7 +456,7 @@ impl UnvaultTransaction {
         }
 
         // The unvault output value is then equal to the deposit value minus the fees and the CPFP.
-        let deposit_value = vault_input.txout().txout().value;
+        let deposit_value = deposit_input.txout().txout().value;
         if fees + UNVAULT_CPFP_VALUE + DUST_LIMIT > deposit_value {
             return Err(Error::TransactionCreation(format!(
                 "Deposit is {} sats but we need at least {} (fees) + {} (cpfp) + {} (dust limit)",
@@ -468,7 +468,7 @@ impl UnvaultTransaction {
         let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor, to_pk_ctx);
         let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor, to_pk_ctx);
         Ok(UnvaultTransaction(create_tx!(
-            [(vault_input, SigHashType::All)],
+            [(deposit_input, SigHashType::All)],
             [unvault_txout, cpfp_txout],
             lock_time,
         )))
@@ -553,26 +553,26 @@ impl UnvaultTransaction {
 
 impl_revault_transaction!(
     CancelTransaction,
-    doc = "The transaction \"revaulting\" a spend attempt, i.e. spending the unvaulting transaction back to a vault txo."
+    doc = "The transaction \"revaulting\" a spend attempt, i.e. spending the unvaulting transaction back to a deposit txo."
 );
 impl CancelTransaction {
-    /// A cancel transaction always pays to a vault output and spends the unvault output, and
+    /// A cancel transaction always pays to a deposit output and spends the unvault output, and
     /// may have a fee-bumping input.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         unvault_input: UnvaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
-        vault_descriptor: &VaultDescriptor<Pk>,
+        deposit_descriptor: &DepositDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
         lock_time: u32,
     ) -> CancelTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It pays for itself.
-        let vault_txo = VaultTxOut::new(u64::MAX, vault_descriptor, to_pk_ctx);
+        let deposit_txo = DepositTxOut::new(u64::MAX, deposit_descriptor, to_pk_ctx);
         let dummy_tx = create_tx!(
             [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
-            [vault_txo],
+            [deposit_txo],
             lock_time,
         )
         .global
@@ -596,7 +596,7 @@ impl CancelTransaction {
         let revault_value = unvault_value
             .checked_sub(fees)
             .expect("We would not create a dust unvault txo");
-        let vault_txo = VaultTxOut::new(revault_value, vault_descriptor, to_pk_ctx);
+        let deposit_txo = DepositTxOut::new(revault_value, deposit_descriptor, to_pk_ctx);
 
         CancelTransaction(if let Some(feebump_input) = feebump_input {
             create_tx!(
@@ -604,13 +604,13 @@ impl CancelTransaction {
                     (unvault_input, SigHashType::AllPlusAnyoneCanPay),
                     (feebump_input, SigHashType::All),
                 ],
-                [vault_txo],
+                [deposit_txo],
                 lock_time,
             )
         } else {
             create_tx!(
                 [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [vault_txo],
+                [deposit_txo],
                 lock_time,
             )
         })
@@ -619,16 +619,16 @@ impl CancelTransaction {
 
 impl_revault_transaction!(
     EmergencyTransaction,
-    doc = "The transaction spending a vault output to The Emergency Script."
+    doc = "The transaction spending a deposit output to The Emergency Script."
 );
 impl EmergencyTransaction {
-    /// The first emergency transaction always spends a vault output and pays to the Emergency
+    /// The first emergency transaction always spends a deposit output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
     /// Will error **only** when trying to spend a dust deposit.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new(
-        vault_input: VaultTxIn,
+        deposit_input: DepositTxIn,
         feebump_input: Option<FeeBumpTxIn>,
         emer_address: EmergencyAddress,
         lock_time: u32,
@@ -637,7 +637,7 @@ impl EmergencyTransaction {
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
         let dummy_tx = create_tx!(
-            [(vault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
+            [(deposit_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
             [emer_txo],
             lock_time,
         )
@@ -645,10 +645,10 @@ impl EmergencyTransaction {
         .unsigned_tx;
 
         // The weight of the emergency transaction without a feebump input is the weight of the
-        // witness-stripped transaction plus the weight required to satisfy the vault txin
+        // witness-stripped transaction plus the weight required to satisfy the deposit txin
         let total_weight = dummy_tx
             .get_weight()
-            .checked_add(vault_input.max_sat_weight())
+            .checked_add(deposit_input.max_sat_weight())
             .expect("Weight computation bug");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = REVAULTING_TX_FEERATE
@@ -658,7 +658,7 @@ impl EmergencyTransaction {
         debug_assert!(fees < INSANE_FEES);
 
         // Now, get the emergency output value out of it.
-        let deposit_value = vault_input.txout().txout().value;
+        let deposit_value = deposit_input.txout().txout().value;
         let emer_value = deposit_value.checked_sub(fees).ok_or_else(|| {
             Error::TransactionCreation("Creating an emergency tx for a dust deposit?".to_string())
         })?;
@@ -668,7 +668,7 @@ impl EmergencyTransaction {
             if let Some(feebump_input) = feebump_input {
                 create_tx!(
                     [
-                        (vault_input, SigHashType::AllPlusAnyoneCanPay),
+                        (deposit_input, SigHashType::AllPlusAnyoneCanPay),
                         (feebump_input, SigHashType::All)
                     ],
                     [emer_txo],
@@ -676,7 +676,7 @@ impl EmergencyTransaction {
                 )
             } else {
                 create_tx!(
-                    [(vault_input, SigHashType::AllPlusAnyoneCanPay)],
+                    [(deposit_input, SigHashType::AllPlusAnyoneCanPay)],
                     [emer_txo],
                     lock_time,
                 )
@@ -753,7 +753,7 @@ impl UnvaultEmergencyTransaction {
 impl_revault_transaction!(
     SpendTransaction,
     doc = "The transaction spending the unvaulting transaction, paying to one or multiple \
-    externally-controlled addresses, and possibly to a new vault txo for the change."
+    externally-controlled addresses, and possibly to a new deposit txo for the change."
 );
 impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
@@ -857,21 +857,21 @@ impl SpendTransaction {
 
 /// The funding transaction, we don't create nor sign it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct VaultTransaction(pub Transaction);
-impl VaultTransaction {
+pub struct DepositTransaction(pub Transaction);
+impl DepositTransaction {
     /// Assumes that the outpoint actually refers to this transaction. Will panic otherwise.
-    pub fn vault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn deposit_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         &self,
         outpoint: OutPoint,
-        deposit_descriptor: &VaultDescriptor<Pk>,
+        deposit_descriptor: &DepositDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
-    ) -> VaultTxIn {
+    ) -> DepositTxIn {
         assert!(outpoint.txid == self.0.txid());
         let txo = self.0.output[outpoint.vout as usize].clone();
 
-        VaultTxIn::new(
+        DepositTxIn::new(
             outpoint,
-            VaultTxOut::new(txo.value, deposit_descriptor, to_pk_ctx),
+            DepositTxOut::new(txo.value, deposit_descriptor, to_pk_ctx),
         )
     }
 }
@@ -882,8 +882,8 @@ pub struct FeeBumpTransaction(pub Transaction);
 
 /// Get the entire chain of pre-signed transaction out of a deposit. No feebump input.
 pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-    deposit_txin: VaultTxIn,
-    vault_descriptor: &VaultDescriptor<Pk>,
+    deposit_txin: DepositTxIn,
+    deposit_descriptor: &DepositDescriptor<Pk>,
     unvault_descriptor: &UnvaultDescriptor<Pk>,
     cpfp_descriptor: &CpfpDescriptor<Pk>,
     emer_address: EmergencyAddress,
@@ -911,7 +911,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
             .unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv)
             .expect("We just created it."),
         None,
-        &vault_descriptor,
+        &deposit_descriptor,
         to_pk_ctx,
         lock_time,
     );
@@ -931,7 +931,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
 
 /// Get a spend transaction out of a list of deposits.
 pub fn spend_tx_from_deposit<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-    deposit_txins: Vec<VaultTxIn>,
+    deposit_txins: Vec<DepositTxIn>,
     spend_txos: Vec<SpendTxOut>,
     unvault_descriptor: &UnvaultDescriptor<Pk>,
     cpfp_descriptor: &CpfpDescriptor<Pk>,
@@ -969,9 +969,9 @@ pub fn spend_tx_from_deposit<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPk
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelTransaction, EmergencyAddress, EmergencyTransaction, FeeBumpTransaction,
-        RevaultTransaction, SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction,
-        VaultTransaction, RBF_SEQUENCE,
+        CancelTransaction, DepositTransaction, EmergencyAddress, EmergencyTransaction,
+        FeeBumpTransaction, RevaultTransaction, SpendTransaction, UnvaultEmergencyTransaction,
+        UnvaultTransaction, RBF_SEQUENCE,
     };
     use crate::{scripts::*, txins::*, txouts::*, Error};
 
@@ -1178,19 +1178,19 @@ mod tests {
         .expect("Unvault descriptor generation error");
         let cpfp_descriptor =
             cpfp_descriptor(managers).expect("Unvault CPFP descriptor generation error");
-        let vault_descriptor =
-            vault_descriptor(stakeholders).expect("Vault descriptor generation error");
+        let deposit_descriptor =
+            deposit_descriptor(stakeholders).expect("Deposit descriptor generation error");
 
         // We reuse the deposit descriptor for the emergency address
         let emergency_address = EmergencyAddress::from(Address::p2wsh(
-            &vault_descriptor.0.witness_script(xpub_ctx),
+            &deposit_descriptor.0.witness_script(xpub_ctx),
             Network::Bitcoin,
         ))
         .expect("It's a P2WSH");
 
         // The funding transaction does not matter (random txid from my mempool)
-        let vault_scriptpubkey = vault_descriptor.0.script_pubkey(xpub_ctx);
-        let vault_raw_tx = Transaction {
+        let deposit_scriptpubkey = deposit_descriptor.0.script_pubkey(xpub_ctx);
+        let deposit_raw_tx = Transaction {
             version: 2,
             lock_time: 0,
             input: vec![TxIn {
@@ -1202,11 +1202,15 @@ mod tests {
             }],
             output: vec![TxOut {
                 value: deposit_value,
-                script_pubkey: vault_scriptpubkey.clone(),
+                script_pubkey: deposit_scriptpubkey.clone(),
             }],
         };
-        let vault_txo = VaultTxOut::new(vault_raw_tx.output[0].value, &vault_descriptor, xpub_ctx);
-        let vault_tx = VaultTransaction(vault_raw_tx);
+        let deposit_txo = DepositTxOut::new(
+            deposit_raw_tx.output[0].value,
+            &deposit_descriptor,
+            xpub_ctx,
+        );
+        let deposit_tx = DepositTransaction(deposit_raw_tx);
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
@@ -1238,23 +1242,23 @@ mod tests {
         let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
         let feebump_tx = FeeBumpTransaction(raw_feebump_tx);
 
-        // Create and sign the first (vault) emergency transaction
-        let vault_txin = VaultTxIn::new(
+        // Create and sign the first (deposit) emergency transaction
+        let deposit_txin = DepositTxIn::new(
             OutPoint {
-                txid: vault_tx.0.txid(),
+                txid: deposit_tx.0.txid(),
                 vout: 0,
             },
-            vault_txo.clone(),
+            deposit_txo.clone(),
         );
         // We can sign the transaction without the feebump input
         let mut emergency_tx_no_feebump =
-            EmergencyTransaction::new(vault_txin.clone(), None, emergency_address.clone(), 0)
+            EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)
                 .unwrap();
         let value_no_feebump =
             emergency_tx_no_feebump.inner_tx().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + vault_txin.max_sat_weight() as u64) * 22,
+            value_no_feebump + (376 + deposit_txin.max_sat_weight() as u64) * 22,
             deposit_value,
         );
         // We cannot get a sighash for a non-existing input
@@ -1301,9 +1305,13 @@ mod tests {
             },
             feebump_txo.clone(),
         );
-        let mut emergency_tx =
-            EmergencyTransaction::new(vault_txin, Some(feebump_txin), emergency_address.clone(), 0)
-                .unwrap();
+        let mut emergency_tx = EmergencyTransaction::new(
+            deposit_txin,
+            Some(feebump_txin),
+            emergency_address.clone(),
+            0,
+        )
+        .unwrap();
         let emergency_tx_sighash_feebump = emergency_tx
             .signature_hash_feebump_input(
                 1,
@@ -1334,17 +1342,17 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are finalized
-        let vault_txin = VaultTxIn::new(
+        let deposit_txin = DepositTxIn::new(
             OutPoint {
-                txid: vault_tx.0.txid(),
+                txid: deposit_tx.0.txid(),
                 vout: 0,
             },
-            vault_txo.clone(),
+            deposit_txo.clone(),
         );
-        let vault_txin_sat_cost = vault_txin.max_sat_weight();
+        let deposit_txin_sat_cost = deposit_txin.max_sat_weight();
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor, xpub_ctx);
         let mut unvault_tx = UnvaultTransaction::new(
-            vault_txin,
+            deposit_txin,
             &unvault_descriptor,
             &cpfp_descriptor,
             xpub_ctx,
@@ -1354,7 +1362,7 @@ mod tests {
         // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
         // feerate is sat/WU, and 30_000 is the CPFP output value.
         assert_eq!(
-            unvault_value + (548 + vault_txin_sat_cost as u64) * 6 + 30_000,
+            unvault_value + (548 + deposit_txin_sat_cost as u64) * 6 + 30_000,
             deposit_value,
         );
 
@@ -1365,7 +1373,7 @@ mod tests {
         assert_eq!(unvault_txin.txout().txout().value, unvault_value);
         // We can create it entirely without the feebump input
         let mut cancel_tx_without_feebump =
-            CancelTransaction::new(unvault_txin.clone(), None, &vault_descriptor, xpub_ctx, 0);
+            CancelTransaction::new(unvault_txin.clone(), None, &deposit_descriptor, xpub_ctx, 0);
         // Keep track of the fees we computed..
         let value_no_feebump = cancel_tx_without_feebump
             .inner_tx()
@@ -1402,7 +1410,7 @@ mod tests {
         let mut cancel_tx = CancelTransaction::new(
             unvault_txin,
             Some(feebump_txin),
-            &vault_descriptor,
+            &deposit_descriptor,
             xpub_ctx,
             0,
         );
