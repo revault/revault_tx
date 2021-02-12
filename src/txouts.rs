@@ -2,7 +2,10 @@
 //! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
-use crate::scripts::{CpfpDescriptor, DepositDescriptor, EmergencyAddress, UnvaultDescriptor};
+use crate::{
+    error::TxoutCreationError,
+    scripts::{CpfpDescriptor, DepositDescriptor, EmergencyAddress, UnvaultDescriptor},
+};
 
 use miniscript::{
     bitcoin::{Script, TxOut},
@@ -136,11 +139,15 @@ implem_revault_txout!(
 impl FeeBumpTxOut {
     /// Create a new FeeBumpTxOut, note that it's managed externally so we don't need a witness
     /// Script.
-    pub fn new(txout: TxOut) -> FeeBumpTxOut {
-        FeeBumpTxOut {
+    pub fn new(txout: TxOut) -> Result<FeeBumpTxOut, TxoutCreationError> {
+        if !txout.script_pubkey.is_v0_p2wpkh() {
+            return Err(TxoutCreationError::InvalidScriptPubkeyType);
+        }
+
+        Ok(FeeBumpTxOut {
             txout,
             witness_script: None,
-        }
+        })
     }
 }
 

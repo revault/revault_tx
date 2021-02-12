@@ -56,6 +56,9 @@ pub const DUST_LIMIT: u64 = 200_000;
 /// and the spend. This is 0.2BTC, or 3k€ currently.
 pub const INSANE_FEES: u64 = 20_000_000;
 
+/// This enables CSV and is easier to apply to all transactions anyways.
+pub const TX_VERSION: i32 = 2;
+
 /// A Revault transaction.
 ///
 /// Wraps a rust-bitcoin PSBT and defines some BIP174 roles as methods.
@@ -128,8 +131,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             .ok_or(InputSatisfactionError::OutOfBounds)
     }
 
-    // FIXME: parsing time checks! This function may (for now) panic when applied to an insane
-    // parsed PSBT
     /// Add a signature in order to eventually satisfy this input.
     /// Some sanity checks against the PSBT Input are done here, but no signature check.
     ///
@@ -196,6 +197,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
     }
 
+    // FIXME: this should clone for state consistency (miniscript will wipe the inputs'
+    // witness_script and witness_utxo)
     /// Check and satisfy the scripts, create the witnesses.
     ///
     /// The BIP174 Input Finalizer role.
@@ -208,20 +211,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         // and libbitcoinconsensus verification will fail. In this case it'll just get overidden at
         // the next call to finalize and nothing depends on it.
         let mut psbt = self.inner_tx_mut();
-
-        // We only create transactions with witness_utxo, and spend P2WPKH or P2WSH outputs.
-        assert!(psbt
-            .inputs
-            .iter()
-            .filter(|input| {
-                let utxo = input
-                    .witness_utxo
-                    .as_ref()
-                    .expect("PSBT input without witness_utxo");
-                !(utxo.script_pubkey.is_v0_p2wpkh() || utxo.script_pubkey.is_v0_p2wsh())
-            })
-            .next()
-            .is_none());
 
         miniscript::psbt::finalize(&mut psbt, ctx)
             .map_err(|e| Error::TransactionFinalisation(e.to_string()))?;
@@ -241,20 +230,19 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Verify an input of the transaction against libbitcoinconsensus out of the information
     /// contained in the PSBT input.
     fn verify_input(&self, input_index: usize) -> Result<(), Error> {
-        let (prev_scriptpubkey, prev_value) = self
+        let psbtin = self
             .inner_tx()
             .inputs
             .get(input_index)
-            .and_then(|psbtin| {
-                psbtin
-                    .witness_utxo
-                    .as_ref()
-                    .map(|utxo| (utxo.script_pubkey.as_bytes(), utxo.value))
-            })
             // It's not exactly an Input satisfaction error, but hey, out of bounds.
             .ok_or(Error::InputSatisfaction(
                 InputSatisfactionError::OutOfBounds,
             ))?;
+        let utxo = psbtin
+            .witness_utxo
+            .as_ref()
+            .expect("A witness_utxo is always set");
+        let (prev_scriptpubkey, prev_value) = (utxo.script_pubkey.as_bytes(), utxo.value);
 
         bitcoinconsensus::verify(
             prev_scriptpubkey,
@@ -291,7 +279,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Create a RevaultTransaction from a BIP174-serialized transaction.
-    fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, Error>;
+    fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError>;
 
     /// Get the BIP174-serialized (inner) transaction encoded in base64.
     fn as_psbt_string(&self) -> String {
@@ -299,7 +287,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Create a RevaultTransaction from a base64-encoded BIP174-serialized transaction.
-    fn from_psbt_str(psbt_str: &str) -> Result<Self, Error> {
+    fn from_psbt_str(psbt_str: &str) -> Result<Self, TransactionSerialisationError> {
         Self::from_psbt_serialized(&base64::decode(&psbt_str)?)
     }
 
@@ -332,9 +320,10 @@ macro_rules! impl_revault_transaction {
                 &mut self.0
             }
 
-            // TODO: move this to each transaction and perform actual checks..
-            fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, Error> {
-                Ok(Decodable::consensus_decode(raw_psbt).map(|psbt| $transaction_name(psbt))?)
+            fn from_psbt_serialized(
+                raw_psbt: &[u8],
+            ) -> Result<Self, TransactionSerialisationError> {
+                $transaction_name::from_raw_psbt(raw_psbt)
             }
         }
 
@@ -403,6 +392,144 @@ macro_rules! create_tx {
             )*],
         }
     }
+}
+
+// Sanity check a PSBT representing a RevaultTransaction, the part common to all transactions
+fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError> {
+    let inner_tx = &psbt.global.unsigned_tx;
+
+    if inner_tx.version != TX_VERSION {
+        return Err(PsbtValidationError::InvalidTransactionVersion(
+            inner_tx.version,
+        ));
+    }
+
+    let input_count = inner_tx.input.len();
+    let psbt_input_count = psbt.inputs.len();
+    if input_count != psbt_input_count {
+        return Err(PsbtValidationError::InputCountMismatch(
+            input_count,
+            psbt_input_count,
+        ));
+    }
+
+    let output_count = inner_tx.output.len();
+    let psbt_output_count = psbt.outputs.len();
+    if output_count != psbt_output_count {
+        return Err(PsbtValidationError::OutputCountMismatch(
+            output_count,
+            psbt_output_count,
+        ));
+    }
+
+    // None: unknown, Some(true): an input was final, Some(false) an input was non-final
+    let mut is_final = None;
+    for input in psbt.inputs.iter() {
+        // We restrict to native segwit, also for the external fee-bumping wallet.
+        if input.witness_utxo.is_none() {
+            return Err(PsbtValidationError::MissingWitnessUtxo(input.clone()));
+        }
+        let spk = &input.witness_utxo.as_ref().unwrap().script_pubkey;
+        if !(spk.is_v0_p2wsh() || spk.is_v0_p2wpkh()) {
+            return Err(PsbtValidationError::InvalidInputField(input.clone()));
+        }
+
+        if input.non_witness_utxo.is_some() {
+            return Err(PsbtValidationError::InvalidInputField(input.clone()));
+        }
+
+        if input.redeem_script.is_some() {
+            return Err(PsbtValidationError::InvalidInputField(input.clone()));
+        }
+
+        // Make sure it does not mix finalized and not finalized inputs
+        if input.final_script_witness.is_some() {
+            if is_final == Some(false) {
+                return Err(PsbtValidationError::PartiallyFinalized);
+            }
+            is_final = Some(true);
+        } else {
+            if is_final == Some(true) {
+                return Err(PsbtValidationError::PartiallyFinalized);
+            }
+            is_final = Some(false);
+        }
+    }
+
+    Ok(psbt)
+}
+
+fn find_revocationtx_input(inputs: &[PsbtIn]) -> Option<&PsbtIn> {
+    inputs.iter().find(|i| {
+        i.witness_utxo
+            .as_ref()
+            .map(|o| o.script_pubkey.is_v0_p2wsh())
+            == Some(true)
+    })
+}
+
+fn find_feebumping_input(inputs: &[PsbtIn]) -> Option<&PsbtIn> {
+    inputs.iter().find(|i| {
+        i.witness_utxo
+            .as_ref()
+            .map(|o| o.script_pubkey.is_v0_p2wpkh())
+            == Some(true)
+    })
+}
+
+// The Cancel, Emer and Unvault Emer are Revocation transactions
+fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
+    if input.final_script_witness.is_some() {
+        // Already final, sighash type and witness script are wiped
+        return Ok(());
+    }
+
+    // The revocation input must indicate that it wants to be signed with ACP
+    if input.sighash_type != Some(SigHashType::AllPlusAnyoneCanPay) {
+        return Err(PsbtValidationError::InvalidSighashType(input.clone()));
+    }
+
+    // The revocation input must contain a valid witness script
+    if let Some(ref ws) = input.witness_script {
+        if Some(&ws.to_v0_p2wsh()) != input.witness_utxo.as_ref().map(|w| &w.script_pubkey) {
+            return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()));
+        }
+    } else {
+        return Err(PsbtValidationError::MissingInWitnessScript(input.clone()));
+    }
+
+    Ok(())
+}
+
+// The Cancel, Emer and Unvault Emer are Revocation transactions, this checks the appended input to
+// bump the feerate.
+fn check_feebump_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
+    if input.final_script_witness.is_some() {
+        // Already final, sighash type and witness script are wiped
+        return Ok(());
+    }
+
+    // The feebump input must indicate that it wants to be signed with ALL
+    if input.sighash_type != Some(SigHashType::All) {
+        return Err(PsbtValidationError::InvalidSighashType(input.clone()));
+    }
+
+    // The feebump input must be P2WPKH
+    if input
+        .witness_utxo
+        .as_ref()
+        .map(|u| u.script_pubkey.is_v0_p2wpkh())
+        != Some(true)
+    {
+        return Err(PsbtValidationError::InvalidPrevoutType(input.clone()));
+    }
+
+    // And therefore must not have a witness script
+    if input.witness_script.is_some() {
+        return Err(PsbtValidationError::InvalidInputField(input.clone()));
+    }
+
+    Ok(())
 }
 
 impl_revault_transaction!(
@@ -521,6 +648,62 @@ impl UnvaultTransaction {
             prev_txout,
         )
     }
+
+    /// Parse an Unvault transaction from a PSBT
+    pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
+        let psbt = Decodable::consensus_decode(raw_psbt)?;
+        let psbt = psbt_common_sanity_checks(psbt)?;
+
+        // Unvault + CPFP txos
+        let output_count = psbt.global.unsigned_tx.output.len();
+        if output_count != 2 {
+            return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
+        }
+
+        let input_count = psbt.global.unsigned_tx.input.len();
+        // We for now have 1 unvault == 1 deposit
+        if input_count != 1 {
+            return Err(PsbtValidationError::InvalidInputCount(input_count).into());
+        }
+        let input = &psbt.inputs[0];
+        if input.final_script_witness.is_none() {
+            if input.sighash_type != Some(SigHashType::All) {
+                return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
+            }
+            if let Some(ref ws) = input.witness_script {
+                if ws.to_v0_p2wsh()
+                    != input
+                        .witness_utxo
+                        .as_ref()
+                        .expect("Check in sanity checks")
+                        .script_pubkey
+                {
+                    return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()).into());
+                }
+            } else {
+                return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
+            }
+        }
+
+        // We only create P2WSH txos
+        for (index, psbtout) in psbt.outputs.iter().enumerate() {
+            if psbtout.witness_script.is_none() {
+                return Err(PsbtValidationError::MissingOutWitnessScript(psbtout.clone()).into());
+            }
+
+            if psbtout.redeem_script.is_some() {
+                return Err(PsbtValidationError::InvalidOutputField(psbtout.clone()).into());
+            }
+
+            if psbt.global.unsigned_tx.output[index].script_pubkey
+                != psbtout.witness_script.as_ref().unwrap().to_v0_p2wsh()
+            {
+                return Err(PsbtValidationError::InvalidOutWitnessScript(psbtout.clone()).into());
+            }
+        }
+
+        Ok(UnvaultTransaction(psbt))
+    }
 }
 
 impl_revault_transaction!(
@@ -586,6 +769,59 @@ impl CancelTransaction {
                 lock_time,
             )
         })
+    }
+
+    /// Parse a Cancel transaction from a PSBT
+    pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
+        let psbt = Decodable::consensus_decode(raw_psbt)?;
+        let psbt = psbt_common_sanity_checks(psbt)?;
+
+        // Deposit txo
+        let output_count = psbt.global.unsigned_tx.output.len();
+        if output_count != 1 {
+            return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
+        }
+
+        // Deposit txo is P2WSH
+        let output = &psbt.outputs[0];
+        if output.witness_script.is_none() {
+            return Err(PsbtValidationError::MissingOutWitnessScript(output.clone()).into());
+        }
+        if output.redeem_script.is_some() {
+            return Err(PsbtValidationError::InvalidOutputField(output.clone()).into());
+        }
+
+        let input_count = psbt.global.unsigned_tx.input.len();
+        if input_count > 2 {
+            return Err(PsbtValidationError::InvalidInputCount(input_count).into());
+        }
+        if input_count > 1 {
+            let input = find_feebumping_input(&psbt.inputs)
+                .ok_or(PsbtValidationError::MissingFeeBumpingInput)?;
+            check_feebump_input(&input)?;
+        }
+        let input = find_revocationtx_input(&psbt.inputs)
+            .ok_or(PsbtValidationError::MissingRevocationInput)?;
+        check_revocationtx_input(&input)?;
+
+        // We only create P2WSH txos
+        for (index, psbtout) in psbt.outputs.iter().enumerate() {
+            if psbtout.witness_script.is_none() {
+                return Err(PsbtValidationError::MissingOutWitnessScript(psbtout.clone()).into());
+            }
+
+            if psbtout.redeem_script.is_some() {
+                return Err(PsbtValidationError::InvalidOutputField(psbtout.clone()).into());
+            }
+
+            if psbt.global.unsigned_tx.output[index].script_pubkey
+                != psbtout.witness_script.as_ref().unwrap().to_v0_p2wsh()
+            {
+                return Err(PsbtValidationError::InvalidOutWitnessScript(psbtout.clone()).into());
+            }
+        }
+
+        Ok(CancelTransaction(psbt))
     }
 }
 
@@ -655,6 +891,33 @@ impl EmergencyTransaction {
             },
         ))
     }
+
+    /// Parse an Emergency transaction from a PSBT
+    pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
+        let psbt = Decodable::consensus_decode(raw_psbt)?;
+        let psbt = psbt_common_sanity_checks(psbt)?;
+
+        // Emergency txo
+        let output_count = psbt.global.unsigned_tx.output.len();
+        if output_count != 1 {
+            return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
+        }
+
+        let input_count = psbt.global.unsigned_tx.input.len();
+        if input_count > 2 {
+            return Err(PsbtValidationError::InvalidInputCount(input_count).into());
+        }
+        if input_count > 1 {
+            let input = find_feebumping_input(&psbt.inputs)
+                .ok_or(PsbtValidationError::MissingFeeBumpingInput)?;
+            check_feebump_input(&input)?;
+        }
+        let input = find_revocationtx_input(&psbt.inputs)
+            .ok_or(PsbtValidationError::MissingRevocationInput)?;
+        check_revocationtx_input(&input)?;
+
+        Ok(EmergencyTransaction(psbt))
+    }
 }
 
 impl_revault_transaction!(
@@ -720,6 +983,33 @@ impl UnvaultEmergencyTransaction {
             )
         })
     }
+
+    /// Parse an UnvaultEmergency transaction from a PSBT
+    pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
+        let psbt = Decodable::consensus_decode(raw_psbt)?;
+        let psbt = psbt_common_sanity_checks(psbt)?;
+
+        // Emergency txo
+        let output_count = psbt.global.unsigned_tx.output.len();
+        if output_count != 1 {
+            return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
+        }
+
+        let input_count = psbt.global.unsigned_tx.input.len();
+        if input_count > 2 {
+            return Err(PsbtValidationError::InvalidInputCount(input_count).into());
+        }
+        if input_count > 1 {
+            let input = find_feebumping_input(&psbt.inputs)
+                .ok_or(PsbtValidationError::MissingFeeBumpingInput)?;
+            check_feebump_input(&input)?;
+        }
+        let input = find_revocationtx_input(&psbt.inputs)
+            .ok_or(PsbtValidationError::MissingRevocationInput)?;
+        check_revocationtx_input(&input)?;
+
+        Ok(UnvaultEmergencyTransaction(psbt))
+    }
 }
 
 impl_revault_transaction!(
@@ -773,7 +1063,7 @@ impl SpendTransaction {
         let mut psbt = Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
-                    version: 2,
+                    version: TX_VERSION,
                     lock_time,
                     input: unvault_inputs
                         .iter()
@@ -826,6 +1116,38 @@ impl SpendTransaction {
         cpfp_txo.value = cpfp_value;
 
         SpendTransaction(psbt)
+    }
+
+    /// Parse a Spend transaction from a PSBT
+    pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
+        let psbt = Decodable::consensus_decode(raw_psbt)?;
+        let psbt = psbt_common_sanity_checks(psbt)?;
+
+        if psbt.inputs.len() < 1 {
+            return Err(PsbtValidationError::InvalidInputCount(0).into());
+        }
+
+        for input in psbt.inputs.iter() {
+            if input.final_script_witness.is_some() {
+                continue;
+            }
+
+            if input.sighash_type != Some(SigHashType::All) {
+                return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
+            }
+
+            // The revocation input must contain a valid witness script
+            if let Some(ref ws) = input.witness_script {
+                if Some(&ws.to_v0_p2wsh()) != input.witness_utxo.as_ref().map(|w| &w.script_pubkey)
+                {
+                    return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()).into());
+                }
+            } else {
+                return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
+            }
+        }
+
+        Ok(SpendTransaction(psbt))
     }
 }
 
@@ -1203,7 +1525,8 @@ mod tests {
                 script_pubkey: feebump_descriptor.script_pubkey(xpub_ctx),
             }],
         };
-        let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone());
+        let feebump_txo =
+            FeeBumpTxOut::new(raw_feebump_tx.output[0].clone()).expect("It is a p2wpkh");
         let feebump_tx = FeeBumpTransaction(raw_feebump_tx);
 
         // Create and sign the first (deposit) emergency transaction
@@ -1218,6 +1541,7 @@ mod tests {
         let mut emergency_tx_no_feebump =
             EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)
                 .unwrap();
+
         let value_no_feebump =
             emergency_tx_no_feebump.inner_tx().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
@@ -1671,7 +1995,7 @@ mod tests {
         Ok(())
     }
 
-    // Just a small sanity check against bitcoind's converttopsbt and finalizepsbt
+    // Small sanity checks, see fuzzing targets for more.
     #[cfg(feature = "use-serde")]
     #[test]
     fn test_deserialize_psbt() {
