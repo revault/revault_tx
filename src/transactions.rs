@@ -229,6 +229,41 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         Ok(())
     }
 
+    /// Check the transaction is valid (fully-signed) and can be finalized.
+    /// Slighty more efficient than calling [finalize] on a clone as it gets rid of the
+    /// belt-and-suspenders checks.
+    fn is_finalizable(&self, ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>) -> bool {
+        miniscript::psbt::finalize(&mut self.inner_tx().clone(), ctx).is_ok()
+    }
+
+    /// Check if the transaction was already finalized.
+    fn is_finalized(&self) -> bool {
+        for i in self.inner_tx().inputs.iter() {
+            if i.final_script_witness.is_some() {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// Check the transaction is valid
+    fn is_valid(&self, ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>) -> bool {
+        if !self.is_finalized() {
+            return false;
+        }
+
+        // Miniscript's finalize does not check against libbitcoinconsensus. And we are better safe
+        // than sorry when dealing with Script ...
+        for i in 0..self.inner_tx().inputs.len() {
+            if self.verify_input(i).is_err() {
+                return false;
+            }
+        }
+
+        miniscript::psbt::interpreter_check(&self.inner_tx(), ctx).is_ok()
+    }
+
     /// Verify an input of the transaction against libbitcoinconsensus out of the information
     /// contained in the PSBT input.
     fn verify_input(&self, input_index: usize) -> Result<(), Error> {
