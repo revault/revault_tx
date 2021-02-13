@@ -116,19 +116,18 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         sighash_type: SigHashType,
     ) -> Result<SigHash, InputSatisfactionError> {
         let psbt = self.inner_tx();
+        let psbtin = psbt
+            .inputs
+            .get(input_index)
+            .ok_or(InputSatisfactionError::OutOfBounds)?;
+
         // TODO: maybe cache the cache at some point (for huge spend txs)
         let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
-
-        psbt.inputs
-            .get(input_index)
-            .map(|psbtin| {
-                let prev_txo = psbtin
-                    .witness_utxo
-                    .as_ref()
-                    .expect("We always set witness_utxo");
-                cache.signature_hash(input_index, &script_code, prev_txo.value, sighash_type)
-            })
-            .ok_or(InputSatisfactionError::OutOfBounds)
+        let prev_txo = psbtin
+            .witness_utxo
+            .as_ref()
+            .expect("We always set witness_utxo");
+        Ok(cache.signature_hash(input_index, &script_code, prev_txo.value, sighash_type))
     }
 
     /// Add a signature in order to eventually satisfy this input.
@@ -148,6 +147,12 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             .inputs
             .get_mut(input_index)
             .ok_or(InputSatisfactionError::OutOfBounds)?;
+
+        // If we were already finalized, our witness script was wiped.
+        if psbtin.final_script_witness.is_some() {
+            return Err(InputSatisfactionError::AlreadyFinalized);
+        }
+
         // BIP174:
         // For a Signer to only produce valid signatures for what it expects to sign, it must
         // check that the following conditions are true:
@@ -197,8 +202,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
     }
 
-    // FIXME: this should clone for state consistency (miniscript will wipe the inputs'
-    // witness_script and witness_utxo)
     /// Check and satisfy the scripts, create the witnesses.
     ///
     /// The BIP174 Input Finalizer role.
@@ -206,10 +209,9 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         &mut self,
         ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>,
     ) -> Result<(), Error> {
-        // We could operate on a clone for state consistency in case of error. However we never
-        // leave the PSBT in an inconsistent state: worst case the final_script_witness will be set
-        // and libbitcoinconsensus verification will fail. In this case it'll just get overidden at
-        // the next call to finalize and nothing depends on it.
+        // We could operate on a clone for state consistency in case of error. But we can only end
+        // up in an inconsistent state if miniscript's interpreter checks pass but not
+        // libbitcoinconsensus' one.
         let mut psbt = self.inner_tx_mut();
 
         miniscript::psbt::finalize(&mut psbt, ctx)
