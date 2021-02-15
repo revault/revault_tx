@@ -1224,6 +1224,34 @@ impl DepositTransaction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeeBumpTransaction(pub Transaction);
 
+/// Get the chain of pre-signed transaction out of a deposit available for a manager.
+/// No feebump input.
+pub fn transaction_chain_manager<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    deposit_txin: DepositTxIn,
+    deposit_descriptor: &DepositDescriptor<Pk>,
+    unvault_descriptor: &UnvaultDescriptor<Pk>,
+    cpfp_descriptor: &CpfpDescriptor<Pk>,
+    to_pk_ctx: ToPkCtx,
+    lock_time: u32,
+    unvault_csv: u32,
+) -> Result<(UnvaultTransaction, CancelTransaction), Error> {
+    let unvault_tx = UnvaultTransaction::new(
+        deposit_txin.clone(),
+        &unvault_descriptor,
+        &cpfp_descriptor,
+        to_pk_ctx,
+        lock_time,
+    )?;
+    let cancel_tx = CancelTransaction::new(
+        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
+        None,
+        &deposit_descriptor,
+        to_pk_ctx,
+        lock_time,
+    );
+
+    Ok((unvault_tx, cancel_tx))
+}
 /// Get the entire chain of pre-signed transaction out of a deposit. No feebump input.
 pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
     deposit_txin: DepositTxIn,
@@ -1243,20 +1271,15 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     ),
     Error,
 > {
-    let unvault_tx = UnvaultTransaction::new(
+    let (unvault_tx, cancel_tx) = transaction_chain_manager(
         deposit_txin.clone(),
-        &unvault_descriptor,
-        &cpfp_descriptor,
+        deposit_descriptor,
+        unvault_descriptor,
+        cpfp_descriptor,
         to_pk_ctx,
         lock_time,
+        unvault_csv,
     )?;
-    let cancel_tx = CancelTransaction::new(
-        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
-        None,
-        &deposit_descriptor,
-        to_pk_ctx,
-        lock_time,
-    );
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
@@ -1270,7 +1293,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
 }
 
 /// Get a spend transaction out of a list of deposits.
-pub fn spend_tx_from_deposit<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+pub fn spend_tx_from_deposits<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
     deposit_txins: Vec<DepositTxIn>,
     spend_txos: Vec<SpendTxOut>,
     unvault_descriptor: &UnvaultDescriptor<Pk>,
