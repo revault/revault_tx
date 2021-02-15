@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
         tx.as_psbt_serialized();
 
         // We can network serialize it (without witness data)
-        tx.as_bitcoin_serialized();
+        tx.clone().into_bitcoin_serialized();
 
         let dummykey = PublicKey::from_str(
             "02ca06be8e497d578314c77ca735aa5fcca76d8a5b04019b7a80ff0baaf4a6cf46",
