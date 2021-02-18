@@ -34,6 +34,20 @@ jobs:
           RUSTFLAGS: "-C link-dead-code"
         run: cargo test --verbose --color always
 
+  fuzztesting:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+      - name: Install Rust nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          profile: minimal
+      - name: Run fuzz testing script
+        run: ./fuzz/run.sh
+
   grcov:
     runs-on: ubuntu-latest
     steps:

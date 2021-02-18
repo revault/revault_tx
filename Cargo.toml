@@ -7,7 +7,7 @@ repository = "https://github.com/re-vault/revault_tx"
 license-file = "LICENCE"
 keywords = ["revault", "bitcoin", "vault"]
 description = "Bitcoin Script descriptors and transactions creation routines for Revault"
-exclude = [".github/"]
+exclude = [".github/", "fuzz"]
 
 [features]
 use-serde = ["serde", "miniscript/use-serde"]
