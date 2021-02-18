@@ -22,6 +22,9 @@ use miniscript::{
 
 use std::fmt;
 
+#[cfg(feature = "use-serde")]
+use serde::de;
+
 // These are useful to create TxOuts out of the right Script descriptor
 
 macro_rules! impl_descriptor_newtype {
@@ -261,6 +264,17 @@ impl fmt::Display for EmergencyAddress {
     }
 }
 
+#[cfg(feature = "use-serde")]
+impl<'de> de::Deserialize<'de> for EmergencyAddress {
+    fn deserialize<D>(deserializer: D) -> Result<EmergencyAddress, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let addr = Address::deserialize(deserializer)?;
+        EmergencyAddress::from(addr).map_err(de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{cpfp_descriptor, deposit_descriptor, unvault_descriptor, ScriptCreationError};
@@ -451,5 +465,31 @@ mod tests {
                 CompilerError::LimitsExceeded
             ))
         );
+    }
+
+    #[cfg(feature = "use-serde")]
+    #[test]
+    fn serde_parse_emer_address() {
+        use super::EmergencyAddress;
+
+        serde_json::from_str::<EmergencyAddress>(
+            "\"bcrt1qrht43q4xt59vr9jytlmckgde6rcvhxcp392kx9\"",
+        )
+        .expect_err("P2WPKH");
+        serde_json::from_str::<EmergencyAddress>(
+            "\"bcrt1q5k05km5zn2g7kp0c230r0g8znuhlk4yynne3pwklh6xl82ed087sgr902c\"",
+        )
+        .expect("P2WSH");
+
+        serde_json::from_str::<EmergencyAddress>("\"1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY\"")
+            .expect_err("P2PKH");
+        serde_json::from_str::<EmergencyAddress>("\"3DoB8fDRHcNxLCBcgLTvrpfQD5amk6sUce\"")
+            .expect_err("P2SH");
+        serde_json::from_str::<EmergencyAddress>("\"bc1qw3w0nt60tzh4xqdhx7hmf5uh0nczxhcr8lt7ec\"")
+            .expect_err("P2WPKH (mainnet)");
+        serde_json::from_str::<EmergencyAddress>(
+            "\"bc1qnz0msqjqaw59zex2aw00rm565yg0rlpc5h3dvtps38w60ggw0seqwgjaa6\"",
+        )
+        .expect("P2WSH (mainnet)");
     }
 }
