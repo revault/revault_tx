@@ -68,11 +68,17 @@ pub const TX_VERSION: i32 = 2;
 /// - Finalizer
 /// - Extractor and serializer
 pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
+    // TODO: Eventually, we could not expose it and only have wrappers to access
+    // the PSBT informations
     /// Get the inner transaction
     fn inner_tx(&self) -> &Psbt;
 
+    // FIXME: don't expose this. Maybe a private trait?
     /// Get the inner transaction
     fn inner_tx_mut(&mut self) -> &mut Psbt;
+
+    /// Move inner transaction out
+    fn into_psbt(self) -> Psbt;
 
     /// Get the sighash for an input spending an internal Revault TXO.
     /// **Do not use it for fee bumping inputs, use [signature_hash_feebump_input] instead**
@@ -284,22 +290,23 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         bitcoinconsensus::verify(
             prev_scriptpubkey,
             prev_value,
-            self.as_bitcoin_serialized().as_slice(),
+            // FIXME: we could change this method to be verify_tx() and not clone() for each
+            // input..
+            self.clone().into_bitcoin_serialized().as_slice(),
             input_index,
         )
         .map_err(|e| e.into())
     }
 
     // FIXME: should probably be into_bitcoin_serialized and not clone()
-    /// Get the network-serialized (inner) transaction. You likely want to call
-    /// [RevaultTransaction.finalize] before serializing the transaction.
+    /// Get the network-serialized (inner) transaction. You likely want to be sure
+    /// the transaction [RevaultTransaction.is_finalized] before serializing it.
     ///
     /// The BIP174 Transaction Extractor (without any check, which are done in
     /// [RevaultTransaction.finalize]).
-    fn as_bitcoin_serialized(&self) -> Vec<u8> {
+    fn into_bitcoin_serialized(self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(256);
-        self.inner_tx()
-            .clone()
+        self.into_psbt()
             .extract_tx()
             .consensus_encode(&mut buf)
             .expect("We only create valid PSBT, serialization cannot fail");
@@ -330,7 +337,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Get the hexadecimal representation of the transaction as used by the bitcoind API.
     fn hex(&self) -> String {
-        let buff = self.as_bitcoin_serialized();
+        let buff = self.clone().into_bitcoin_serialized();
         let mut as_hex = String::with_capacity(buff.len() * 2);
 
         for byte in buff.into_iter() {
@@ -355,6 +362,10 @@ macro_rules! impl_revault_transaction {
 
             fn inner_tx_mut(&mut self) -> &mut Psbt {
                 &mut self.0
+            }
+
+            fn into_psbt(self) -> Psbt {
+                self.0
             }
 
             fn from_psbt_serialized(
@@ -1213,6 +1224,34 @@ impl DepositTransaction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeeBumpTransaction(pub Transaction);
 
+/// Get the chain of pre-signed transaction out of a deposit available for a manager.
+/// No feebump input.
+pub fn transaction_chain_manager<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    deposit_txin: DepositTxIn,
+    deposit_descriptor: &DepositDescriptor<Pk>,
+    unvault_descriptor: &UnvaultDescriptor<Pk>,
+    cpfp_descriptor: &CpfpDescriptor<Pk>,
+    to_pk_ctx: ToPkCtx,
+    lock_time: u32,
+    unvault_csv: u32,
+) -> Result<(UnvaultTransaction, CancelTransaction), Error> {
+    let unvault_tx = UnvaultTransaction::new(
+        deposit_txin.clone(),
+        &unvault_descriptor,
+        &cpfp_descriptor,
+        to_pk_ctx,
+        lock_time,
+    )?;
+    let cancel_tx = CancelTransaction::new(
+        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
+        None,
+        &deposit_descriptor,
+        to_pk_ctx,
+        lock_time,
+    );
+
+    Ok((unvault_tx, cancel_tx))
+}
 /// Get the entire chain of pre-signed transaction out of a deposit. No feebump input.
 pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
     deposit_txin: DepositTxIn,
@@ -1232,20 +1271,15 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     ),
     Error,
 > {
-    let unvault_tx = UnvaultTransaction::new(
+    let (unvault_tx, cancel_tx) = transaction_chain_manager(
         deposit_txin.clone(),
-        &unvault_descriptor,
-        &cpfp_descriptor,
+        deposit_descriptor,
+        unvault_descriptor,
+        cpfp_descriptor,
         to_pk_ctx,
         lock_time,
+        unvault_csv,
     )?;
-    let cancel_tx = CancelTransaction::new(
-        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
-        None,
-        &deposit_descriptor,
-        to_pk_ctx,
-        lock_time,
-    );
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
@@ -1259,7 +1293,7 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
 }
 
 /// Get a spend transaction out of a list of deposits.
-pub fn spend_tx_from_deposit<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+pub fn spend_tx_from_deposits<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
     deposit_txins: Vec<DepositTxIn>,
     spend_txos: Vec<SpendTxOut>,
     unvault_descriptor: &UnvaultDescriptor<Pk>,
