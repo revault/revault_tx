@@ -11,7 +11,7 @@
 //! are non-deterministically compiled from an abstract policy.
 //! Backup the output Miniscript descriptors instead.
 
-use crate::Error;
+use crate::error::*;
 
 use miniscript::{
     bitcoin::{util::bip32, Address},
@@ -89,11 +89,9 @@ impl_descriptor_newtype!(
 /// bug.
 pub fn deposit_descriptor<Pk: MiniscriptKey>(
     participants: Vec<Pk>,
-) -> Result<DepositDescriptor<Pk>, Error> {
+) -> Result<DepositDescriptor<Pk>, ScriptCreationError> {
     if participants.len() < 2 {
-        return Err(Error::ScriptCreation(
-            "Deposit: bad parameters. We need more than one participant.".to_string(),
-        ));
+        return Err(ScriptCreationError::BadParameters);
     }
 
     let pubkeys = participants
@@ -104,13 +102,8 @@ pub fn deposit_descriptor<Pk: MiniscriptKey>(
     let policy = Policy::Threshold(pubkeys.len(), pubkeys);
 
     // This handles the non-safe or malleable cases.
-    match policy.compile::<Segwitv0>() {
-        Err(compile_err) => Err(Error::ScriptCreation(format!(
-            "Deposit policy compilation error: {}",
-            compile_err
-        ))),
-        Ok(miniscript) => Ok(DepositDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
-    }
+    let ms = policy.compile::<Segwitv0>()?;
+    Ok(DepositDescriptor(Descriptor::<Pk>::Wsh(ms)))
 }
 
 /// Get the miniscript descriptors for the unvault outputs.
@@ -170,27 +163,17 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
     managers_threshold: usize,
     cosigners: Vec<Pk>,
     csv_value: u32,
-) -> Result<UnvaultDescriptor<Pk>, Error> {
+) -> Result<UnvaultDescriptor<Pk>, ScriptCreationError> {
     if stakeholders.is_empty() || managers.is_empty() || cosigners.len() != stakeholders.len() {
-        return Err(Error::ScriptCreation(
-            "Unvault: bad parameters. There must be a non-zero \
-                number of managers and non_managers, and as many cosigners as non_managers"
-                .to_string(),
-        ));
+        return Err(ScriptCreationError::BadParameters);
     }
 
     if managers_threshold > managers.len() {
-        return Err(Error::ScriptCreation(
-            "Unvault: bad parameters. The managers threshold is higher than \
-                the number of managers."
-                .to_owned(),
-        ));
+        return Err(ScriptCreationError::BadParameters);
     }
 
     if (csv_value & (1 << 22)) != 0 {
-        return Err(Error::ScriptCreation(
-            "Unvault: bad parameters. The CSV must be specified in block granularity".to_owned(),
-        ));
+        return Err(ScriptCreationError::BadParameters);
     }
 
     let mut pubkeys = managers
@@ -221,13 +204,8 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
     ]);
 
     // This handles the non-safe or malleable cases.
-    match policy.compile::<Segwitv0>() {
-        Err(compile_err) => Err(Error::ScriptCreation(format!(
-            "Unvault policy compilation error: {}",
-            compile_err
-        ))),
-        Ok(miniscript) => Ok(UnvaultDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
-    }
+    let ms = policy.compile::<Segwitv0>()?;
+    Ok(UnvaultDescriptor(Descriptor::<Pk>::Wsh(ms)))
 }
 
 /// Get the miniscript descriptor for the unvault transaction CPFP output.
@@ -237,7 +215,9 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
 /// # Errors
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescriptor<Pk>, Error> {
+pub fn cpfp_descriptor<Pk: MiniscriptKey>(
+    managers: Vec<Pk>,
+) -> Result<CpfpDescriptor<Pk>, ScriptCreationError> {
     let pubkeys = managers
         .into_iter()
         .map(Policy::Key)
@@ -246,13 +226,8 @@ pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescr
     let policy = Policy::Threshold(1, pubkeys);
 
     // This handles the non-safe or malleable cases.
-    match policy.compile::<Segwitv0>() {
-        Err(compile_err) => Err(Error::ScriptCreation(format!(
-            "CPFP policy compilation error: {}",
-            compile_err
-        ))),
-        Ok(miniscript) => Ok(CpfpDescriptor(Descriptor::<Pk>::Wsh(miniscript))),
-    }
+    let ms = policy.compile::<Segwitv0>()?;
+    Ok(CpfpDescriptor(Descriptor::<Pk>::Wsh(ms)))
 }
 
 /// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
@@ -261,13 +236,11 @@ pub fn cpfp_descriptor<Pk: MiniscriptKey>(managers: Vec<Pk>) -> Result<CpfpDescr
 pub struct EmergencyAddress(Address);
 impl EmergencyAddress {
     /// Create a new Emergency Address. Will error if the address isn't a v0 P2WSH
-    pub fn from(address: Address) -> Result<EmergencyAddress, Error> {
+    pub fn from(address: Address) -> Result<EmergencyAddress, ScriptCreationError> {
         if address.script_pubkey().is_v0_p2wsh() {
             Ok(EmergencyAddress(address))
         } else {
-            Err(Error::ScriptCreation(
-                "The Emergency address must be a v0 P2WSH".to_string(),
-            ))
+            Err(ScriptCreationError::BadParameters)
         }
     }
 
@@ -290,14 +263,17 @@ impl fmt::Display for EmergencyAddress {
 
 #[cfg(test)]
 mod tests {
-    use super::{cpfp_descriptor, deposit_descriptor, unvault_descriptor, Error};
+    use super::{cpfp_descriptor, deposit_descriptor, unvault_descriptor, ScriptCreationError};
 
-    use miniscript::bitcoin::{
-        secp256k1::{
-            self,
-            rand::{rngs::SmallRng, FromEntropy},
+    use miniscript::{
+        bitcoin::{
+            secp256k1::{
+                self,
+                rand::{rngs::SmallRng, FromEntropy},
+            },
+            PublicKey,
         },
-        PublicKey,
+        policy::compiler::CompilerError,
     };
 
     fn get_random_pubkey(rng: &mut SmallRng) -> PublicKey {
@@ -379,9 +355,7 @@ mod tests {
 
         assert_eq!(
             deposit_descriptor(vec![get_random_pubkey(&mut rng)]),
-            Err(Error::ScriptCreation(
-                "Deposit: bad parameters. We need more than one participant.".to_string()
-            ))
+            Err(ScriptCreationError::BadParameters)
         );
 
         assert_eq!(
@@ -392,11 +366,7 @@ mod tests {
                 vec![get_random_pubkey(&mut rng), get_random_pubkey(&mut rng)],
                 6
             ),
-            Err(Error::ScriptCreation(
-                "Unvault: bad parameters. There must be a non-zero \
-                number of managers and non_managers, and as many cosigners as non_managers"
-                    .to_string()
-            ))
+            Err(ScriptCreationError::BadParameters)
         );
 
         assert_eq!(
@@ -407,10 +377,7 @@ mod tests {
                 vec![get_random_pubkey(&mut rng)],
                 4194305
             ),
-            Err(Error::ScriptCreation(
-                "Unvault: bad parameters. The CSV must be specified in block granularity"
-                    .to_owned()
-            ))
+            Err(ScriptCreationError::BadParameters)
         );
 
         assert_eq!(
@@ -421,10 +388,7 @@ mod tests {
                 vec![get_random_pubkey(&mut rng)],
                 4194305
             ),
-            Err(Error::ScriptCreation(
-                "Unvault: bad parameters. The managers threshold is higher than the number of managers."
-                    .to_owned()
-            ))
+            Err(ScriptCreationError::BadParameters)
         );
 
         // Maximum N-of-N
@@ -438,10 +402,8 @@ mod tests {
             .collect::<Vec<PublicKey>>();
         assert_eq!(
             deposit_descriptor(participants),
-            Err(Error::ScriptCreation(
-                "Deposit policy compilation error: At least one spending path \
-                    has exceeded the standardness or consensus limits"
-                    .to_string()
+            Err(ScriptCreationError::PolicyCompilation(
+                CompilerError::LimitsExceeded
             ))
         );
 
@@ -456,10 +418,8 @@ mod tests {
             .collect::<Vec<PublicKey>>();
         assert_eq!(
             cpfp_descriptor(managers),
-            Err(Error::ScriptCreation(
-                "CPFP policy compilation error: At least one spending path has \
-                    exceeded the standardness or consensus limits"
-                    .to_string()
+            Err(ScriptCreationError::PolicyCompilation(
+                CompilerError::LimitsExceeded
             ))
         );
 
@@ -487,10 +447,8 @@ mod tests {
             .collect::<Vec<PublicKey>>();
         assert_eq!(
             unvault_descriptor(stakeholders, managers, 2, cosigners, 32),
-            Err(Error::ScriptCreation(
-                "Unvault policy compilation error: At least one spending path \
-                 has exceeded the standardness or consensus limits"
-                    .to_string()
+            Err(ScriptCreationError::PolicyCompilation(
+                CompilerError::LimitsExceeded
             ))
         );
     }

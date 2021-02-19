@@ -2,13 +2,12 @@
 //!
 //! Revault-specific Bitcoin scripts and transactions routines.
 
-#![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub use miniscript;
 pub use miniscript::bitcoin;
 
-mod error;
+pub mod error;
 pub use error::Error;
 
 pub mod scripts;

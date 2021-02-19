@@ -1,0 +1,51 @@
+
+[package]
+name = "revault_tx-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.3"
+secp256k1 = { version = "0.20.1", features = ["global-context"] }
+
+[dependencies.revault_tx]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse_cancel"
+path = "fuzz_targets/parse_cancel.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_emergency"
+path = "fuzz_targets/parse_emergency.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_unvault_emergency"
+path = "fuzz_targets/parse_unvault_emergency.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_spend"
+path = "fuzz_targets/parse_spend.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_unvault"
+path = "fuzz_targets/parse_unvault.rs"
+test = false
+doc = false
