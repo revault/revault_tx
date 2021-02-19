@@ -298,7 +298,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         .map_err(|e| e.into())
     }
 
-    // FIXME: should probably be into_bitcoin_serialized and not clone()
     /// Get the network-serialized (inner) transaction. You likely want to be sure
     /// the transaction [RevaultTransaction.is_finalized] before serializing it.
     ///
@@ -1069,6 +1068,9 @@ impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
     /// txouts (destination and change) in addition to the CPFP one..
     ///
+    /// Note: fees are *not* checked in the constructor and sanity-checking them is the
+    /// responsibility of the caller.
+    ///
     /// BIP174 Creator and Updater roles.
     pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         unvault_inputs: Vec<UnvaultTxIn>,
@@ -1141,8 +1143,6 @@ impl SpendTransaction {
                 })
                 .collect(),
         };
-
-        // FIXME: Insane fees ? Anyone?
 
         // We only need to modify the unsigned_tx global's output value as the PSBT outputs only
         // contain the witness script.
