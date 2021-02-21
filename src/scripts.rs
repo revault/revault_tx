@@ -175,7 +175,9 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
         return Err(ScriptCreationError::BadParameters);
     }
 
-    if (csv_value & (1 << 22)) != 0 {
+    // We require the locktime to be in number of blocks, and of course to not be disabled.
+    // TODO: use rust-miniscript's constants after upgrading!
+    if (csv_value & (1 << 31)) != 0 || (csv_value & (1 << 22)) != 0 {
         return Err(ScriptCreationError::BadParameters);
     }
 

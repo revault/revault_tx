@@ -1474,8 +1474,7 @@ mod tests {
     fn test_transaction_chain() {
         let secp = secp256k1::Secp256k1::new();
         let mut rng = SmallRng::from_entropy();
-        // FIXME: if the CSV is high enough it would trigger a different error in the invalid
-        // spend!
+        // FIXME: Miniscript mask for sequence check is bugged in this version. Uncomment when upgrading.
         // let csv = rng.next_u32() % (1 << 22);
         let csv = rng.next_u32() % (1 << 16);
 
@@ -1944,9 +1943,12 @@ mod tests {
         )?;
         match spend_tx.finalize(&secp) {
             Err(e) => assert!(
+                // FIXME: uncomment when upgrading miniscript
+                //e.to_string().contains("required relative locktime CSV"),
                 e.to_string().contains("could not satisfy at index 0"),
-                "Invalid error: got '{}'",
-                e
+                "Invalid error: got '{}' \n {:#?}",
+                e,
+                spend_tx
             ),
             Ok(_) => unreachable!(),
         }
