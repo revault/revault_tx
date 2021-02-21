@@ -6,16 +6,20 @@ high level of rigor, so it could take some time (and backs and forths) to polish
 contribution before it's ready for merge.
 
 
-# Communication
+## Communication
 
-Most of the communication is done on GitHub (we'll setup more channels as the project
-grows).
+Most of the communication is done on GitHub or on the `#revault` IRC channel on freenode.
 
 Don't hesitate to open issues to ask questions or conceptually discuss a change
 before going forward with the implementation if it is non-trivial.
 
 
-# Workflow
+## Looking for contributions
+
+If you are looking for first time contributions, you can `git grep` for `FIXME`s and `TODO`s
+as well as checking out the [good first issues](https://github.com/re-vault/revault_tx/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) on the issue tracker.
+
+## Workflow
 
 The codebase is maintained using the "contributor workflow" where everyone
 without exception contributes patch proposals using "pull requests" (PRs). This
@@ -49,7 +53,7 @@ be reviewed first on the conceptual level before focusing on code style or gramm
 fixes.
 
 
-# Style
+## Style
 
 To avoid endless bikeshedding, just use [`rustfmt`](https://github.com/rust-lang/rustfmt).
 
