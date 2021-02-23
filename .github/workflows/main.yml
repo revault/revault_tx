@@ -3,13 +3,12 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  build:
+  unittesting:
     strategy:
       matrix:
         # We don't have a MSRV (yet?)
         toolchain:
           - stable
-          - beta
           - nightly
         os:
           - ubuntu-latest
@@ -32,7 +31,7 @@ jobs:
       - name: Test on Rust ${{ matrix.toolchain }}
         env:
           RUSTFLAGS: "-C link-dead-code"
-        run: cargo test --verbose --color always
+        run: cargo test --verbose --color always --all-features
 
   fuzztesting:
     runs-on: ubuntu-latest
@@ -48,41 +47,6 @@ jobs:
       - name: Run fuzz testing script
         run: ./fuzz/run.sh
 
-  grcov:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Install toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          override: true
-          profile: minimal
-
-      - name: Generate code coverage via tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --all-features --no-fail-fast
-        env:
-          CARGO_INCREMENTAL: '0'
-          RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Copt-level=0 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-          RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Copt-level=0 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-
-      - name: Gather coverage data
-        id: coverage
-        uses: actions-rs/grcov@v0.1
-        with:
-          coveralls-token: ${{ secrets.COVERALLS_TOKEN }}
-
-      - name: Coveralls upload
-        uses: coverallsapp/github-action@master
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          parallel: true
-          path-to-lcov: ${{ steps.coverage.outputs.report }}
-
   rustfmt_check:
     runs-on: ubuntu-latest
     steps:
@@ -93,17 +57,3 @@ jobs:
             components: rustfmt
             override: true
       - run: cargo fmt -- --check
-
-  clippy_check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v1
-      - uses: actions-rs/toolchain@v1
-        with:
-            toolchain: nightly
-            components: clippy
-            override: true
-      - uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
