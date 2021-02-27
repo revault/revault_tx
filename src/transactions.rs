@@ -639,12 +639,11 @@ impl UnvaultTransaction {
         )))
     }
 
-    /// Get the Unvault txo to be referenced in a spending transaction
-    pub fn spend_unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    fn unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         &self,
         unvault_descriptor: &UnvaultDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
-        csv: u32,
+        sequence: u32,
     ) -> UnvaultTxIn {
         let spk = unvault_descriptor.0.script_pubkey(to_pk_ctx);
         let index = self
@@ -665,8 +664,27 @@ impl UnvaultTransaction {
                 vout: index.try_into().expect("There are two outputs"),
             },
             prev_txout,
-            csv,
+            sequence,
         )
+    }
+
+    /// Get the Unvault txo to be referenced in a spending transaction
+    pub fn spend_unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+        &self,
+        unvault_descriptor: &UnvaultDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
+        csv: u32,
+    ) -> UnvaultTxIn {
+        self.unvault_txin(unvault_descriptor, to_pk_ctx, csv)
+    }
+
+    /// Get the Unvault txo to be referenced in a revocation transaction
+    pub fn revault_unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+        &self,
+        unvault_descriptor: &UnvaultDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
+    ) -> UnvaultTxIn {
+        self.unvault_txin(unvault_descriptor, to_pk_ctx, RBF_SEQUENCE)
     }
 
     /// Get the CPFP txo to be referenced in a spending transaction
@@ -1234,7 +1252,6 @@ pub fn transaction_chain_manager<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<
     cpfp_descriptor: &CpfpDescriptor<Pk>,
     to_pk_ctx: ToPkCtx,
     lock_time: u32,
-    unvault_csv: u32,
 ) -> Result<(UnvaultTransaction, CancelTransaction), Error> {
     let unvault_tx = UnvaultTransaction::new(
         deposit_txin.clone(),
@@ -1243,9 +1260,8 @@ pub fn transaction_chain_manager<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<
         to_pk_ctx,
         lock_time,
     )?;
-    // FIXME!!
     let cancel_tx = CancelTransaction::new(
-        unvault_tx.spend_unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
+        unvault_tx.revault_unvault_txin(&unvault_descriptor, to_pk_ctx),
         None,
         &deposit_descriptor,
         to_pk_ctx,
@@ -1263,7 +1279,6 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     emer_address: EmergencyAddress,
     to_pk_ctx: ToPkCtx,
     lock_time: u32,
-    unvault_csv: u32,
 ) -> Result<
     (
         UnvaultTransaction,
@@ -1280,13 +1295,11 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
         cpfp_descriptor,
         to_pk_ctx,
         lock_time,
-        unvault_csv,
     )?;
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
-        // FIXME!!
-        unvault_tx.spend_unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
+        unvault_tx.revault_unvault_txin(&unvault_descriptor, to_pk_ctx),
         None,
         emer_address,
         lock_time,
@@ -1333,9 +1346,9 @@ pub fn spend_tx_from_deposits<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToP
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelTransaction, DepositTransaction, EmergencyAddress, EmergencyTransaction,
-        FeeBumpTransaction, RevaultTransaction, SpendTransaction, UnvaultEmergencyTransaction,
-        UnvaultTransaction, RBF_SEQUENCE,
+        transaction_chain, CancelTransaction, DepositTransaction, EmergencyAddress,
+        EmergencyTransaction, FeeBumpTransaction, RevaultTransaction, SpendTransaction,
+        UnvaultEmergencyTransaction, UnvaultTransaction,
     };
     use crate::{error::*, scripts::*, txins::*, txouts::*};
 
@@ -1474,7 +1487,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_chain() {
+    fn transaction_derivation() {
         let secp = secp256k1::Secp256k1::new();
         let mut rng = SmallRng::from_entropy();
         // FIXME: Miniscript mask for sequence check is bugged in this version. Uncomment when upgrading.
@@ -1483,32 +1496,32 @@ mod tests {
 
         // Test the dust limit
         assert_eq!(
-            transaction_chain(2, 1, csv, 234_631, &secp),
+            derive_transactions(2, 1, csv, 234_631, &secp),
             Err(Error::TransactionCreation(TransactionCreationError::Dust))
         );
         // Absolute minimum
-        transaction_chain(2, 1, csv, 234_632, &secp).expect(&format!(
+        derive_transactions(2, 1, csv, 234_632, &secp).expect(&format!(
             "Tx chain with 2 stakeholders, 1 manager, {} csv, 235_250 deposit",
             csv
         ));
         // 1 BTC
-        transaction_chain(8, 3, csv, 100_000_000, &secp).expect(&format!(
+        derive_transactions(8, 3, csv, 100_000_000, &secp).expect(&format!(
             "Tx chain with 8 stakeholders, 3 managers, {} csv, 1_000_000 deposit",
             csv
         ));
         // 100 000 BTC
-        transaction_chain(8, 3, csv, 100_000_000_000_000, &secp).expect(&format!(
+        derive_transactions(8, 3, csv, 100_000_000_000_000, &secp).expect(&format!(
             "Tx chain with 8 stakeholders, 3 managers, {} csv, 100_000_000_000_000 deposit",
             csv
         ));
         // 100 BTC
-        transaction_chain(38, 5, csv, 100_000_000_000, &secp).expect(&format!(
+        derive_transactions(38, 5, csv, 100_000_000_000, &secp).expect(&format!(
             "Tx chain with 38 stakeholders, 5 manager, {} csv, 100_000_000_000 deposit",
             csv
         ));
     }
 
-    fn transaction_chain(
+    fn derive_transactions(
         n_stk: usize,
         n_man: usize,
         csv: u32,
@@ -1570,6 +1583,24 @@ mod tests {
             xpub_ctx,
         );
         let deposit_tx = DepositTransaction(deposit_raw_tx);
+        let deposit_txin = DepositTxIn::new(
+            OutPoint {
+                txid: deposit_tx.0.txid(),
+                vout: 0,
+            },
+            deposit_txo.clone(),
+        );
+
+        // Test that the transaction helper(s) derive the same transactions as we do
+        let (h_unvault, h_cancel, h_emer, h_unemer) = transaction_chain(
+            deposit_txin.clone(),
+            &deposit_descriptor,
+            &unvault_descriptor,
+            &cpfp_descriptor,
+            emergency_address.clone(),
+            xpub_ctx,
+            0,
+        )?;
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
@@ -1603,17 +1634,11 @@ mod tests {
         let feebump_tx = FeeBumpTransaction(raw_feebump_tx);
 
         // Create and sign the first (deposit) emergency transaction
-        let deposit_txin = DepositTxIn::new(
-            OutPoint {
-                txid: deposit_tx.0.txid(),
-                vout: 0,
-            },
-            deposit_txo.clone(),
-        );
         // We can sign the transaction without the feebump input
         let mut emergency_tx_no_feebump =
             EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)
                 .unwrap();
+        assert_eq!(h_emer, emergency_tx_no_feebump);
 
         let value_no_feebump =
             emergency_tx_no_feebump.inner_tx().global.unsigned_tx.output[0].value;
@@ -1669,7 +1694,7 @@ mod tests {
             feebump_txo.clone(),
         );
         let mut emergency_tx = EmergencyTransaction::new(
-            deposit_txin,
+            deposit_txin.clone(),
             Some(feebump_txin),
             emergency_address.clone(),
             0,
@@ -1705,22 +1730,16 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are finalized
-        let deposit_txin = DepositTxIn::new(
-            OutPoint {
-                txid: deposit_tx.0.txid(),
-                vout: 0,
-            },
-            deposit_txo.clone(),
-        );
         let deposit_txin_sat_cost = deposit_txin.max_sat_weight();
         let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor, xpub_ctx);
         let mut unvault_tx = UnvaultTransaction::new(
-            deposit_txin,
+            deposit_txin.clone(),
             &unvault_descriptor,
             &cpfp_descriptor,
             xpub_ctx,
             0,
         )?;
+        assert_eq!(h_unvault, unvault_tx);
         let unvault_value = unvault_tx.inner_tx().global.unsigned_tx.output[0].value;
         // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
         // feerate is sat/WU, and 30_000 is the CPFP output value.
@@ -1730,12 +1749,17 @@ mod tests {
         );
 
         // Create and sign the cancel transaction
-        let unvault_txin =
-            unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
-        assert_eq!(unvault_txin.txout().txout().value, unvault_value);
+        let rev_unvault_txin = unvault_tx.revault_unvault_txin(&unvault_descriptor, xpub_ctx);
+        assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
         // We can create it entirely without the feebump input
-        let mut cancel_tx_without_feebump =
-            CancelTransaction::new(unvault_txin.clone(), None, &deposit_descriptor, xpub_ctx, 0);
+        let mut cancel_tx_without_feebump = CancelTransaction::new(
+            rev_unvault_txin.clone(),
+            None,
+            &deposit_descriptor,
+            xpub_ctx,
+            0,
+        );
+        assert_eq!(h_cancel, cancel_tx_without_feebump);
         // Keep track of the fees we computed..
         let value_no_feebump = cancel_tx_without_feebump
             .inner_tx()
@@ -1745,8 +1769,8 @@ mod tests {
             .value;
         // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + unvault_txin.max_sat_weight() as u64) * 22,
-            unvault_txin.txout().txout().value,
+            value_no_feebump + (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
+            rev_unvault_txin.txout().txout().value,
         );
         let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -1770,8 +1794,7 @@ mod tests {
             feebump_txo.clone(),
         );
         let mut cancel_tx = CancelTransaction::new(
-            // FIXME!!
-            unvault_txin,
+            rev_unvault_txin.clone(),
             Some(feebump_txin),
             &deposit_descriptor,
             xpub_ctx,
@@ -1815,17 +1838,14 @@ mod tests {
         )?;
         cancel_tx.finalize(&secp)?;
 
-        // Create and sign the second (unvault) emergency transaction
-        let unvault_txin =
-            unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
         // We can create it without the feebump input
         let mut unemergency_tx_no_feebump = UnvaultEmergencyTransaction::new(
-            // FIXME!!
-            unvault_txin.clone(),
+            rev_unvault_txin.clone(),
             None,
             emergency_address.clone(),
             0,
         );
+        assert_eq!(h_unemer, unemergency_tx_no_feebump);
         let value_no_feebump = unemergency_tx_no_feebump
             .inner_tx()
             .global
@@ -1834,8 +1854,8 @@ mod tests {
             .value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + unvault_txin.max_sat_weight() as u64) * 22,
-            unvault_txin.txout().txout().value,
+            value_no_feebump + (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
+            rev_unvault_txin.txout().txout().value,
         );
         let unemergency_tx_sighash = unemergency_tx_no_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -1859,7 +1879,7 @@ mod tests {
             feebump_txo.clone(),
         );
         let mut unemergency_tx = UnvaultEmergencyTransaction::new(
-            unvault_txin,
+            rev_unvault_txin.clone(),
             Some(feebump_txin),
             emergency_address,
             0,
@@ -1919,14 +1939,15 @@ mod tests {
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let unvault_txin = unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
+        let spend_unvault_txin =
+            unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
         let spend_txo = ExternalTxOut::new(TxOut {
             value: 1,
             ..TxOut::default()
         });
         // Test satisfaction failure with a wrong CSV value
         let mut spend_tx = SpendTransaction::new(
-            vec![unvault_txin],
+            vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             &cpfp_descriptor,
             xpub_ctx,
@@ -1961,9 +1982,9 @@ mod tests {
         }
 
         // "This time for sure !"
-        let unvault_txin = unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv); // Right csv
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv); // Right csv
         let mut spend_tx = SpendTransaction::new(
-            vec![unvault_txin],
+            vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             &cpfp_descriptor,
             xpub_ctx,
@@ -1988,7 +2009,7 @@ mod tests {
         spend_tx.finalize(&secp)?;
 
         // The spend transaction can also batch multiple unvault txos
-        let unvault_txins = vec![
+        let spend_unvault_txins = vec![
             UnvaultTxIn::new(
                 OutPoint::from_str(
                     "0ed7dc14fe8d1364b3185fa46e940cb8e858f8de32e63f88353a2bd66eb99e2a:0",
@@ -2022,9 +2043,9 @@ mod tests {
                 csv,
             ),
         ];
-        let n_txins = unvault_txins.len();
+        let n_txins = spend_unvault_txins.len();
         let mut spend_tx = SpendTransaction::new(
-            unvault_txins,
+            spend_unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],
             &cpfp_descriptor,
             xpub_ctx,
