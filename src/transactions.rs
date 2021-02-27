@@ -640,7 +640,7 @@ impl UnvaultTransaction {
     }
 
     /// Get the Unvault txo to be referenced in a spending transaction
-    pub fn unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn spend_unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
         &self,
         unvault_descriptor: &UnvaultDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
@@ -1243,8 +1243,9 @@ pub fn transaction_chain_manager<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<
         to_pk_ctx,
         lock_time,
     )?;
+    // FIXME!!
     let cancel_tx = CancelTransaction::new(
-        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
+        unvault_tx.spend_unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
         None,
         &deposit_descriptor,
         to_pk_ctx,
@@ -1284,7 +1285,8 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
-        unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
+        // FIXME!!
+        unvault_tx.spend_unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv),
         None,
         emer_address,
         lock_time,
@@ -1314,7 +1316,7 @@ pub fn spend_tx_from_deposits<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToP
                 lock_time,
             )
             .and_then(|unvault_tx| {
-                Ok(unvault_tx.unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv))
+                Ok(unvault_tx.spend_unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv))
             })
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
@@ -1728,7 +1730,8 @@ mod tests {
         );
 
         // Create and sign the cancel transaction
-        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
+        let unvault_txin =
+            unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
         assert_eq!(unvault_txin.txout().txout().value, unvault_value);
         // We can create it entirely without the feebump input
         let mut cancel_tx_without_feebump =
@@ -1767,6 +1770,7 @@ mod tests {
             feebump_txo.clone(),
         );
         let mut cancel_tx = CancelTransaction::new(
+            // FIXME!!
             unvault_txin,
             Some(feebump_txin),
             &deposit_descriptor,
@@ -1812,9 +1816,11 @@ mod tests {
         cancel_tx.finalize(&secp)?;
 
         // Create and sign the second (unvault) emergency transaction
-        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
+        let unvault_txin =
+            unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, RBF_SEQUENCE);
         // We can create it without the feebump input
         let mut unemergency_tx_no_feebump = UnvaultEmergencyTransaction::new(
+            // FIXME!!
             unvault_txin.clone(),
             None,
             emergency_address.clone(),
@@ -1913,7 +1919,7 @@ mod tests {
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
+        let unvault_txin = unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
         let spend_txo = ExternalTxOut::new(TxOut {
             value: 1,
             ..TxOut::default()
@@ -1955,7 +1961,7 @@ mod tests {
         }
 
         // "This time for sure !"
-        let unvault_txin = unvault_tx.unvault_txin(&unvault_descriptor, xpub_ctx, csv); // Right csv
+        let unvault_txin = unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv); // Right csv
         let mut spend_tx = SpendTransaction::new(
             vec![unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
