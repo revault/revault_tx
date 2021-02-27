@@ -18,6 +18,7 @@ use miniscript::{
         secp256k1,
         util::{
             bip143::SigHashCache,
+            bip32::ChildNumber,
             psbt::{
                 Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
                 PartiallySignedTransaction as Psbt,
@@ -26,7 +27,7 @@ use miniscript::{
         Address, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
         Transaction,
     },
-    BitcoinSig, MiniscriptKey, ToPublicKey,
+    BitcoinSig, DescriptorPublicKey, DescriptorPublicKeyCtx, MiniscriptKey, ToPublicKey,
 };
 
 #[cfg(feature = "use-serde")]
@@ -1308,29 +1309,25 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
 
-/// Get a spend transaction out of a list of deposits.
-pub fn spend_tx_from_deposits<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-    deposit_txins: Vec<DepositTxIn>,
+/// Get a spend transaction out of a list of deposits and derivation indexes. The
+/// `unvault_descriptor` will be derived for each and should not be beforehand.
+pub fn spend_tx_from_deposits(
+    deposit_txins: Vec<(DepositTxIn, ChildNumber)>,
     spend_txos: Vec<SpendTxOut>,
-    unvault_descriptor: &UnvaultDescriptor<Pk>,
-    cpfp_descriptor: &CpfpDescriptor<Pk>,
-    to_pk_ctx: ToPkCtx,
+    unvault_descriptor: &UnvaultDescriptor<DescriptorPublicKey>,
+    cpfp_descriptor: &CpfpDescriptor<DescriptorPublicKey>,
+    to_pk_ctx: DescriptorPublicKeyCtx<impl secp256k1::Verification>,
     unvault_csv: u32,
     lock_time: u32,
 ) -> Result<SpendTransaction, TransactionCreationError> {
     let unvault_txins = deposit_txins
         .into_iter()
-        .map(|dep| {
-            UnvaultTransaction::new(
-                dep,
-                &unvault_descriptor,
-                &cpfp_descriptor,
-                to_pk_ctx,
-                lock_time,
-            )
-            .and_then(|unvault_tx| {
-                Ok(unvault_tx.spend_unvault_txin(&unvault_descriptor, to_pk_ctx, unvault_csv))
-            })
+        .map(|(txin, index)| {
+            let unvault_desc = unvault_descriptor.derive(index);
+            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_descriptor, to_pk_ctx, lock_time)
+                .and_then(|unvault_tx| {
+                    Ok(unvault_tx.spend_unvault_txin(&unvault_desc, to_pk_ctx, unvault_csv))
+                })
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
