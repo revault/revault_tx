@@ -1,6 +1,6 @@
 # Revault
 
-[Revault](https://github.com/re-vault/practical-revault/blob/master/revault.pdf) is a
+[Revault](https://github.com/revault/practical-revault/blob/master/revault.pdf) is a
 Bitcoin vault architecture for multi-party situations.
 
 This library defines the Miniscript descriptors and handles PSBT management of

@@ -39,7 +39,7 @@ use {
 use std::{collections::BTreeMap, convert::TryInto, fmt};
 
 /// The value of the CPFP output in the Unvault transaction.
-/// See https://github.com/re-vault/practical-revault/blob/master/transactions.md#unvault_tx
+/// See https://github.com/revault/practical-revault/blob/master/transactions.md#unvault_tx
 pub const UNVAULT_CPFP_VALUE: u64 = 30000;
 
 /// The feerate, in sat / W, to create the unvaulting transactions with.
@@ -1170,7 +1170,7 @@ impl SpendTransaction {
         let total_weight = sat_weight
             .checked_add(witstrip_weight)
             .expect("Weight computation bug");
-        // See https://github.com/re-vault/practical-revault/blob/master/transactions.md#cancel_tx
+        // See https://github.com/revault/practical-revault/blob/master/transactions.md#cancel_tx
         // for this arbirtrary value.
         let cpfp_value = 2 * 32 * total_weight;
         // We could just use output[0], but be careful.

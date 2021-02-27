@@ -17,7 +17,7 @@ before going forward with the implementation if it is non-trivial.
 ## Looking for contributions
 
 If you are looking for first time contributions, you can `git grep` for `FIXME`s and `TODO`s
-as well as checking out the [good first issues](https://github.com/re-vault/revault_tx/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) on the issue tracker.
+as well as checking out the [good first issues](https://github.com/revault/revault_tx/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) on the issue tracker.
 
 ## Workflow
 
