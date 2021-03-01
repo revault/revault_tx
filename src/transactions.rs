@@ -1098,21 +1098,22 @@ impl SpendTransaction {
         cpfp_descriptor: &CpfpDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
         lock_time: u32,
-    ) -> SpendTransaction {
-        // The spend transaction CPFP output value depends on its size. See practical-revault for
-        // more details. Here we append a dummy one, and we'll modify it in place afterwards.
-        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor, to_pk_ctx);
+    ) -> Result<SpendTransaction, TransactionCreationError> {
+        // The CPFP is tricky to compute. We could be smart and avoid some allocations here
+        // but at the cost of clarity.
+        let cpfp_txo = SpendTransaction::cpfp_txout(
+            unvault_inputs.clone(),
+            spend_txouts.clone(),
+            cpfp_descriptor,
+            to_pk_ctx,
+            lock_time,
+        );
 
-        // Record the satisfaction cost before moving the inputs
-        let sat_weight: u64 = unvault_inputs
-            .iter()
-            .map(|txin| txin.max_sat_weight())
-            .sum::<usize>()
-            .try_into()
-            .expect("An usize doesn't fit in an u64?");
+        // Record the value spent
+        let mut value_in: u64 = 0;
 
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
-        txos.push(dummy_cpfp_txo.txout().clone());
+        txos.push(cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
             SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
             SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
@@ -1120,7 +1121,7 @@ impl SpendTransaction {
 
         // For the PsbtOut s
         let mut txos_wit_script = Vec::with_capacity(spend_txouts.len() + 1);
-        txos_wit_script.push(dummy_cpfp_txo.into_witness_script());
+        txos_wit_script.push(cpfp_txo.into_witness_script());
         txos_wit_script.extend(
             spend_txouts
                 .into_iter()
@@ -1130,7 +1131,7 @@ impl SpendTransaction {
                 }),
         );
 
-        let mut psbt = Psbt {
+        let psbt = Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: TX_VERSION,
@@ -1147,6 +1148,7 @@ impl SpendTransaction {
                 .into_iter()
                 .map(|input| {
                     let prev_txout = input.into_txout();
+                    value_in += prev_txout.txout().value;
                     PsbtIn {
                         witness_script: prev_txout.witness_script().clone(),
                         sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
@@ -1164,26 +1166,65 @@ impl SpendTransaction {
                 .collect(),
         };
 
-        // We only need to modify the unsigned_tx global's output value as the PSBT outputs only
-        // contain the witness script.
-        let witstrip_weight: u64 = psbt.global.unsigned_tx.get_weight().try_into().unwrap();
+        let value_out: u64 = psbt.global.unsigned_tx.output.iter().map(|o| o.value).sum();
+        let fees = value_in
+            .checked_sub(value_out)
+            .ok_or(TransactionCreationError::NegativeFees)?;
+        if fees > INSANE_FEES {
+            return Err(TransactionCreationError::InsaneFees);
+        }
+
+        Ok(SpendTransaction(psbt))
+    }
+
+    /// Get the CPFP transaction output for a Spend transaction spending these `unvault_inputs`
+    /// and creating these `spend_txouts`.
+    ///
+    /// The CPFP output value is dependant on the transaction size, see [practical-revaul
+    /// t](https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx) for
+    /// more details.
+    pub fn cpfp_txout<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+        unvault_inputs: Vec<UnvaultTxIn>,
+        spend_txouts: Vec<SpendTxOut>,
+        cpfp_descriptor: &CpfpDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
+        lock_time: u32,
+    ) -> CpfpTxOut {
+        let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
+        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor, to_pk_ctx);
+        txos.push(dummy_cpfp_txo.txout().clone());
+        txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
+            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
+            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
+        }));
+        let dummy_tx = Transaction {
+            version: TX_VERSION,
+            lock_time,
+            input: unvault_inputs
+                .iter()
+                .map(|input| input.unsigned_txin())
+                .collect(),
+            output: txos,
+        };
+
+        let sat_weight: u64 = unvault_inputs
+            .iter()
+            .map(|txin| txin.max_sat_weight())
+            .sum::<usize>()
+            .try_into()
+            .expect("An usize doesn't fit in an u64?");
+        let witstrip_weight: u64 = dummy_tx
+            .get_weight()
+            .try_into()
+            .expect("Bug: an usize that doesn't fit in a u64?");
         let total_weight = sat_weight
             .checked_add(witstrip_weight)
-            .expect("Weight computation bug");
-        // See https://github.com/revault/practical-revault/blob/master/transactions.md#cancel_tx
+            .expect("Weight computation bug: cannot overflow");
+
+        // See https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx
         // for this arbirtrary value.
         let cpfp_value = 2 * 32 * total_weight;
-        // We could just use output[0], but be careful.
-        let mut cpfp_txo = psbt
-            .global
-            .unsigned_tx
-            .output
-            .iter_mut()
-            .find(|txo| txo.script_pubkey == cpfp_descriptor.0.script_pubkey(to_pk_ctx))
-            .expect("We just created it!");
-        cpfp_txo.value = cpfp_value;
-
-        SpendTransaction(psbt)
+        CpfpTxOut::new(cpfp_value, &cpfp_descriptor, to_pk_ctx)
     }
 
     /// Parse a Spend transaction from a PSBT
@@ -1331,13 +1372,13 @@ pub fn spend_tx_from_deposits(
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
-    Ok(SpendTransaction::new(
+    SpendTransaction::new(
         unvault_txins,
         spend_txos,
         cpfp_descriptor,
         to_pk_ctx,
         lock_time,
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -1728,7 +1769,6 @@ mod tests {
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are finalized
         let deposit_txin_sat_cost = deposit_txin.max_sat_weight();
-        let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor, xpub_ctx);
         let mut unvault_tx = UnvaultTransaction::new(
             deposit_txin.clone(),
             &unvault_descriptor,
@@ -1736,6 +1776,7 @@ mod tests {
             xpub_ctx,
             0,
         )?;
+
         assert_eq!(h_unvault, unvault_tx);
         let unvault_value = unvault_tx.inner_tx().global.unsigned_tx.output[0].value;
         // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
@@ -1938,8 +1979,19 @@ mod tests {
         // Create and sign a spend transaction
         let spend_unvault_txin =
             unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
+        let dummy_txo = ExternalTxOut::default();
+        let cpfp_value = SpendTransaction::cpfp_txout(
+            vec![spend_unvault_txin.clone()],
+            vec![SpendTxOut::Destination(dummy_txo.clone())],
+            &cpfp_descriptor,
+            xpub_ctx,
+            0,
+        )
+        .txout()
+        .value;
         let spend_txo = ExternalTxOut::new(TxOut {
-            value: 1,
+            // The CPFP output value won't be > 150k sats for our parameters
+            value: spend_unvault_txin.txout().txout().value - cpfp_value - 20_000,
             ..TxOut::default()
         });
         // Test satisfaction failure with a wrong CSV value
@@ -1949,7 +2001,8 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
-        );
+        )
+        .expect("Fees ok");
         let spend_tx_sighash = spend_tx
             .signature_hash_internal_input(0, SigHashType::All)
             .expect("Input exists");
@@ -1986,7 +2039,8 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
-        );
+        )
+        .expect("Amounts ok");
         let spend_tx_sighash = spend_tx
             .signature_hash_internal_input(0, SigHashType::All)
             .expect("Input exists");
@@ -2012,7 +2066,7 @@ mod tests {
                     "0ed7dc14fe8d1364b3185fa46e940cb8e858f8de32e63f88353a2bd66eb99e2a:0",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2020,7 +2074,7 @@ mod tests {
                     "23aacfca328942892bb007a86db0bf5337005f642b3c46aef50c23af03ec333a:1",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value * 4, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2028,7 +2082,7 @@ mod tests {
                     "fccabf4077b7e44ba02378a97a84611b545c11a1ef2af16cbb6e1032aa059b1d:0",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value / 2, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2036,18 +2090,38 @@ mod tests {
                     "71dc04303184d54e6cc2f92d843282df2854d6dd66f10081147b84aeed830ae1:0",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value * 50, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
         ];
         let n_txins = spend_unvault_txins.len();
+        let dummy_txo = ExternalTxOut::default();
+        let cpfp_value = SpendTransaction::cpfp_txout(
+            spend_unvault_txins.clone(),
+            vec![SpendTxOut::Destination(dummy_txo.clone())],
+            &cpfp_descriptor,
+            xpub_ctx,
+            0,
+        )
+        .txout()
+        .value;
+        let spend_txo = ExternalTxOut::new(TxOut {
+            value: spend_unvault_txins
+                .iter()
+                .map(|txin| txin.txout().txout().value)
+                .sum::<u64>()
+                - cpfp_value
+                - 20_000,
+            ..TxOut::default()
+        });
         let mut spend_tx = SpendTransaction::new(
             spend_unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],
             &cpfp_descriptor,
             xpub_ctx,
             0,
-        );
+        )
+        .expect("Amounts Ok");
         for i in 0..n_txins {
             let spend_tx_sighash = spend_tx
                 .signature_hash_internal_input(i, SigHashType::All)
