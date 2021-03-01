@@ -29,7 +29,7 @@ pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
 macro_rules! implem_revault_txout {
     ( $struct_name:ident, $doc_comment:meta ) => {
         #[$doc_comment]
-        #[derive(Debug, Clone, PartialEq)]
+        #[derive(Debug, Clone, PartialEq, Default)]
         pub struct $struct_name {
             txout: TxOut,
             witness_script: Option<Script>,
@@ -168,6 +168,7 @@ impl ExternalTxOut {
 
 /// A spend transaction output can be either a change one (DepositTxOut) or a payee-controlled
 /// one (ExternalTxOut).
+#[derive(Debug, Clone)]
 pub enum SpendTxOut {
     /// The actual destination of the funds, many such output can be present in a Spend
     /// transaction
