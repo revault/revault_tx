@@ -531,6 +531,13 @@ fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError> {
             is_final = Some(false);
         }
 
+        // If the witness script is provided, it must be a sane Miniscript
+        if let Some(ref script) = input.witness_script {
+            let _: miniscript::Miniscript<_, miniscript::Segwitv0> =
+                miniscript::Miniscript::parse(script)
+                    .map_err(|_| PsbtValidationError::InvalidInWitnessScript(input.clone()))?;
+        }
+
         // We'll then check it doesn't create more than it spends
         value_in = value_in
             .checked_add(
@@ -1277,56 +1284,60 @@ impl SpendTransaction {
     }
 
     /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction
-    /// is already finalized, returns the exact witness. Otherwise computes the maximum reasonable
+    /// is already finalized, returns the exact feerate. Otherwise computes the maximum reasonable
     /// weight of a satisfaction and returns the feerate based on this estimation.
     pub fn max_feerate(&self) -> u64 {
+        let fees = self.fees();
+        let weight = self.max_weight();
+
+        fees.checked_add(weight - 1) // Weight is never 0
+            .expect("Feerate computation bug, fees >u64::MAX")
+            .checked_div(weight)
+            .expect("Weight is never 0")
+    }
+
+    /// Get the size of this transaction, assuming fully-satisfied inputs. If the transaction
+    /// is already finalized, returns the exact size in witness units. Otherwise computes the
+    /// maximum reasonable weight of a satisfaction.
+    pub fn max_weight(&self) -> u64 {
         let psbt = self.inner_tx();
         let tx = &psbt.global.unsigned_tx;
 
-        let mut value_in: u64 = 0;
         let mut weight: u64 = tx.get_weight().try_into().expect("Can't be >u64::MAX");
         for txin in psbt.inputs.iter() {
-            value_in += txin
-                .witness_utxo
-                .as_ref()
-                .expect("Always set for Unvault PSBT inputs")
-                .value;
-            if self.is_finalized() {
-                let size: u64 = txin
-                    .final_script_witness
+            let txin_weight: u64 = if self.is_finalized() {
+                txin.final_script_witness
                     .as_ref()
                     .expect("Always set if final")
                     .iter()
                     .map(|e| e.len())
                     .sum::<usize>()
                     .try_into()
-                    .expect("Bug: witness size >u64::MAX");
-                weight += size;
+                    .expect("Bug: witness size >u64::MAX")
             } else {
-                let size: u64 = miniscript::Descriptor::Wsh(
+                miniscript::Descriptor::Wsh(
                     miniscript::Miniscript::parse(
                         txin.witness_script
                             .as_ref()
                             .expect("Unvault txins always have a witness Script"),
                     )
-                    .expect("DepositTxIn witness_script is created from a Miniscript"),
+                    .expect("UnvaultTxIn witness_script is created from a Miniscript"),
                 )
                 .max_satisfaction_weight(miniscript::NullCtx)
                 .expect("It's a sane Script, derived from a Miniscript")
                 .try_into()
-                .expect("Can't be >u64::MAX");
-                weight += size;
-            }
+                .expect("Can't be >u64::MAX")
+            };
+            weight = weight
+                .checked_add(txin_weight)
+                .expect("Weight computation bug: overflow computing spent coins value");
         }
+        assert!(weight > 0, "We never create an empty tx");
 
-        let value_out: u64 = tx.output.iter().map(|o| o.value).sum();
-        let fees = value_in
-            .checked_sub(value_out)
-            .expect("Impossible: checked in constructor");
-        fees.checked_div(weight).expect("Weight is never 0")
+        weight
     }
 
-    // FIXME: fee sanity checks
+    // FIXME: feerate sanity checks
     /// Parse a Spend transaction from a PSBT
     pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
         let psbt = Decodable::consensus_decode(raw_psbt)?;
