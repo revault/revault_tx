@@ -346,6 +346,31 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
         as_hex
     }
+
+    fn fees(&self) -> u64 {
+        let mut value_in: u64 = 0;
+        for i in self.inner_tx().inputs.iter() {
+            value_in = value_in
+                .checked_add(
+                    i.witness_utxo
+                        .as_ref()
+                        .expect("A witness utxo is always set")
+                        .value,
+                )
+                .expect("PSBT bug: overflow while computing spent coins value");
+        }
+
+        let mut value_out: u64 = 0;
+        for o in self.inner_tx().global.unsigned_tx.output.iter() {
+            value_out = value_out
+                .checked_add(o.value)
+                .expect("PSBT bug: overflow while computing created coins value");
+        }
+
+        value_in
+            .checked_sub(value_out)
+            .expect("We never create a transaction with negative fees")
+    }
 }
 
 // Boilerplate for newtype declaration and small trait helpers implementation.
@@ -1753,12 +1778,10 @@ mod tests {
                 .unwrap();
         assert_eq!(h_emer, emergency_tx_no_feebump);
 
-        let value_no_feebump =
-            emergency_tx_no_feebump.inner_tx().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + deposit_txin.max_sat_weight() as u64) * 22,
-            deposit_value,
+            emergency_tx_no_feebump.fees(),
+            (376 + deposit_txin.max_sat_weight() as u64) * 22,
         );
         // We cannot get a sighash for a non-existing input
         assert_eq!(
@@ -1856,10 +1879,7 @@ mod tests {
         let unvault_value = unvault_tx.inner_tx().global.unsigned_tx.output[0].value;
         // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
         // feerate is sat/WU, and 30_000 is the CPFP output value.
-        assert_eq!(
-            unvault_value + (548 + deposit_txin_sat_cost as u64) * 6 + 30_000,
-            deposit_value,
-        );
+        assert_eq!(unvault_tx.fees(), (548 + deposit_txin_sat_cost as u64) * 6);
 
         // Create and sign the cancel transaction
         let rev_unvault_txin = unvault_tx.revault_unvault_txin(&unvault_descriptor, xpub_ctx);
@@ -1882,8 +1902,8 @@ mod tests {
             .value;
         // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
-            rev_unvault_txin.txout().txout().value,
+            cancel_tx_without_feebump.fees(),
+            (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
         );
         let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -1959,16 +1979,10 @@ mod tests {
             0,
         );
         assert_eq!(h_unemer, unemergency_tx_no_feebump);
-        let value_no_feebump = unemergency_tx_no_feebump
-            .inner_tx()
-            .global
-            .unsigned_tx
-            .output[0]
-            .value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
-            rev_unvault_txin.txout().txout().value,
+            unemergency_tx_no_feebump.fees(),
+            (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
         );
         let unemergency_tx_sighash = unemergency_tx_no_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -2064,9 +2078,10 @@ mod tests {
         )
         .txout()
         .value;
+        let fees = 20_000;
         let spend_txo = ExternalTxOut::new(TxOut {
             // The CPFP output value won't be > 150k sats for our parameters
-            value: spend_unvault_txin.txout().txout().value - cpfp_value - 20_000,
+            value: spend_unvault_txin.txout().txout().value - cpfp_value - fees,
             ..TxOut::default()
         });
         // Test satisfaction failure with a wrong CSV value
@@ -2078,6 +2093,7 @@ mod tests {
             0,
         )
         .expect("Fees ok");
+        assert_eq!(spend_tx.fees(), fees);
         let spend_tx_sighash = spend_tx
             .signature_hash_internal_input(0, SigHashType::All)
             .expect("Input exists");
@@ -2180,13 +2196,14 @@ mod tests {
         )
         .txout()
         .value;
+        let fees = 30_000;
         let spend_txo = ExternalTxOut::new(TxOut {
             value: spend_unvault_txins
                 .iter()
                 .map(|txin| txin.txout().txout().value)
                 .sum::<u64>()
                 - cpfp_value
-                - 20_000,
+                - fees,
             ..TxOut::default()
         });
         let mut spend_tx = SpendTransaction::new(
@@ -2197,6 +2214,7 @@ mod tests {
             0,
         )
         .expect("Amounts Ok");
+        assert_eq!(spend_tx.fees(), fees);
         for i in 0..n_txins {
             let spend_tx_sighash = spend_tx
                 .signature_hash_internal_input(i, SigHashType::All)
