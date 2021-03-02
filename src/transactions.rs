@@ -1280,7 +1280,7 @@ impl SpendTransaction {
 
         // See https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx
         // for this arbirtrary value.
-        let cpfp_value = 2 * 32 * total_weight;
+        let cpfp_value = 16 * total_weight;
         CpfpTxOut::new(cpfp_value, &cpfp_descriptor, to_pk_ctx)
     }
 
