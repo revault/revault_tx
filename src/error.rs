@@ -132,6 +132,7 @@ pub enum PsbtValidationError {
     InvalidOutputField(PsbtOutput),
     InvalidPrevoutType(PsbtInput),
     PartiallyFinalized,
+    InsaneAmounts,
 }
 
 impl fmt::Display for PsbtValidationError {
@@ -178,6 +179,10 @@ impl fmt::Display for PsbtValidationError {
                 i
             ),
             Self::PartiallyFinalized => write!(f, "PSBT contains both final and non-final inputs"),
+            Self::InsaneAmounts => write!(
+                f,
+                "PSBT contains either overflowing amounts or creates more coins than it spends"
+            ),
         }
     }
 }
