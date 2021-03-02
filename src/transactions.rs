@@ -1144,8 +1144,8 @@ impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
     /// txouts (destination and change) in addition to the CPFP one..
     ///
-    /// Note: fees are *not* checked in the constructor and sanity-checking them is the
-    /// responsibility of the caller.
+    /// The insane fees check is gated behind the `insane_fee_checks` parameter as the caller
+    /// may want to create a transaction without a change output.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
@@ -1154,6 +1154,7 @@ impl SpendTransaction {
         cpfp_descriptor: &CpfpDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
         lock_time: u32,
+        insane_fee_check: bool,
     ) -> Result<SpendTransaction, TransactionCreationError> {
         // The CPFP is tricky to compute. We could be smart and avoid some allocations here
         // but at the cost of clarity.
@@ -1226,7 +1227,7 @@ impl SpendTransaction {
         let fees = value_in
             .checked_sub(value_out)
             .ok_or(TransactionCreationError::NegativeFees)?;
-        if fees > INSANE_FEES {
+        if insane_fee_check && fees > INSANE_FEES {
             return Err(TransactionCreationError::InsaneFees);
         }
 
@@ -1471,6 +1472,7 @@ pub fn spend_tx_from_deposits(
     to_pk_ctx: DescriptorPublicKeyCtx<impl secp256k1::Verification>,
     unvault_csv: u32,
     lock_time: u32,
+    check_insane_fees: bool,
 ) -> Result<SpendTransaction, TransactionCreationError> {
     let unvault_txins = deposit_txins
         .into_iter()
@@ -1489,6 +1491,7 @@ pub fn spend_tx_from_deposits(
         cpfp_descriptor,
         to_pk_ctx,
         lock_time,
+        check_insane_fees,
     )
 }
 
@@ -2102,6 +2105,7 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
+            true,
         )
         .expect("Fees ok");
         assert_eq!(spend_tx.fees(), fees);
@@ -2141,6 +2145,7 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
+            true,
         )
         .expect("Amounts ok");
         let spend_tx_sighash = spend_tx
@@ -2223,6 +2228,7 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
+            true,
         )
         .expect("Amounts Ok");
         assert_eq!(spend_tx.fees(), fees);
