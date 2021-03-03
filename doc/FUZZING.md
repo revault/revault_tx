@@ -17,7 +17,7 @@ cargo +nightly fuzz run parse_cancel -- -runs=0 -max_len=200000
 
 ## Corpus storage and new seed generation
 
-We for now store the corpora at https://github.com/re-vault/revault_tx_corpus. Coverage-increasing seeds
+We for now store the corpora at https://github.com/revault/revault_tx_corpus. Coverage-increasing seeds
 are very welcome to be contributed there, just be sure to minimize the corpus beforehand:
 ```shell
 cargo +nightly fuzz cmin <target name>

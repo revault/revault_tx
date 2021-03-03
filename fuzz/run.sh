@@ -1,8 +1,8 @@
-# Fetch the corpus from https://github.com/re-vault/revault_tx_corpus and run the targets on it
+# Fetch the corpus from https://github.com/revault/revault_tx_corpus and run the targets on it
 # Meant to be ran by CI
 #!/usr/bin/env sh
 
-cd corpus && git clone https://github.com/re-vault/revault_tx_corpus
+cd corpus && git clone https://github.com/revault/revault_tx_corpus
 
 cargo install --force cargo-fuzz
 for target in $(ls fuzz/fuzz_targets);do
