@@ -346,6 +346,31 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
         as_hex
     }
+
+    fn fees(&self) -> u64 {
+        let mut value_in: u64 = 0;
+        for i in self.inner_tx().inputs.iter() {
+            value_in = value_in
+                .checked_add(
+                    i.witness_utxo
+                        .as_ref()
+                        .expect("A witness utxo is always set")
+                        .value,
+                )
+                .expect("PSBT bug: overflow while computing spent coins value");
+        }
+
+        let mut value_out: u64 = 0;
+        for o in self.inner_tx().global.unsigned_tx.output.iter() {
+            value_out = value_out
+                .checked_add(o.value)
+                .expect("PSBT bug: overflow while computing created coins value");
+        }
+
+        value_in
+            .checked_sub(value_out)
+            .expect("We never create a transaction with negative fees")
+    }
 }
 
 // Boilerplate for newtype declaration and small trait helpers implementation.
@@ -472,6 +497,8 @@ fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError> {
 
     // None: unknown, Some(true): an input was final, Some(false) an input was non-final
     let mut is_final = None;
+    // Record the number of coins spent by the transaction
+    let mut value_in: u64 = 0;
     for input in psbt.inputs.iter() {
         // We restrict to native segwit, also for the external fee-bumping wallet.
         if input.witness_utxo.is_none() {
@@ -503,6 +530,35 @@ fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError> {
             }
             is_final = Some(false);
         }
+
+        // If the witness script is provided, it must be a sane Miniscript
+        if let Some(ref script) = input.witness_script {
+            let _: miniscript::Miniscript<_, miniscript::Segwitv0> =
+                miniscript::Miniscript::parse(script)
+                    .map_err(|_| PsbtValidationError::InvalidInWitnessScript(input.clone()))?;
+        }
+
+        // We'll then check it doesn't create more than it spends
+        value_in = value_in
+            .checked_add(
+                input
+                    .witness_utxo
+                    .as_ref()
+                    .expect("None checked above")
+                    .value,
+            )
+            .ok_or(PsbtValidationError::InsaneAmounts)?;
+    }
+
+    let mut value_out: u64 = 0;
+    for o in inner_tx.output.iter() {
+        value_out = value_out
+            .checked_add(o.value)
+            .ok_or(PsbtValidationError::InsaneAmounts)?;
+    }
+
+    if value_out > value_in {
+        return Err(PsbtValidationError::InsaneAmounts);
     }
 
     Ok(psbt)
@@ -1088,8 +1144,8 @@ impl SpendTransaction {
     /// A spend transaction can batch multiple unvault txouts, and may have any number of
     /// txouts (destination and change) in addition to the CPFP one..
     ///
-    /// Note: fees are *not* checked in the constructor and sanity-checking them is the
-    /// responsibility of the caller.
+    /// The insane fees check is gated behind the `insane_fee_checks` parameter as the caller
+    /// may want to create a transaction without a change output.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
@@ -1098,21 +1154,23 @@ impl SpendTransaction {
         cpfp_descriptor: &CpfpDescriptor<Pk>,
         to_pk_ctx: ToPkCtx,
         lock_time: u32,
-    ) -> SpendTransaction {
-        // The spend transaction CPFP output value depends on its size. See practical-revault for
-        // more details. Here we append a dummy one, and we'll modify it in place afterwards.
-        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor, to_pk_ctx);
+        insane_fee_check: bool,
+    ) -> Result<SpendTransaction, TransactionCreationError> {
+        // The CPFP is tricky to compute. We could be smart and avoid some allocations here
+        // but at the cost of clarity.
+        let cpfp_txo = SpendTransaction::cpfp_txout(
+            unvault_inputs.clone(),
+            spend_txouts.clone(),
+            cpfp_descriptor,
+            to_pk_ctx,
+            lock_time,
+        );
 
-        // Record the satisfaction cost before moving the inputs
-        let sat_weight: u64 = unvault_inputs
-            .iter()
-            .map(|txin| txin.max_sat_weight())
-            .sum::<usize>()
-            .try_into()
-            .expect("An usize doesn't fit in an u64?");
+        // Record the value spent
+        let mut value_in: u64 = 0;
 
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
-        txos.push(dummy_cpfp_txo.txout().clone());
+        txos.push(cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
             SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
             SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
@@ -1120,7 +1178,7 @@ impl SpendTransaction {
 
         // For the PsbtOut s
         let mut txos_wit_script = Vec::with_capacity(spend_txouts.len() + 1);
-        txos_wit_script.push(dummy_cpfp_txo.into_witness_script());
+        txos_wit_script.push(cpfp_txo.into_witness_script());
         txos_wit_script.extend(
             spend_txouts
                 .into_iter()
@@ -1130,7 +1188,7 @@ impl SpendTransaction {
                 }),
         );
 
-        let mut psbt = Psbt {
+        let psbt = Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: TX_VERSION,
@@ -1147,6 +1205,7 @@ impl SpendTransaction {
                 .into_iter()
                 .map(|input| {
                     let prev_txout = input.into_txout();
+                    value_in += prev_txout.txout().value;
                     PsbtIn {
                         witness_script: prev_txout.witness_script().clone(),
                         sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
@@ -1164,28 +1223,122 @@ impl SpendTransaction {
                 .collect(),
         };
 
-        // We only need to modify the unsigned_tx global's output value as the PSBT outputs only
-        // contain the witness script.
-        let witstrip_weight: u64 = psbt.global.unsigned_tx.get_weight().try_into().unwrap();
-        let total_weight = sat_weight
-            .checked_add(witstrip_weight)
-            .expect("Weight computation bug");
-        // See https://github.com/revault/practical-revault/blob/master/transactions.md#cancel_tx
-        // for this arbirtrary value.
-        let cpfp_value = 2 * 32 * total_weight;
-        // We could just use output[0], but be careful.
-        let mut cpfp_txo = psbt
-            .global
-            .unsigned_tx
-            .output
-            .iter_mut()
-            .find(|txo| txo.script_pubkey == cpfp_descriptor.0.script_pubkey(to_pk_ctx))
-            .expect("We just created it!");
-        cpfp_txo.value = cpfp_value;
+        let value_out: u64 = psbt.global.unsigned_tx.output.iter().map(|o| o.value).sum();
+        let fees = value_in
+            .checked_sub(value_out)
+            .ok_or(TransactionCreationError::NegativeFees)?;
+        if insane_fee_check && fees > INSANE_FEES {
+            return Err(TransactionCreationError::InsaneFees);
+        }
 
-        SpendTransaction(psbt)
+        Ok(SpendTransaction(psbt))
     }
 
+    /// Get the CPFP transaction output for a Spend transaction spending these `unvault_inputs`
+    /// and creating these `spend_txouts`.
+    ///
+    /// The CPFP output value is dependant on the transaction size, see [practical-revaul
+    /// t](https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx) for
+    /// more details.
+    pub fn cpfp_txout<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+        unvault_inputs: Vec<UnvaultTxIn>,
+        spend_txouts: Vec<SpendTxOut>,
+        cpfp_descriptor: &CpfpDescriptor<Pk>,
+        to_pk_ctx: ToPkCtx,
+        lock_time: u32,
+    ) -> CpfpTxOut {
+        let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
+        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor, to_pk_ctx);
+        txos.push(dummy_cpfp_txo.txout().clone());
+        txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
+            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
+            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
+        }));
+        let dummy_tx = Transaction {
+            version: TX_VERSION,
+            lock_time,
+            input: unvault_inputs
+                .iter()
+                .map(|input| input.unsigned_txin())
+                .collect(),
+            output: txos,
+        };
+
+        let sat_weight: u64 = unvault_inputs
+            .iter()
+            .map(|txin| txin.max_sat_weight())
+            .sum::<usize>()
+            .try_into()
+            .expect("An usize doesn't fit in an u64?");
+        let witstrip_weight: u64 = dummy_tx
+            .get_weight()
+            .try_into()
+            .expect("Bug: an usize that doesn't fit in a u64?");
+        let total_weight = sat_weight
+            .checked_add(witstrip_weight)
+            .expect("Weight computation bug: cannot overflow");
+
+        // See https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx
+        // for this arbirtrary value.
+        let cpfp_value = 16 * total_weight;
+        CpfpTxOut::new(cpfp_value, &cpfp_descriptor, to_pk_ctx)
+    }
+
+    /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction
+    /// is already finalized, returns the exact feerate. Otherwise computes the maximum reasonable
+    /// weight of a satisfaction and returns the feerate based on this estimation.
+    pub fn max_feerate(&self) -> u64 {
+        let fees = self.fees();
+        let weight = self.max_weight();
+
+        fees.checked_add(weight - 1) // Weight is never 0
+            .expect("Feerate computation bug, fees >u64::MAX")
+            .checked_div(weight)
+            .expect("Weight is never 0")
+    }
+
+    /// Get the size of this transaction, assuming fully-satisfied inputs. If the transaction
+    /// is already finalized, returns the exact size in witness units. Otherwise computes the
+    /// maximum reasonable weight of a satisfaction.
+    pub fn max_weight(&self) -> u64 {
+        let psbt = self.inner_tx();
+        let tx = &psbt.global.unsigned_tx;
+
+        let mut weight: u64 = tx.get_weight().try_into().expect("Can't be >u64::MAX");
+        for txin in psbt.inputs.iter() {
+            let txin_weight: u64 = if self.is_finalized() {
+                txin.final_script_witness
+                    .as_ref()
+                    .expect("Always set if final")
+                    .iter()
+                    .map(|e| e.len())
+                    .sum::<usize>()
+                    .try_into()
+                    .expect("Bug: witness size >u64::MAX")
+            } else {
+                miniscript::Descriptor::Wsh(
+                    miniscript::Miniscript::parse(
+                        txin.witness_script
+                            .as_ref()
+                            .expect("Unvault txins always have a witness Script"),
+                    )
+                    .expect("UnvaultTxIn witness_script is created from a Miniscript"),
+                )
+                .max_satisfaction_weight(miniscript::NullCtx)
+                .expect("It's a sane Script, derived from a Miniscript")
+                .try_into()
+                .expect("Can't be >u64::MAX")
+            };
+            weight = weight
+                .checked_add(txin_weight)
+                .expect("Weight computation bug: overflow computing spent coins value");
+        }
+        assert!(weight > 0, "We never create an empty tx");
+
+        weight
+    }
+
+    // FIXME: feerate sanity checks
     /// Parse a Spend transaction from a PSBT
     pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
         let psbt = Decodable::consensus_decode(raw_psbt)?;
@@ -1319,6 +1472,7 @@ pub fn spend_tx_from_deposits(
     to_pk_ctx: DescriptorPublicKeyCtx<impl secp256k1::Verification>,
     unvault_csv: u32,
     lock_time: u32,
+    check_insane_fees: bool,
 ) -> Result<SpendTransaction, TransactionCreationError> {
     let unvault_txins = deposit_txins
         .into_iter()
@@ -1331,13 +1485,14 @@ pub fn spend_tx_from_deposits(
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
-    Ok(SpendTransaction::new(
+    SpendTransaction::new(
         unvault_txins,
         spend_txos,
         cpfp_descriptor,
         to_pk_ctx,
         lock_time,
-    ))
+        check_insane_fees,
+    )
 }
 
 #[cfg(test)]
@@ -1637,12 +1792,10 @@ mod tests {
                 .unwrap();
         assert_eq!(h_emer, emergency_tx_no_feebump);
 
-        let value_no_feebump =
-            emergency_tx_no_feebump.inner_tx().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + deposit_txin.max_sat_weight() as u64) * 22,
-            deposit_value,
+            emergency_tx_no_feebump.fees(),
+            (376 + deposit_txin.max_sat_weight() as u64) * 22,
         );
         // We cannot get a sighash for a non-existing input
         assert_eq!(
@@ -1728,7 +1881,6 @@ mod tests {
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are finalized
         let deposit_txin_sat_cost = deposit_txin.max_sat_weight();
-        let unvault_txo = UnvaultTxOut::new(7000, &unvault_descriptor, xpub_ctx);
         let mut unvault_tx = UnvaultTransaction::new(
             deposit_txin.clone(),
             &unvault_descriptor,
@@ -1736,14 +1888,12 @@ mod tests {
             xpub_ctx,
             0,
         )?;
+
         assert_eq!(h_unvault, unvault_tx);
         let unvault_value = unvault_tx.inner_tx().global.unsigned_tx.output[0].value;
         // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
         // feerate is sat/WU, and 30_000 is the CPFP output value.
-        assert_eq!(
-            unvault_value + (548 + deposit_txin_sat_cost as u64) * 6 + 30_000,
-            deposit_value,
-        );
+        assert_eq!(unvault_tx.fees(), (548 + deposit_txin_sat_cost as u64) * 6);
 
         // Create and sign the cancel transaction
         let rev_unvault_txin = unvault_tx.revault_unvault_txin(&unvault_descriptor, xpub_ctx);
@@ -1766,8 +1916,8 @@ mod tests {
             .value;
         // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
-            rev_unvault_txin.txout().txout().value,
+            cancel_tx_without_feebump.fees(),
+            (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
         );
         let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -1843,16 +1993,10 @@ mod tests {
             0,
         );
         assert_eq!(h_unemer, unemergency_tx_no_feebump);
-        let value_no_feebump = unemergency_tx_no_feebump
-            .inner_tx()
-            .global
-            .unsigned_tx
-            .output[0]
-            .value;
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
-            value_no_feebump + (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
-            rev_unvault_txin.txout().txout().value,
+            unemergency_tx_no_feebump.fees(),
+            (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
         );
         let unemergency_tx_sighash = unemergency_tx_no_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -1938,8 +2082,20 @@ mod tests {
         // Create and sign a spend transaction
         let spend_unvault_txin =
             unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
+        let dummy_txo = ExternalTxOut::default();
+        let cpfp_value = SpendTransaction::cpfp_txout(
+            vec![spend_unvault_txin.clone()],
+            vec![SpendTxOut::Destination(dummy_txo.clone())],
+            &cpfp_descriptor,
+            xpub_ctx,
+            0,
+        )
+        .txout()
+        .value;
+        let fees = 20_000;
         let spend_txo = ExternalTxOut::new(TxOut {
-            value: 1,
+            // The CPFP output value won't be > 150k sats for our parameters
+            value: spend_unvault_txin.txout().txout().value - cpfp_value - fees,
             ..TxOut::default()
         });
         // Test satisfaction failure with a wrong CSV value
@@ -1949,7 +2105,10 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
-        );
+            true,
+        )
+        .expect("Fees ok");
+        assert_eq!(spend_tx.fees(), fees);
         let spend_tx_sighash = spend_tx
             .signature_hash_internal_input(0, SigHashType::All)
             .expect("Input exists");
@@ -1986,7 +2145,9 @@ mod tests {
             &cpfp_descriptor,
             xpub_ctx,
             0,
-        );
+            true,
+        )
+        .expect("Amounts ok");
         let spend_tx_sighash = spend_tx
             .signature_hash_internal_input(0, SigHashType::All)
             .expect("Input exists");
@@ -2012,7 +2173,7 @@ mod tests {
                     "0ed7dc14fe8d1364b3185fa46e940cb8e858f8de32e63f88353a2bd66eb99e2a:0",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2020,7 +2181,7 @@ mod tests {
                     "23aacfca328942892bb007a86db0bf5337005f642b3c46aef50c23af03ec333a:1",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value * 4, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2028,7 +2189,7 @@ mod tests {
                     "fccabf4077b7e44ba02378a97a84611b545c11a1ef2af16cbb6e1032aa059b1d:0",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value / 2, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2036,18 +2197,41 @@ mod tests {
                     "71dc04303184d54e6cc2f92d843282df2854d6dd66f10081147b84aeed830ae1:0",
                 )
                 .unwrap(),
-                unvault_txo.clone(),
+                UnvaultTxOut::new(deposit_value * 50, &unvault_descriptor, xpub_ctx),
                 csv,
             ),
         ];
         let n_txins = spend_unvault_txins.len();
+        let dummy_txo = ExternalTxOut::default();
+        let cpfp_value = SpendTransaction::cpfp_txout(
+            spend_unvault_txins.clone(),
+            vec![SpendTxOut::Destination(dummy_txo.clone())],
+            &cpfp_descriptor,
+            xpub_ctx,
+            0,
+        )
+        .txout()
+        .value;
+        let fees = 30_000;
+        let spend_txo = ExternalTxOut::new(TxOut {
+            value: spend_unvault_txins
+                .iter()
+                .map(|txin| txin.txout().txout().value)
+                .sum::<u64>()
+                - cpfp_value
+                - fees,
+            ..TxOut::default()
+        });
         let mut spend_tx = SpendTransaction::new(
             spend_unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],
             &cpfp_descriptor,
             xpub_ctx,
             0,
-        );
+            true,
+        )
+        .expect("Amounts Ok");
+        assert_eq!(spend_tx.fees(), fees);
         for i in 0..n_txins {
             let spend_tx_sighash = spend_tx
                 .signature_hash_internal_input(i, SigHashType::All)
@@ -2114,8 +2298,8 @@ mod tests {
             serde_json::from_str(&unemergency_psbt_str).unwrap();
         assert_eq!(unemergency_tx.hex().as_str(), "02000000023ca9946a73c2437f73f27be48e0a5e3ed3d08c5d85b805bc3e6d5380659eeeca0000000000fdffffffbabf64948c063da00969c691423669a93f4e6ecee5b246bf50c21840d207d2b70000000000fdffffff01d2ca02000000000022002093c229bd08f511591d6d547d30e18da1b669b512187796adafd465e1acd52b2700000000");
 
-        let spend_psbt_str = "\"cHNidP8BAOICAAAABCqeuW7WKzo1iD/mMt74WOi4DJRupF8Ys2QTjf4U3NcOAAAAAACYrwAAOjPsA68jDPWuRjwrZF8AN1O/sG2oB7AriUKJMsrPqiMBAAAAAJivAAAdmwWqMhBuu2zxKu+hEVxUG2GEeql4I6BL5Ld3QL/K/AAAAAAAmK8AAOEKg+2uhHsUgQDxZt3WVCjfgjKELfnCbE7VhDEwBNxxAAAAAACYrwAAAgBvAgAAAAAAIgAgc6PRKHpDJsKQybZqu4t9gWEx88IYKH+LzgASLcecSBsBAAAAAAAAAAAAAAAAAAEBK1gbAAAAAAAAIgAgwhjKF7KtiW0d8AkBySti/fOv6ycb1Eet3DZ9aA6pVyciAgOVJQE/NHBkVx/rMKLQWAjNhxz85yprtG+e7GqRBCWFDUgwRQIhAJKaJ8lNYfk8xqeJKDye1aaIO9Jo/0w1/nRJv5uHxjDTAiB9o4wAWB/ACU8+J97KwirKmBB+3zScE8amA23NHEqrHQEiAgOjQZUPUJCZw15ox8E9pkst5wpPGEw/F664Fcna1Ykwr0cwRAIgV98q6iV3fwp6adkblE9ljpQwM+L9ZIhg2hJGRDLHJ+ACIAHAmPZJdTMGLPhsC9Pnz5Xbtf+KvKIL8ugJaOT7EjpVASICA4bjX8I/noIFMAr8HTia9R63XAuSnWn8sI/9GHSe3nD5SDBFAiEAy6GC8wjOvh/kdyaXBaW2DD73EXGnPdcE77R9u7BbM18CIAGIDvKeClEquvJkCb/SOVcWocMDpEu9SYnKO4s8fWQDAQEDBAEAAAABBashA4bjX8I/noIFMAr8HTia9R63XAuSnWn8sI/9GHSe3nD5rFGHZHapFBV2zEak9igJJLI1lOrIyeuuDSrEiKxrdqkU2eoahm2QWfWNMxxWWKaSr3KaWwiIrGyTUodnUiEDo0GVD1CQmcNeaMfBPaZLLecKTxhMPxeuuBXJ2tWJMK8hA5UlAT80cGRXH+swotBYCM2HHPznKmu0b57sapEEJYUNUq8DmK8AsmgAAQErWBsAAAAAAAAiACDCGMoXsq2JbR3wCQHJK2L986/rJxvUR63cNn1oDqlXJyICA5UlAT80cGRXH+swotBYCM2HHPznKmu0b57sapEEJYUNRzBEAiBm2xs+VBAv6Sqn0QvvX02FgIq/uLX1OdEjvFm7PjNdDQIgRBJ2IAQT9O8/OjKDYeILgA9GYcctHXYdl0nGTM/JLHcBIgIDo0GVD1CQmcNeaMfBPaZLLecKTxhMPxeuuBXJ2tWJMK9IMEUCIQDuDzGKnJbjZK/2vuaDfILrRbWdn3ZnmB7hDh6yU9txOQIgPOE8tz2NW3CWwipb1KuRsr2y7G/WqO112S6KTitgi84BIgIDhuNfwj+eggUwCvwdOJr1HrdcC5Kdafywj/0YdJ7ecPlIMEUCIQCKm6qEicrXu72a5dAONxrLumdbxD/Gk/Blt88Zc6jn6wIgMeYVtKpSIbJOml8cED4DnRHi9AngWbM5zda/UunjfbYBAQMEAQAAAAEFqyEDhuNfwj+eggUwCvwdOJr1HrdcC5Kdafywj/0YdJ7ecPmsUYdkdqkUFXbMRqT2KAkksjWU6sjJ664NKsSIrGt2qRTZ6hqGbZBZ9Y0zHFZYppKvcppbCIisbJNSh2dSIQOjQZUPUJCZw15ox8E9pkst5wpPGEw/F664Fcna1YkwryEDlSUBPzRwZFcf6zCi0FgIzYcc/Ocqa7RvnuxqkQQlhQ1SrwOYrwCyaAABAStYGwAAAAAAACIAIMIYyheyrYltHfAJAckrYv3zr+snG9RHrdw2fWgOqVcnIgIDlSUBPzRwZFcf6zCi0FgIzYcc/Ocqa7RvnuxqkQQlhQ1HMEQCIDYaPlK5+Xu5WBuwXjN1E+5ILhLdCuZvsAA7YT6jfBXPAiAL6Ln7wkZP0qAh91eVO3LHF/n1fiJSpDE5b0DdifTwfAEiAgOjQZUPUJCZw15ox8E9pkst5wpPGEw/F664Fcna1Ykwr0cwRAIgJ5e62JgxnDk0NhxiN3B8vgOSo/FybGKgrkAM9f6B5twCIHL04F2V5lOfyUEN6NOJve2/3NrKrtxY5GOMIgqaXHFjASICA4bjX8I/noIFMAr8HTia9R63XAuSnWn8sI/9GHSe3nD5RzBEAiANIxN99f650OS0qzCR6zgGdgCWPuq3c8kZLbWiFf9ZOgIgQ9lWDWHxFyxGIDJp6EEfXZ+CI+CsiKLD7QsSaIx2HuEBAQMEAQAAAAEFqyEDhuNfwj+eggUwCvwdOJr1HrdcC5Kdafywj/0YdJ7ecPmsUYdkdqkUFXbMRqT2KAkksjWU6sjJ664NKsSIrGt2qRTZ6hqGbZBZ9Y0zHFZYppKvcppbCIisbJNSh2dSIQOjQZUPUJCZw15ox8E9pkst5wpPGEw/F664Fcna1YkwryEDlSUBPzRwZFcf6zCi0FgIzYcc/Ocqa7RvnuxqkQQlhQ1SrwOYrwCyaAABAStYGwAAAAAAACIAIMIYyheyrYltHfAJAckrYv3zr+snG9RHrdw2fWgOqVcnIgIDlSUBPzRwZFcf6zCi0FgIzYcc/Ocqa7RvnuxqkQQlhQ1IMEUCIQCJvM9PYVAM2vINuOBgqaorAnpFuQ+gue46LnRwNJLy5wIgex7Y3BR1MmFT4I9TmltgSBuWH//pCqqaNh9owmHgGCEBIgIDo0GVD1CQmcNeaMfBPaZLLecKTxhMPxeuuBXJ2tWJMK9IMEUCIQCHFcUC9hfnUopr1yzKtG0vCcyN8pkT4hRy8ozryCL15QIgZrHeJQdbNRuc5mJr5OyotJbWeWS5iOLvXqr+WnjqW5sBIgIDhuNfwj+eggUwCvwdOJr1HrdcC5Kdafywj/0YdJ7ecPlHMEQCICVDnuqSSGvbw4c0hBlNJxzvcENHmv2OpsiDyYQz5iPCAiAfZMB8VQZtmLBqz0HTsJkc1pNw+duPsZU+s8Rb2LCziwEBAwQBAAAAAQWrIQOG41/CP56CBTAK/B04mvUet1wLkp1p/LCP/Rh0nt5w+axRh2R2qRQVdsxGpPYoCSSyNZTqyMnrrg0qxIisa3apFNnqGoZtkFn1jTMcVlimkq9ymlsIiKxsk1KHZ1IhA6NBlQ9QkJnDXmjHwT2mSy3nCk8YTD8XrrgVydrViTCvIQOVJQE/NHBkVx/rMKLQWAjNhxz85yprtG+e7GqRBCWFDVKvA5ivALJoAAEBJSEDhuNfwj+eggUwCvwdOJr1HrdcC5Kdafywj/0YdJ7ecPmsUYcAAA==\"";
+        let spend_psbt_str = "\"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\"";
         let spend_tx: SpendTransaction = serde_json::from_str(&spend_psbt_str).unwrap();
-        assert_eq!(spend_tx.hex().as_str(), "02000000042a9eb96ed62b3a35883fe632def858e8b80c946ea45f18b364138dfe14dcd70e000000000098af00003a33ec03af230cf5ae463c2b645f003753bfb06da807b02b89428932cacfaa23010000000098af00001d9b05aa32106ebb6cf12aefa1115c541b61847aa97823a04be4b77740bfcafc000000000098af0000e10a83edae847b148100f166ddd65428df8232842df9c26c4ed584313004dc71000000000098af000002006f02000000000022002073a3d1287a4326c290c9b66abb8b7d816131f3c218287f8bce00122dc79c481b01000000000000000000000000");
+        assert_eq!(spend_tx.hex().as_str(), "020000000001042a9eb96ed62b3a35883fe632def858e8b80c946ea45f18b364138dfe14dcd70e00000000005ed000003a33ec03af230cf5ae463c2b645f003753bfb06da807b02b89428932cacfaa2301000000005ed000001d9b05aa32106ebb6cf12aefa1115c541b61847aa97823a04be4b77740bfcafc00000000005ed00000e10a83edae847b148100f166ddd65428df8232842df9c26c4ed584313004dc7100000000005ed0000002006f0200000000002200202a3ba224413511e5fc8447c9101d477e2f95db7113ae9fca0b1ef84aac122c605cf6c30000000000000500483045022100a36217e123dea9719dbbc704075dc191f08393537e91ff2630eaf0c7ab89677802207604b290f81148edf8f33c0f84f9aad1391a3513e7a687f721267fc48247adde01473044022055da6db73cf4af14bf8294933dc1b738841c2d6ad371215ceafb61701ac14d9402203626f79d9367ae382041136e52bb378df836b16a97b71c15333bfa3523fbdba701483045022100b2a1b4559bca2719b4abaa7c172329f97b198d5eda2d944d24b684cb42291232022038d74603e78e8e35e02adbe08f93ce90d5d407508463f8e425ddd98abe8fda1701ab2103dacf1ec4d8caaabac45e9237e09d69aadce1b8945dcc4776fe73fb9f4c31f7a4ac51876476a914594f6cd0c51687611968c77d63f40f0422ee26ae88ac6b76a9147ec81e31ce46a8c539882613ee54444fab4fe8a288ac6c93528767522102bf9959bfd4e22513e55bb5905ef3a2a29f9f924adb00c627fd1d92b67ff9cf942102fe9abf103eaa2e1180328774261155380eff416a179e61b0a4be99abcaf88d9b52af035ed000b26805004730440220194744ced4f4637ba2b351bd2562632e93a0e39cc087702514fc2b7fa2da4c0a0220700803ec7e681b1ea31b6463711912dc70bad7bbf50b9f3e063c942a8c1bfe72014730440220216306533836fccc08f07cd8ede702f7ef283539943dc10b93576892ed807217022019bd34f280f74578331377b15cb0f3184d30b2ddb87edd79a0bc63db17aa726b0147304402203a24c13039e1a5abdd8d22dc44036b415b96a4a6cf449145f5bcc89a48cf32af022052c6a253de2c38e41fff9cf16f4869a78e07535ec5806a2ff3f985cb7993fbe201ab2103dacf1ec4d8caaabac45e9237e09d69aadce1b8945dcc4776fe73fb9f4c31f7a4ac51876476a914594f6cd0c51687611968c77d63f40f0422ee26ae88ac6b76a9147ec81e31ce46a8c539882613ee54444fab4fe8a288ac6c93528767522102bf9959bfd4e22513e55bb5905ef3a2a29f9f924adb00c627fd1d92b67ff9cf942102fe9abf103eaa2e1180328774261155380eff416a179e61b0a4be99abcaf88d9b52af035ed000b2680500483045022100bea60c83db41973c639d42cd3525efe82b15456bfba0a904fb77ccb8a8e054cb02206498d4a777c56f943f388eb0f1d765ee8395d1c2e781486d0dd4f0700adc8f0901473044022052ebc8f31d96bd172f2491cd85b0ef9b4aa1f2408e185781cd57a550d7b4f463022069f9e78d039665d5a53c13752d1719e567928c465219a64aa7ee5bc89578b4ad01483045022100b29bf7526aab5fad36f77ecd628352afc12d00c32a0747ad91dd61aae767e4d2022023f0c040ee84caf653d541d8b5f1ac6472e52199056112d99d3a739e57bfaac501ab2103dacf1ec4d8caaabac45e9237e09d69aadce1b8945dcc4776fe73fb9f4c31f7a4ac51876476a914594f6cd0c51687611968c77d63f40f0422ee26ae88ac6b76a9147ec81e31ce46a8c539882613ee54444fab4fe8a288ac6c93528767522102bf9959bfd4e22513e55bb5905ef3a2a29f9f924adb00c627fd1d92b67ff9cf942102fe9abf103eaa2e1180328774261155380eff416a179e61b0a4be99abcaf88d9b52af035ed000b2680500483045022100af1f4b2c3455b044970e8bf62c9e75b4b3e87b5bac7af3b3e33a101e3eebed7202204c377b3764a7dfeccb2f82af327eb23dbf408ae48284a1a7206f43dc04a0b39701483045022100f221ee515d63aef0f27545b736367d0d1ae3ce4433b8818686587decc048b1cc0220536fdfb7470dcd28db813d0efcc2acb364a4d1eece7afcdc9510525993f7487401483045022100faca69e1e8c7b969f0ca666a358693b6bac50b9c02c3722dc2d27a0ccc664563022006ce6039bfcae8a28d74b3d584c37723b466983a4c0ccb63591df74185850a5101ab2103dacf1ec4d8caaabac45e9237e09d69aadce1b8945dcc4776fe73fb9f4c31f7a4ac51876476a914594f6cd0c51687611968c77d63f40f0422ee26ae88ac6b76a9147ec81e31ce46a8c539882613ee54444fab4fe8a288ac6c93528767522102bf9959bfd4e22513e55bb5905ef3a2a29f9f924adb00c627fd1d92b67ff9cf942102fe9abf103eaa2e1180328774261155380eff416a179e61b0a4be99abcaf88d9b52af035ed000b26800000000");
     }
 }
