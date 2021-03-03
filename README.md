@@ -9,7 +9,7 @@ Revault-specific transactions.
 
 # Contributing
 
-Contributions are very welcome. For general guidelines, see [CONTRIBUTING.md](doc/CONTRIBUTING.md).
+Contributions are very welcome. For general guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Discussions happen either here in issues or at [`#revault` on freenode](https://webchat.freenode.net/).
 
