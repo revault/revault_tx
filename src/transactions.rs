@@ -1478,10 +1478,12 @@ pub fn spend_tx_from_deposits(
         .into_iter()
         .map(|(txin, index)| {
             let unvault_desc = unvault_descriptor.derive(index);
-            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_descriptor, to_pk_ctx, lock_time)
-                .and_then(|unvault_tx| {
+            let cpfp_desc = cpfp_descriptor.derive(index);
+            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_desc, to_pk_ctx, lock_time).and_then(
+                |unvault_tx| {
                     Ok(unvault_tx.spend_unvault_txin(&unvault_desc, to_pk_ctx, unvault_csv))
-                })
+                },
+            )
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
