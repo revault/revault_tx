@@ -84,7 +84,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the sighash for an input spending an internal Revault TXO.
     /// **Do not use it for fee bumping inputs, use [signature_hash_feebump_input] instead**
     ///
-    /// Returns `None` if the input does not exist.
+    /// Will error if the input is out of bounds or the PSBT input does not contain a Witness
+    /// Script (ie was already finalized).
     fn signature_hash_internal_input(
         &self,
         input_index: usize,
