@@ -4,12 +4,14 @@
 
 use crate::{
     error::TxoutCreationError,
-    scripts::{CpfpDescriptor, DepositDescriptor, EmergencyAddress, UnvaultDescriptor},
+    scripts::{
+        DerivedCpfpDescriptor, DerivedDepositDescriptor, DerivedUnvaultDescriptor, EmergencyAddress,
+    },
 };
 
 use miniscript::{
     bitcoin::{Script, TxOut},
-    MiniscriptKey, ToPublicKey,
+    DescriptorTrait,
 };
 
 use std::fmt;
@@ -61,17 +63,13 @@ implem_revault_txout!(
 );
 impl DepositTxOut {
     /// Create a new DepositTxOut out of the given Deposit script descriptor
-    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-        value: u64,
-        script_descriptor: &DepositDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
-    ) -> DepositTxOut {
+    pub fn new(value: u64, script_descriptor: &DerivedDepositDescriptor) -> DepositTxOut {
         DepositTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
+                script_pubkey: script_descriptor.0.script_pubkey(),
             },
-            witness_script: Some(script_descriptor.0.witness_script(to_pk_ctx)),
+            witness_script: Some(script_descriptor.0.explicit_script()),
         }
     }
 }
@@ -79,17 +77,13 @@ impl DepositTxOut {
 implem_revault_txout!(UnvaultTxOut, doc = "*The* unvault transaction output.");
 impl UnvaultTxOut {
     /// Create a new UnvaultTxOut out of the given Unvault script descriptor
-    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-        value: u64,
-        script_descriptor: &UnvaultDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
-    ) -> UnvaultTxOut {
+    pub fn new(value: u64, script_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxOut {
         UnvaultTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
+                script_pubkey: script_descriptor.0.script_pubkey(),
             },
-            witness_script: Some(script_descriptor.0.witness_script(to_pk_ctx)),
+            witness_script: Some(script_descriptor.0.explicit_script()),
         }
     }
 }
@@ -117,17 +111,13 @@ implem_revault_txout!(
 );
 impl CpfpTxOut {
     /// Create a new CpfpTxOut out of the given Cpfp descriptor
-    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-        value: u64,
-        script_descriptor: &CpfpDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
-    ) -> CpfpTxOut {
+    pub fn new(value: u64, script_descriptor: &DerivedCpfpDescriptor) -> CpfpTxOut {
         CpfpTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(to_pk_ctx),
+                script_pubkey: script_descriptor.0.script_pubkey(),
             },
-            witness_script: Some(script_descriptor.0.witness_script(to_pk_ctx)),
+            witness_script: Some(script_descriptor.0.explicit_script()),
         }
     }
 }

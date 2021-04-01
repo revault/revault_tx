@@ -14,12 +14,17 @@ use miniscript::{
 use std::{convert::From, error, fmt};
 
 /// Error when creating a Revault Bitcoin Script
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug)]
 pub enum ScriptCreationError {
     /// Invalid number of keys, threshold, or timelock
     BadParameters,
+    /// At least one of the keys was not derivable
+    NonWildcardKeys,
     /// Miniscript policy compilation error
     PolicyCompilation(CompilerError),
+    /// Miniscript general error, currently only for sanity checks in descriptor
+    /// constructors
+    MiniscriptError(miniscript::Error),
 }
 
 impl fmt::Display for ScriptCreationError {
@@ -27,6 +32,8 @@ impl fmt::Display for ScriptCreationError {
         match self {
             Self::BadParameters => write!(f, "Bad parameters"),
             Self::PolicyCompilation(e) => write!(f, "Policy compilation error: '{}'", e),
+            Self::MiniscriptError(e) => write!(f, "Miniscript error: '{}'", e),
+            Self::NonWildcardKeys => write!(f, "Not all xpubs were wildcard"),
         }
     }
 }
@@ -34,6 +41,12 @@ impl fmt::Display for ScriptCreationError {
 impl From<CompilerError> for ScriptCreationError {
     fn from(e: CompilerError) -> Self {
         Self::PolicyCompilation(e)
+    }
+}
+
+impl From<miniscript::Error> for ScriptCreationError {
+    fn from(e: miniscript::Error) -> Self {
+        Self::MiniscriptError(e)
     }
 }
 
@@ -232,7 +245,7 @@ impl From<PsbtValidationError> for TransactionSerialisationError {
 impl error::Error for TransactionSerialisationError {}
 
 /// An error specific to the management of Revault transactions and scripts.
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 pub enum Error {
     /// Error when creating a Revault Bitcoin Script
     ScriptCreation(ScriptCreationError),

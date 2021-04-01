@@ -5,12 +5,7 @@
 //! We use PSBTs as defined in [bip-0174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki)
 //! for data structure as well as roles distribution.
 
-use crate::{
-    error::*,
-    scripts::{CpfpDescriptor, DepositDescriptor, EmergencyAddress, UnvaultDescriptor},
-    txins::*,
-    txouts::*,
-};
+use crate::{error::*, scripts::*, txins::*, txouts::*};
 
 use miniscript::{
     bitcoin::{
@@ -27,7 +22,7 @@ use miniscript::{
         Address, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
         Transaction,
     },
-    BitcoinSig, DescriptorPublicKey, DescriptorPublicKeyCtx, MiniscriptKey, ToPublicKey,
+    BitcoinSig, DescriptorTrait,
 };
 
 #[cfg(feature = "use-serde")]
@@ -438,7 +433,7 @@ macro_rules! create_tx {
         Psbt {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
-                    version: 2,
+                    version: TX_VERSION,
                     lock_time: $lock_time,
                     input: vec![$(
                         $revault_txin.unsigned_txin(),
@@ -447,6 +442,9 @@ macro_rules! create_tx {
                         $txout.clone().into_txout(),
                     )*],
                 },
+                version: 0,
+                xpub: BTreeMap::new(),
+                proprietary: BTreeMap::new(),
                 unknown: BTreeMap::new(),
             },
             inputs: vec![$(
@@ -647,16 +645,15 @@ impl UnvaultTransaction {
     /// It's always created using a fixed feerate and the CPFP output value is fixed as well.
     ///
     /// BIP174 Creator and Updater roles.
-    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn new(
         deposit_input: DepositTxIn,
-        unvault_descriptor: &UnvaultDescriptor<Pk>,
-        cpfp_descriptor: &CpfpDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        unvault_descriptor: &DerivedUnvaultDescriptor,
+        cpfp_descriptor: &DerivedCpfpDescriptor,
         lock_time: u32,
     ) -> Result<UnvaultTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness
-        let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor, to_pk_ctx);
-        let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor, to_pk_ctx);
+        let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor);
+        let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor);
         let dummy_tx = create_tx!(
             [(deposit_input.clone(), SigHashType::All)],
             [dummy_unvault_txout, dummy_cpfp_txout],
@@ -687,8 +684,8 @@ impl UnvaultTransaction {
         }
         let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE; // Arithmetic checked above
 
-        let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor, to_pk_ctx);
-        let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor, to_pk_ctx);
+        let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor);
+        let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor);
         Ok(UnvaultTransaction(create_tx!(
             [(deposit_input, SigHashType::All)],
             [unvault_txout, cpfp_txout],
@@ -696,13 +693,12 @@ impl UnvaultTransaction {
         )))
     }
 
-    fn unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    fn unvault_txin(
         &self,
-        unvault_descriptor: &UnvaultDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        unvault_descriptor: &DerivedUnvaultDescriptor,
         sequence: u32,
     ) -> UnvaultTxIn {
-        let spk = unvault_descriptor.0.script_pubkey(to_pk_ctx);
+        let spk = unvault_descriptor.0.script_pubkey();
         let index = self
             .inner_tx()
             .global
@@ -714,7 +710,7 @@ impl UnvaultTransaction {
 
         // Unwraped above
         let txo = &self.inner_tx().global.unsigned_tx.output[index];
-        let prev_txout = UnvaultTxOut::new(txo.value, unvault_descriptor, to_pk_ctx);
+        let prev_txout = UnvaultTxOut::new(txo.value, unvault_descriptor);
         UnvaultTxIn::new(
             OutPoint {
                 txid: self.inner_tx().global.unsigned_tx.txid(),
@@ -726,31 +722,25 @@ impl UnvaultTransaction {
     }
 
     /// Get the Unvault txo to be referenced in a spending transaction
-    pub fn spend_unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn spend_unvault_txin(
         &self,
-        unvault_descriptor: &UnvaultDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        unvault_descriptor: &DerivedUnvaultDescriptor,
         csv: u32,
     ) -> UnvaultTxIn {
-        self.unvault_txin(unvault_descriptor, to_pk_ctx, csv)
+        self.unvault_txin(unvault_descriptor, csv)
     }
 
     /// Get the Unvault txo to be referenced in a revocation transaction
-    pub fn revault_unvault_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn revault_unvault_txin(
         &self,
-        unvault_descriptor: &UnvaultDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        unvault_descriptor: &DerivedUnvaultDescriptor,
     ) -> UnvaultTxIn {
-        self.unvault_txin(unvault_descriptor, to_pk_ctx, RBF_SEQUENCE)
+        self.unvault_txin(unvault_descriptor, RBF_SEQUENCE)
     }
 
     /// Get the CPFP txo to be referenced in a spending transaction
-    pub fn cpfp_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
-        &self,
-        cpfp_descriptor: &CpfpDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
-    ) -> CpfpTxIn {
-        let spk = cpfp_descriptor.0.script_pubkey(to_pk_ctx);
+    pub fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> CpfpTxIn {
+        let spk = cpfp_descriptor.0.script_pubkey();
         let index = self
             .inner_tx()
             .global
@@ -762,7 +752,7 @@ impl UnvaultTransaction {
 
         // Unwraped above
         let txo = &self.inner_tx().global.unsigned_tx.output[index];
-        let prev_txout = CpfpTxOut::new(txo.value, cpfp_descriptor, to_pk_ctx);
+        let prev_txout = CpfpTxOut::new(txo.value, cpfp_descriptor);
         CpfpTxIn::new(
             OutPoint {
                 txid: self.inner_tx().global.unsigned_tx.txid(),
@@ -838,16 +828,15 @@ impl CancelTransaction {
     /// may have a fee-bumping input.
     ///
     /// BIP174 Creator and Updater roles.
-    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn new(
         unvault_input: UnvaultTxIn,
         feebump_input: Option<FeeBumpTxIn>,
-        deposit_descriptor: &DepositDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        deposit_descriptor: &DerivedDepositDescriptor,
         lock_time: u32,
     ) -> CancelTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It pays for itself.
-        let deposit_txo = DepositTxOut::new(u64::MAX, deposit_descriptor, to_pk_ctx);
+        let deposit_txo = DepositTxOut::new(u64::MAX, deposit_descriptor);
         let dummy_tx = create_tx!(
             [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
             [deposit_txo],
@@ -874,7 +863,7 @@ impl CancelTransaction {
         let revault_value = unvault_value
             .checked_sub(fees)
             .expect("We would not create a dust unvault txo");
-        let deposit_txo = DepositTxOut::new(revault_value, deposit_descriptor, to_pk_ctx);
+        let deposit_txo = DepositTxOut::new(revault_value, deposit_descriptor);
 
         CancelTransaction(if let Some(feebump_input) = feebump_input {
             create_tx!(
@@ -1148,11 +1137,10 @@ impl SpendTransaction {
     /// may want to create a transaction without a change output.
     ///
     /// BIP174 Creator and Updater roles.
-    pub fn new<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn new(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
-        cpfp_descriptor: &CpfpDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        cpfp_descriptor: &DerivedCpfpDescriptor,
         lock_time: u32,
         insane_fee_check: bool,
     ) -> Result<SpendTransaction, TransactionCreationError> {
@@ -1162,7 +1150,6 @@ impl SpendTransaction {
             unvault_inputs.clone(),
             spend_txouts.clone(),
             cpfp_descriptor,
-            to_pk_ctx,
             lock_time,
         );
 
@@ -1199,6 +1186,9 @@ impl SpendTransaction {
                         .collect(),
                     output: txos,
                 },
+                version: 0,
+                xpub: BTreeMap::new(),
+                proprietary: BTreeMap::new(),
                 unknown: BTreeMap::new(),
             },
             inputs: unvault_inputs
@@ -1240,15 +1230,14 @@ impl SpendTransaction {
     /// The CPFP output value is dependant on the transaction size, see [practical-revaul
     /// t](https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx) for
     /// more details.
-    pub fn cpfp_txout<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn cpfp_txout(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
-        cpfp_descriptor: &CpfpDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        cpfp_descriptor: &DerivedCpfpDescriptor,
         lock_time: u32,
     ) -> CpfpTxOut {
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
-        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor, to_pk_ctx);
+        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor);
         txos.push(dummy_cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
             SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
@@ -1281,7 +1270,7 @@ impl SpendTransaction {
         // See https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx
         // for this arbirtrary value.
         let cpfp_value = 16 * total_weight;
-        CpfpTxOut::new(cpfp_value, &cpfp_descriptor, to_pk_ctx)
+        CpfpTxOut::new(cpfp_value, &cpfp_descriptor)
     }
 
     /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction
@@ -1316,7 +1305,7 @@ impl SpendTransaction {
                     .try_into()
                     .expect("Bug: witness size >u64::MAX")
             } else {
-                miniscript::Descriptor::Wsh(
+                miniscript::descriptor::Wsh::new(
                     miniscript::Miniscript::parse(
                         txin.witness_script
                             .as_ref()
@@ -1324,7 +1313,8 @@ impl SpendTransaction {
                     )
                     .expect("UnvaultTxIn witness_script is created from a Miniscript"),
                 )
-                .max_satisfaction_weight(miniscript::NullCtx)
+                .expect("")
+                .max_satisfaction_weight()
                 .expect("It's a sane Script, derived from a Miniscript")
                 .try_into()
                 .expect("Can't be >u64::MAX")
@@ -1377,19 +1367,15 @@ impl SpendTransaction {
 pub struct DepositTransaction(pub Transaction);
 impl DepositTransaction {
     /// Assumes that the outpoint actually refers to this transaction. Will panic otherwise.
-    pub fn deposit_txin<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+    pub fn deposit_txin(
         &self,
         outpoint: OutPoint,
-        deposit_descriptor: &DepositDescriptor<Pk>,
-        to_pk_ctx: ToPkCtx,
+        deposit_descriptor: &DerivedDepositDescriptor,
     ) -> DepositTxIn {
         assert!(outpoint.txid == self.0.txid());
         let txo = self.0.output[outpoint.vout as usize].clone();
 
-        DepositTxIn::new(
-            outpoint,
-            DepositTxOut::new(txo.value, deposit_descriptor, to_pk_ctx),
-        )
+        DepositTxIn::new(outpoint, DepositTxOut::new(txo.value, deposit_descriptor))
     }
 }
 
@@ -1399,40 +1385,46 @@ pub struct FeeBumpTransaction(pub Transaction);
 
 /// Get the chain of pre-signed transaction out of a deposit available for a manager.
 /// No feebump input.
-pub fn transaction_chain_manager<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+pub fn transaction_chain_manager<C: secp256k1::Verification>(
     deposit_txin: DepositTxIn,
-    deposit_descriptor: &DepositDescriptor<Pk>,
-    unvault_descriptor: &UnvaultDescriptor<Pk>,
-    cpfp_descriptor: &CpfpDescriptor<Pk>,
-    to_pk_ctx: ToPkCtx,
+    deposit_descriptor: &DepositDescriptor,
+    unvault_descriptor: &UnvaultDescriptor,
+    cpfp_descriptor: &CpfpDescriptor,
+    derivation_index: ChildNumber,
     lock_time: u32,
+    secp: &secp256k1::Secp256k1<C>,
 ) -> Result<(UnvaultTransaction, CancelTransaction), Error> {
+    let (der_deposit_descriptor, der_unvault_descriptor, der_cpfp_descriptor) = (
+        deposit_descriptor.derive(derivation_index, secp),
+        unvault_descriptor.derive(derivation_index, secp),
+        cpfp_descriptor.derive(derivation_index, secp),
+    );
+
     let unvault_tx = UnvaultTransaction::new(
         deposit_txin.clone(),
-        &unvault_descriptor,
-        &cpfp_descriptor,
-        to_pk_ctx,
+        &der_unvault_descriptor,
+        &der_cpfp_descriptor,
         lock_time,
     )?;
     let cancel_tx = CancelTransaction::new(
-        unvault_tx.revault_unvault_txin(&unvault_descriptor, to_pk_ctx),
+        unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
         None,
-        &deposit_descriptor,
-        to_pk_ctx,
+        &der_deposit_descriptor,
         lock_time,
     );
 
     Ok((unvault_tx, cancel_tx))
 }
-/// Get the entire chain of pre-signed transaction out of a deposit. No feebump input.
-pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>>(
+/// Get the entire chain of pre-signed transaction for this derivation index out of a deposit. No feebump input.
+pub fn transaction_chain<C: secp256k1::Verification>(
     deposit_txin: DepositTxIn,
-    deposit_descriptor: &DepositDescriptor<Pk>,
-    unvault_descriptor: &UnvaultDescriptor<Pk>,
-    cpfp_descriptor: &CpfpDescriptor<Pk>,
+    deposit_descriptor: &DepositDescriptor,
+    unvault_descriptor: &UnvaultDescriptor,
+    cpfp_descriptor: &CpfpDescriptor,
+    derivation_index: ChildNumber,
     emer_address: EmergencyAddress,
-    to_pk_ctx: ToPkCtx,
     lock_time: u32,
+    secp: &secp256k1::Secp256k1<C>,
 ) -> Result<
     (
         UnvaultTransaction,
@@ -1447,13 +1439,16 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
         deposit_descriptor,
         unvault_descriptor,
         cpfp_descriptor,
-        to_pk_ctx,
+        derivation_index,
         lock_time,
+        secp,
     )?;
+
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
+    let der_unvault_descriptor = unvault_descriptor.derive(derivation_index, secp);
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
-        unvault_tx.revault_unvault_txin(&unvault_descriptor, to_pk_ctx),
+        unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
         None,
         emer_address,
         lock_time,
@@ -1465,24 +1460,18 @@ pub fn transaction_chain<ToPkCtx: Copy, Pk: MiniscriptKey + ToPublicKey<ToPkCtx>
 /// Get a spend transaction out of a list of deposits and derivation indexes. The
 /// `unvault_descriptor` will be derived for each and should not be beforehand.
 pub fn spend_tx_from_deposits(
-    deposit_txins: Vec<(DepositTxIn, ChildNumber)>,
+    deposit_txins: Vec<(DepositTxIn, DerivedUnvaultDescriptor, DerivedCpfpDescriptor)>,
     spend_txos: Vec<SpendTxOut>,
-    unvault_descriptor: &UnvaultDescriptor<DescriptorPublicKey>,
-    cpfp_descriptor: &CpfpDescriptor<DescriptorPublicKey>,
-    to_pk_ctx: DescriptorPublicKeyCtx<impl secp256k1::Verification>,
+    cpfp_descriptor: &DerivedCpfpDescriptor,
     unvault_csv: u32,
     lock_time: u32,
     check_insane_fees: bool,
 ) -> Result<SpendTransaction, TransactionCreationError> {
     let unvault_txins = deposit_txins
         .into_iter()
-        .map(|(txin, index)| {
-            let unvault_desc = unvault_descriptor.derive(index);
-            let cpfp_desc = cpfp_descriptor.derive(index);
-            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_desc, to_pk_ctx, lock_time).and_then(
-                |unvault_tx| {
-                    Ok(unvault_tx.spend_unvault_txin(&unvault_desc, to_pk_ctx, unvault_csv))
-                },
+        .map(|(txin, unvault_desc, cpfp_desc)| {
+            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_desc, lock_time).and_then(
+                |unvault_tx| Ok(unvault_tx.spend_unvault_txin(&unvault_desc, unvault_csv)),
             )
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
@@ -1491,7 +1480,6 @@ pub fn spend_tx_from_deposits(
         unvault_txins,
         spend_txos,
         cpfp_descriptor,
-        to_pk_ctx,
         lock_time,
         check_insane_fees,
     )
@@ -1506,7 +1494,7 @@ mod tests {
     };
     use crate::{error::*, scripts::*, txins::*, txouts::*};
 
-    use std::str::FromStr;
+    use std::{iter::repeat_with, str::FromStr};
 
     use miniscript::{
         bitcoin::{
@@ -1515,14 +1503,12 @@ mod tests {
             util::bip32,
             Address, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
         },
-        descriptor::{DescriptorPublicKey, DescriptorXKey},
-        Descriptor, DescriptorPublicKeyCtx, ToPublicKey,
+        descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
+        Descriptor, DescriptorTrait,
     };
 
-    fn get_random_privkey(rng: &mut SmallRng) -> bip32::ExtendedPrivKey {
-        let mut rand_bytes = [0u8; 64];
-
-        rng.fill_bytes(&mut rand_bytes);
+    fn get_random_privkey(rng: &mut fastrand::Rng) -> bip32::ExtendedPrivKey {
+        let rand_bytes: Vec<u8> = repeat_with(|| rng.u8(..)).take(64).collect();
 
         bip32::ExtendedPrivKey::new_master(Network::Bitcoin, &rand_bytes)
             .unwrap_or_else(|_| get_random_privkey(rng))
@@ -1539,7 +1525,7 @@ mod tests {
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
     ) {
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
 
         let managers_priv = (0..n_man)
             .map(|_| get_random_privkey(&mut rng))
@@ -1551,7 +1537,7 @@ mod tests {
                     origin: None,
                     xkey: bip32::ExtendedPubKey::from_private(&secp, &xpriv),
                     derivation_path: bip32::DerivationPath::from(vec![]),
-                    is_wildcard: true,
+                    wildcard: Wildcard::Unhardened,
                 })
             })
             .collect::<Vec<DescriptorPublicKey>>();
@@ -1566,7 +1552,7 @@ mod tests {
                     origin: None,
                     xkey: bip32::ExtendedPubKey::from_private(&secp, &xpriv),
                     derivation_path: bip32::DerivationPath::from(vec![]),
-                    is_wildcard: true,
+                    wildcard: Wildcard::Unhardened,
                 })
             })
             .collect::<Vec<DescriptorPublicKey>>();
@@ -1581,7 +1567,7 @@ mod tests {
                     origin: None,
                     xkey: bip32::ExtendedPubKey::from_private(&secp, &xpriv),
                     derivation_path: bip32::DerivationPath::from(vec![]),
-                    is_wildcard: true,
+                    wildcard: Wildcard::Unhardened,
                 })
             })
             .collect::<Vec<DescriptorPublicKey>>();
@@ -1627,14 +1613,21 @@ mod tests {
                 origin: None,
                 xkey: bip32::ExtendedPubKey::from_private(&secp, xpriv),
                 derivation_path: bip32::DerivationPath::from(vec![]),
-                is_wildcard: child_number.is_some(),
+                wildcard: if child_number.is_some() {
+                    Wildcard::Unhardened
+                } else {
+                    Wildcard::None
+                },
             });
-            let xpub_ctx = DescriptorPublicKeyCtx::new(
-                &secp,
-                // If the xpub is not a wildcard, it's not taken into account.......
-                child_number.unwrap_or_else(|| bip32::ChildNumber::from(0)),
-            );
-            tx.add_signature(input_index, xpub.to_public_key(xpub_ctx), sig)?;
+            let key = if let Some(index) = child_number {
+                xpub.derive(index.into())
+            } else {
+                xpub
+            }
+            .derive_public_key(secp)
+            .unwrap();
+
+            tx.add_signature(input_index, key, sig)?;
         }
 
         Ok(())
@@ -1643,15 +1636,15 @@ mod tests {
     #[test]
     fn transaction_derivation() {
         let secp = secp256k1::Secp256k1::new();
-        let mut rng = SmallRng::from_entropy();
-        // FIXME: Miniscript mask for sequence check is bugged in this version. Uncomment when upgrading.
-        // let csv = rng.next_u32() % (1 << 22);
-        let csv = rng.next_u32() % (1 << 16);
+        let csv = fastrand::u32(..1<<16);
+        eprintln!("Using a CSV of '{}'", csv);
 
         // Test the dust limit
         assert_eq!(
-            derive_transactions(2, 1, csv, 234_631, &secp),
-            Err(Error::TransactionCreation(TransactionCreationError::Dust))
+            derive_transactions(2, 1, csv, 234_631, &secp)
+                .unwrap_err()
+                .to_string(),
+            Error::TransactionCreation(TransactionCreationError::Dust).to_string()
         );
         // Absolute minimum
         derive_transactions(2, 1, csv, 234_632, &secp).expect(&format!(
@@ -1684,7 +1677,6 @@ mod tests {
     ) -> Result<(), Error> {
         // Let's get the 10th key of each
         let child_number = bip32::ChildNumber::from(10);
-        let xpub_ctx = DescriptorPublicKeyCtx::new(&secp, child_number);
 
         // Keys, keys, keys everywhere !
         let (
@@ -1709,13 +1701,20 @@ mod tests {
 
         // We reuse the deposit descriptor for the emergency address
         let emergency_address = EmergencyAddress::from(Address::p2wsh(
-            &deposit_descriptor.0.witness_script(xpub_ctx),
+            &deposit_descriptor
+                .derive(child_number, secp)
+                .0
+                .explicit_script(),
             Network::Bitcoin,
         ))
         .expect("It's a P2WSH");
 
+        let der_deposit_descriptor = deposit_descriptor.derive(child_number, secp);
+        let der_unvault_descriptor = unvault_descriptor.derive(child_number, secp);
+        let der_cpfp_descriptor = cpfp_descriptor.derive(child_number, secp);
+
         // The funding transaction does not matter (random txid from my mempool)
-        let deposit_scriptpubkey = deposit_descriptor.0.script_pubkey(xpub_ctx);
+        let deposit_scriptpubkey = der_deposit_descriptor.0.script_pubkey();
         let deposit_raw_tx = Transaction {
             version: 2,
             lock_time: 0,
@@ -1731,11 +1730,8 @@ mod tests {
                 script_pubkey: deposit_scriptpubkey.clone(),
             }],
         };
-        let deposit_txo = DepositTxOut::new(
-            deposit_raw_tx.output[0].value,
-            &deposit_descriptor,
-            xpub_ctx,
-        );
+        let deposit_txo =
+            DepositTxOut::new(deposit_raw_tx.output[0].value, &der_deposit_descriptor);
         let deposit_tx = DepositTransaction(deposit_raw_tx);
         let deposit_txin = DepositTxIn::new(
             OutPoint {
@@ -1751,23 +1747,28 @@ mod tests {
             &deposit_descriptor,
             &unvault_descriptor,
             &cpfp_descriptor,
+            child_number,
             emergency_address.clone(),
-            xpub_ctx,
             0,
+            secp,
         )?;
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
         let feebump_xpriv = get_random_privkey(&mut rng);
         let feebump_xpub = bip32::ExtendedPubKey::from_private(&secp, &feebump_xpriv);
-        let feebump_descriptor =
-            Descriptor::<DescriptorPublicKey>::Wpkh(DescriptorPublicKey::XPub(DescriptorXKey {
+        let feebump_descriptor = Descriptor::new_wpkh(
+            DescriptorPublicKey::XPub(DescriptorXKey {
                 origin: None,
                 xkey: feebump_xpub,
                 derivation_path: bip32::DerivationPath::from(vec![]),
-                is_wildcard: false, // We are not going to derive from this one
-            }));
+                wildcard: Wildcard::None, // We are not going to derive from this one
+            })
+            .derive_public_key(secp)
+            .unwrap(),
+        )
+        .unwrap();
         let raw_feebump_tx = Transaction {
             version: 2,
             lock_time: 0,
@@ -1780,7 +1781,7 @@ mod tests {
             }],
             output: vec![TxOut {
                 value: 56730,
-                script_pubkey: feebump_descriptor.script_pubkey(xpub_ctx),
+                script_pubkey: feebump_descriptor.script_pubkey(),
             }],
         };
         let feebump_txo =
@@ -1820,10 +1821,8 @@ mod tests {
             SigHashType::All,
         );
         assert_eq!(
-            err,
-            Err(Error::InputSatisfaction(
-                InputSatisfactionError::UnexpectedSighashType
-            ))
+            err.unwrap_err().to_string(),
+            Error::InputSatisfaction(InputSatisfactionError::UnexpectedSighashType).to_string()
         );
         // Now, that's the right SIGHASH
         satisfy_transaction_input(
@@ -1853,11 +1852,7 @@ mod tests {
         )
         .unwrap();
         let emergency_tx_sighash_feebump = emergency_tx
-            .signature_hash_feebump_input(
-                1,
-                &feebump_descriptor.script_code(xpub_ctx),
-                SigHashType::All,
-            )
+            .signature_hash_feebump_input(1, &feebump_descriptor.script_code(), SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -1885,9 +1880,8 @@ mod tests {
         let deposit_txin_sat_cost = deposit_txin.max_sat_weight();
         let mut unvault_tx = UnvaultTransaction::new(
             deposit_txin.clone(),
-            &unvault_descriptor,
-            &cpfp_descriptor,
-            xpub_ctx,
+            &der_unvault_descriptor,
+            &der_cpfp_descriptor,
             0,
         )?;
 
@@ -1898,16 +1892,11 @@ mod tests {
         assert_eq!(unvault_tx.fees(), (548 + deposit_txin_sat_cost as u64) * 6);
 
         // Create and sign the cancel transaction
-        let rev_unvault_txin = unvault_tx.revault_unvault_txin(&unvault_descriptor, xpub_ctx);
+        let rev_unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
         assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
         // We can create it entirely without the feebump input
-        let mut cancel_tx_without_feebump = CancelTransaction::new(
-            rev_unvault_txin.clone(),
-            None,
-            &deposit_descriptor,
-            xpub_ctx,
-            0,
-        );
+        let mut cancel_tx_without_feebump =
+            CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0);
         assert_eq!(h_cancel, cancel_tx_without_feebump);
         // Keep track of the fees we computed..
         let value_no_feebump = cancel_tx_without_feebump
@@ -1945,8 +1934,7 @@ mod tests {
         let mut cancel_tx = CancelTransaction::new(
             rev_unvault_txin.clone(),
             Some(feebump_txin),
-            &deposit_descriptor,
-            xpub_ctx,
+            &der_deposit_descriptor,
             0,
         );
         // It really is a belt-and-suspenders check as the sighash would differ too.
@@ -1961,11 +1949,7 @@ mod tests {
             "Base fees when computing with with feebump differ !!"
         );
         let cancel_tx_sighash_feebump = cancel_tx
-            .signature_hash_feebump_input(
-                1,
-                &feebump_descriptor.script_code(xpub_ctx),
-                SigHashType::All,
-            )
+            .signature_hash_feebump_input(1, &feebump_descriptor.script_code(), SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2049,11 +2033,7 @@ mod tests {
         }
         // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx
-            .signature_hash_feebump_input(
-                1,
-                &feebump_descriptor.script_code(xpub_ctx),
-                SigHashType::All,
-            )
+            .signature_hash_feebump_input(1, &feebump_descriptor.script_code(), SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2079,17 +2059,16 @@ mod tests {
             Some(child_number),
             SigHashType::All,
         )?;
+
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let spend_unvault_txin =
-            unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv - 1); // Off-by-one csv
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor, csv - 1); // Off-by-one csv
         let dummy_txo = ExternalTxOut::default();
         let cpfp_value = SpendTransaction::cpfp_txout(
             vec![spend_unvault_txin.clone()],
             vec![SpendTxOut::Destination(dummy_txo.clone())],
-            &cpfp_descriptor,
-            xpub_ctx,
+            &der_cpfp_descriptor,
             0,
         )
         .txout()
@@ -2104,8 +2083,7 @@ mod tests {
         let mut spend_tx = SpendTransaction::new(
             vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
-            &cpfp_descriptor,
-            xpub_ctx,
+            &der_cpfp_descriptor,
             0,
             true,
         )
@@ -2140,12 +2118,11 @@ mod tests {
         }
 
         // "This time for sure !"
-        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&unvault_descriptor, xpub_ctx, csv); // Right csv
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor, csv); // Right csv
         let mut spend_tx = SpendTransaction::new(
             vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
-            &cpfp_descriptor,
-            xpub_ctx,
+            &der_cpfp_descriptor,
             0,
             true,
         )
@@ -2175,7 +2152,7 @@ mod tests {
                     "0ed7dc14fe8d1364b3185fa46e940cb8e858f8de32e63f88353a2bd66eb99e2a:0",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value, &unvault_descriptor, xpub_ctx),
+                UnvaultTxOut::new(deposit_value, &der_unvault_descriptor),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2183,7 +2160,7 @@ mod tests {
                     "23aacfca328942892bb007a86db0bf5337005f642b3c46aef50c23af03ec333a:1",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value * 4, &unvault_descriptor, xpub_ctx),
+                UnvaultTxOut::new(deposit_value * 4, &der_unvault_descriptor),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2191,7 +2168,7 @@ mod tests {
                     "fccabf4077b7e44ba02378a97a84611b545c11a1ef2af16cbb6e1032aa059b1d:0",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value / 2, &unvault_descriptor, xpub_ctx),
+                UnvaultTxOut::new(deposit_value / 2, &der_unvault_descriptor),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -2199,7 +2176,7 @@ mod tests {
                     "71dc04303184d54e6cc2f92d843282df2854d6dd66f10081147b84aeed830ae1:0",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value * 50, &unvault_descriptor, xpub_ctx),
+                UnvaultTxOut::new(deposit_value * 50, &der_unvault_descriptor),
                 csv,
             ),
         ];
@@ -2208,8 +2185,7 @@ mod tests {
         let cpfp_value = SpendTransaction::cpfp_txout(
             spend_unvault_txins.clone(),
             vec![SpendTxOut::Destination(dummy_txo.clone())],
-            &cpfp_descriptor,
-            xpub_ctx,
+            &der_cpfp_descriptor,
             0,
         )
         .txout()
@@ -2227,8 +2203,7 @@ mod tests {
         let mut spend_tx = SpendTransaction::new(
             spend_unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],
-            &cpfp_descriptor,
-            xpub_ctx,
+            &der_cpfp_descriptor,
             0,
             true,
         )

@@ -14,10 +14,10 @@
 use crate::error::*;
 
 use miniscript::{
-    bitcoin::{util::bip32, Address},
-    descriptor::DescriptorPublicKey,
+    bitcoin::{secp256k1, util::bip32, Address, PublicKey},
+    descriptor::{DescriptorPublicKey, Wildcard},
     policy::concrete::Policy,
-    Descriptor, MiniscriptKey, Segwitv0,
+    Descriptor, ForEachKey, Segwitv0, TranslatePk2,
 };
 
 use std::fmt;
@@ -28,18 +28,28 @@ use serde::de;
 // These are useful to create TxOuts out of the right Script descriptor
 
 macro_rules! impl_descriptor_newtype {
-    ($struct_name:ident, $doc_comment:meta ) => {
+    ($struct_name:ident, $derived_struct_name:ident, $doc_comment:meta, $der_doc_comment:meta) => {
         #[$doc_comment]
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-        pub struct $struct_name<Pk: MiniscriptKey>(pub Descriptor<Pk>);
+        pub struct $struct_name(pub Descriptor<DescriptorPublicKey>);
 
-        impl $struct_name<DescriptorPublicKey> {
+        #[$der_doc_comment]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct $derived_struct_name(pub Descriptor<PublicKey>);
+
+        impl $struct_name {
             /// Derives all wildcard keys in the descriptor using the supplied `child_number`
-            pub fn derive(
+            pub fn derive<C: secp256k1::Verification>(
                 &self,
                 child_number: bip32::ChildNumber,
-            ) -> $struct_name<DescriptorPublicKey> {
-                $struct_name(self.0.derive(child_number))
+                secp: &secp256k1::Secp256k1<C>,
+            ) -> $derived_struct_name {
+                $derived_struct_name(
+                    self.0
+                        .derive(child_number.into())
+                        .translate_pk2(|xpk| xpk.derive_public_key(secp))
+                        .expect("All pubkeys are derived, no wildcard."),
+                )
             }
         }
     };
@@ -47,52 +57,58 @@ macro_rules! impl_descriptor_newtype {
 
 impl_descriptor_newtype!(
     DepositDescriptor,
-    doc = "The vault / deposit miniscript descriptor. See the [deposit_descriptor] function for more information."
+    DerivedDepositDescriptor,
+    doc = "A **generalistic** (with wildcard xpubs) vault / deposit miniscript descriptor. \
+            See the [deposit_descriptor] function for more information.",
+    doc = "A **concrete** (with raw public keys) vault / deposit miniscript descriptor. \
+            See the [deposit_descriptor] function for more information."
 );
 
 impl_descriptor_newtype!(
     UnvaultDescriptor,
-    doc = "The unvault miniscript descriptor. See the [unvault_descriptor] function for more information."
+    DerivedUnvaultDescriptor,
+    doc = "A **generalistic** (with wildcard xpubs) Unvault miniscript descriptor. \
+            See the [unvault_descriptor] function for more information.",
+    doc = "A **concrete** (with raw public keys) Unvault miniscript descriptor. \
+            See the [unvault_descriptor] function for more information."
 );
 
 impl_descriptor_newtype!(
     CpfpDescriptor,
-    doc =
-        "The CPFP miniscript descriptor. See the [cpfp_descriptor] function for more information."
+    DerivedCpfpDescriptor,
+    doc = "A **generalistic** (with wildcard xpubs) CPFP miniscript descriptor. \
+            See the [cpfp_descriptor] function for more information.",
+    doc = "A **concrete** (with raw public keys) CPFP miniscript descriptor. \
+            See the [cpfp_descriptor] function for more information."
 );
 
-/// Get the miniscript descriptor for the deposit outputs.
+/// Get the xpub miniscript descriptor for the deposit outputs.
 ///
 /// The deposit policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
 ///
 /// # Examples
 /// ```rust
-/// use revault_tx::{scripts, miniscript::{NullCtx, bitcoin::{self, secp256k1}}};
+/// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorPublicKey, DescriptorTrait}};
+/// use std::str::FromStr;
 ///
-/// let secp = secp256k1::Secp256k1::new();
-/// let secret_key = secp256k1::SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
-/// let secret_key_b = secp256k1::SecretKey::from_slice(&[0xcc; 32]).expect("32 bytes, within curve order");
-/// let public_key = bitcoin::PublicKey {
-///     compressed: true,
-///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key),
-/// };
-/// let public_key_b = bitcoin::PublicKey {
-///     compressed: true,
-///     key: secp256k1::PublicKey::from_secret_key(&secp, &secret_key_b),
-/// };
+/// let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
+/// let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
+///
 /// let deposit_descriptor =
-///     scripts::deposit_descriptor(vec![public_key, public_key_b]).expect("Compiling descriptor");
+///     scripts::deposit_descriptor(vec![first_stakeholder, second_stakeholder]).expect("Compiling descriptor");
+/// println!("Deposit descriptor: {}", deposit_descriptor.0);
 ///
-/// println!("Deposit descriptor redeem script: {}", deposit_descriptor.0.witness_script(NullCtx));
+/// let secp = secp256k1::Secp256k1::verification_only();
+/// println!("Tenth child witness script: {}", deposit_descriptor.derive(bip32::ChildNumber::from(10), &secp).0.explicit_script());
 /// ```
 ///
 /// # Errors
 /// - If the passed slice contains less than 2 public keys.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn deposit_descriptor<Pk: MiniscriptKey>(
-    participants: Vec<Pk>,
-) -> Result<DepositDescriptor<Pk>, ScriptCreationError> {
+pub fn deposit_descriptor(
+    participants: Vec<DescriptorPublicKey>,
+) -> Result<DepositDescriptor, ScriptCreationError> {
     if participants.len() < 2 {
         return Err(ScriptCreationError::BadParameters);
     }
@@ -100,59 +116,55 @@ pub fn deposit_descriptor<Pk: MiniscriptKey>(
     let pubkeys = participants
         .into_iter()
         .map(Policy::Key)
-        .collect::<Vec<Policy<Pk>>>();
+        .collect::<Vec<Policy<DescriptorPublicKey>>>();
 
     let policy = Policy::Threshold(pubkeys.len(), pubkeys);
 
     // This handles the non-safe or malleable cases.
     let ms = policy.compile::<Segwitv0>()?;
-    Ok(DepositDescriptor(Descriptor::<Pk>::Wsh(ms)))
+    let desc = Descriptor::new_wsh(ms)?;
+    if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
+        return Err(ScriptCreationError::NonWildcardKeys);
+    }
+
+    Ok(DepositDescriptor(desc))
 }
 
 /// Get the miniscript descriptors for the unvault outputs.
 ///
-/// The unvault policy allows either all the participants together to spend, or (the fund managers
-/// + the cosigners) after a timelock.
-///
-/// As the managers are part of the participants we can have a more efficient Script by expliciting
-/// to the compiler that the spenders are always going to sign. Thus we end up with:
-/// ```text
-/// and(thresh(len(managers), spenders), or(thresh(len(non_managers), non_managers),
-/// and(thresh(len(cosigners), cosigners), older(X))))
-/// ````
-///
-/// As we expect the usual operations to be far more likely, we further optimize the policy to:
-/// ```text
-/// and(thresh(len(managers), managers), or(1@thresh(len(non_managers), non_managers),
-/// 10@and(thresh(len(cosigners), cosigners), older(X))))
-/// ```
+/// The unvault policy allows either all the stakeholders to spend, or (the fund managers + the cosigners)
+/// after a timelock.
 ///
 /// # Examples
 /// ```rust
-/// use revault_tx::{scripts, miniscript::{NullCtx, bitcoin::{self, secp256k1}}};
+/// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorPublicKey, DescriptorTrait}};
+/// use std::str::FromStr;
 ///
-/// let secp = secp256k1::Secp256k1::new();
-/// let keys: Vec<bitcoin::PublicKey> = (0..7)
-///         .map(|i| secp256k1::SecretKey::from_slice(&[i + 1; 32])
-///                     .expect("32 bytes, within curve order"))
-///         .map(|sk| bitcoin::PublicKey {
-///             compressed: true,
-///             key: secp256k1::PublicKey::from_secret_key(&secp, &sk),
-///         })
-///         .collect();
+/// let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
+/// let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
+/// let third_stakeholder = DescriptorPublicKey::from_str("xpub6Br1DUfrzxTVGo1sanuKDCUmSxDfLRrxLQBqpMqygkQLkQWodoyvvGtUV8Rp3r6d6BNYvedBSU8c7whhn2U8haRVxsWwuQiZ9LoFp7jXPQA/*").unwrap();
+///
+/// let first_cosig = DescriptorPublicKey::from_str("02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35").unwrap();
+/// let second_cosig = DescriptorPublicKey::from_str("02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c").unwrap();
+/// let third_cosig = DescriptorPublicKey::from_str("0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf").unwrap();
+///
+/// let first_manager = DescriptorPublicKey::from_str("xpub6Duq1ob3cQ8Wxees2fTGNK2wTsVjgTPQcKJiPquXY2rQJTDjeCxkXFxTCGhcunFDt26Ddz45KQu7pbLmmUGG2PXTRVx3iDpBPEhdrijJf4U/*").unwrap();
+/// let second_manager = DescriptorPublicKey::from_str("xpub6EWL35hY9uZZs5Ljt6J3G2ZK1Tu4GPVkFdeGvMknG3VmwVRHhtadCaw5hdRDBgrmx1nPVHWjGBb5xeuC1BfbJzjjcic2gNm1aA7ywWjj7G8/*").unwrap();
+///
+///
 /// let unvault_descriptor = scripts::unvault_descriptor(
-///     // Stakeholders
-///     keys[0..2].to_vec(),
-///     // Managers
-///     keys[3..5].to_vec(),
-///     2,
+///     vec![first_stakeholder, second_stakeholder, third_stakeholder],
+///     vec![first_manager, second_manager],
+///     1,
 ///     // Cosigners
-///     keys[5..7].to_vec(),
+///     vec![first_cosig, second_cosig, third_cosig],
 ///     // CSV
 ///     42
 /// ).expect("Compiling descriptor");
+/// println!("Unvault descriptor: {}", unvault_descriptor.0);
 ///
-/// println!("Unvault descriptor redeem script: {}", unvault_descriptor.0.witness_script(NullCtx));
+/// let secp = secp256k1::Secp256k1::verification_only();
+/// println!("Tenth child witness script: {}", unvault_descriptor.derive(bip32::ChildNumber::from(10), &secp).0.explicit_script());
 /// ```
 ///
 /// # Errors
@@ -160,13 +172,13 @@ pub fn deposit_descriptor<Pk: MiniscriptKey>(
 /// not the same as the number of cosigners public key.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn unvault_descriptor<Pk: MiniscriptKey>(
-    stakeholders: Vec<Pk>,
-    managers: Vec<Pk>,
+pub fn unvault_descriptor(
+    stakeholders: Vec<DescriptorPublicKey>,
+    managers: Vec<DescriptorPublicKey>,
     managers_threshold: usize,
-    cosigners: Vec<Pk>,
+    cosigners: Vec<DescriptorPublicKey>,
     csv_value: u32,
-) -> Result<UnvaultDescriptor<Pk>, ScriptCreationError> {
+) -> Result<UnvaultDescriptor, ScriptCreationError> {
     if stakeholders.is_empty() || managers.is_empty() || cosigners.len() != stakeholders.len() {
         return Err(ScriptCreationError::BadParameters);
     }
@@ -174,6 +186,22 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
     if managers_threshold > managers.len() {
         return Err(ScriptCreationError::BadParameters);
     }
+
+    // Stakeholders' and managers' must be deriveable xpubs.
+    for key in stakeholders.iter().chain(managers.iter()) {
+        match key {
+            DescriptorPublicKey::XPub(xpub) => {
+                if matches!(xpub.wildcard, Wildcard::None) {
+                    return Err(ScriptCreationError::NonWildcardKeys);
+                }
+            }
+            DescriptorPublicKey::SinglePub(_) => {
+                return Err(ScriptCreationError::NonWildcardKeys);
+            }
+        }
+    }
+    // Cosigners' key may not be. We use DescriptorSinglePub for them downstream with static raw
+    // keys, but it's not hardcoded into the type system there to allow a more generic usage.
 
     // We require the locktime to be in number of blocks, and of course to not be disabled.
     // TODO: use rust-miniscript's constants after upgrading!
@@ -184,19 +212,19 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
     let mut pubkeys = managers
         .into_iter()
         .map(Policy::Key)
-        .collect::<Vec<Policy<Pk>>>();
+        .collect::<Vec<Policy<DescriptorPublicKey>>>();
     let spenders_thres = Policy::Threshold(managers_threshold, pubkeys);
 
     pubkeys = stakeholders
         .into_iter()
         .map(Policy::Key)
-        .collect::<Vec<Policy<Pk>>>();
+        .collect::<Vec<Policy<DescriptorPublicKey>>>();
     let stakeholders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
     pubkeys = cosigners
         .into_iter()
         .map(Policy::Key)
-        .collect::<Vec<Policy<Pk>>>();
+        .collect::<Vec<Policy<DescriptorPublicKey>>>();
     let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
     let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older(csv_value)]);
@@ -210,7 +238,8 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
 
     // This handles the non-safe or malleable cases.
     let ms = policy.compile::<Segwitv0>()?;
-    Ok(UnvaultDescriptor(Descriptor::<Pk>::Wsh(ms)))
+
+    Ok(UnvaultDescriptor(Descriptor::new_wsh(ms)?))
 }
 
 /// Get the miniscript descriptor for the unvault transaction CPFP output.
@@ -220,19 +249,24 @@ pub fn unvault_descriptor<Pk: MiniscriptKey>(
 /// # Errors
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn cpfp_descriptor<Pk: MiniscriptKey>(
-    managers: Vec<Pk>,
-) -> Result<CpfpDescriptor<Pk>, ScriptCreationError> {
+pub fn cpfp_descriptor(
+    managers: Vec<DescriptorPublicKey>,
+) -> Result<CpfpDescriptor, ScriptCreationError> {
     let pubkeys = managers
         .into_iter()
         .map(Policy::Key)
-        .collect::<Vec<Policy<Pk>>>();
+        .collect::<Vec<Policy<DescriptorPublicKey>>>();
 
     let policy = Policy::Threshold(1, pubkeys);
 
     // This handles the non-safe or malleable cases.
     let ms = policy.compile::<Segwitv0>()?;
-    Ok(CpfpDescriptor(Descriptor::<Pk>::Wsh(ms)))
+    let desc = Descriptor::new_wsh(ms)?;
+    if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
+        return Err(ScriptCreationError::NonWildcardKeys);
+    }
+
+    Ok(CpfpDescriptor(desc))
 }
 
 /// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
@@ -285,21 +319,36 @@ mod tests {
         bitcoin::{
             secp256k1::{
                 self,
-                rand::{rngs::SmallRng, FromEntropy},
+                rand::{rngs::SmallRng, FromEntropy, RngCore},
             },
-            PublicKey,
+            util::bip32,
+            Network,
         },
+        descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         policy::compiler::CompilerError,
     };
+    use std::{str::FromStr, iter::repeat_with};
 
-    fn get_random_pubkey(rng: &mut SmallRng) -> PublicKey {
-        let secp = secp256k1::Secp256k1::new();
-        let (_, public_key) = secp.generate_keypair(rng);
+    fn rand_xpub<C: secp256k1::Signing>(
+        rng: &mut fastrand::Rng,
+        secp: &secp256k1::Secp256k1<C>,
+    ) -> bip32::ExtendedPrivKey {
+        let rand_bytes: Vec<u8> = repeat_with(|| rng.u8(..)).take(64).collect();
 
-        PublicKey {
-            compressed: true,
-            key: public_key,
-        }
+        bip32::ExtendedPrivKey::new_master(Network::Bitcoin, &rand_bytes)
+            .unwrap_or_else(|_| rand_xpub(rng, secp))
+    }
+
+    fn get_random_pubkey<C: secp256k1::Signing>(
+        rng: &mut fastrand::Rng,
+        secp: &secp256k1::Secp256k1<C>,
+    ) -> DescriptorPublicKey {
+        DescriptorPublicKey::XPub(DescriptorXKey {
+            origin: None,
+            xkey: bip32::ExtendedPubKey::from_private(&secp, &rand_xpub(rng, secp)),
+            derivation_path: bip32::DerivationPath::from(vec![]),
+            wildcard: Wildcard::Unhardened,
+        })
     }
 
     #[test]
@@ -322,18 +371,19 @@ mod tests {
             ((8, 8), 12),
             ((3, 3), 18),
         ];
+        let secp = secp256k1::Secp256k1::signing_only();
 
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
         for ((thresh, n_managers), n_stakeholders) in configurations.iter() {
             let managers = (0..*n_managers)
-                .map(|_| get_random_pubkey(&mut rng))
-                .collect::<Vec<PublicKey>>();
+                .map(|_| get_random_pubkey(&mut rng, &secp))
+                .collect::<Vec<DescriptorPublicKey>>();
             let stakeholders = (0..*n_stakeholders)
-                .map(|_| get_random_pubkey(&mut rng))
-                .collect::<Vec<PublicKey>>();
+                .map(|_| get_random_pubkey(&mut rng, &secp))
+                .collect::<Vec<DescriptorPublicKey>>();
             let cosigners = (0..*n_stakeholders)
-                .map(|_| get_random_pubkey(&mut rng))
-                .collect::<Vec<PublicKey>>();
+                .map(|_| get_random_pubkey(&mut rng, &secp))
+                .collect::<Vec<DescriptorPublicKey>>();
 
             unvault_descriptor(
                 stakeholders.clone(),
@@ -351,8 +401,8 @@ mod tests {
                     .clone()
                     .iter()
                     .chain(stakeholders.iter())
-                    .copied()
-                    .collect::<Vec<PublicKey>>(),
+                    .cloned()
+                    .collect::<Vec<DescriptorPublicKey>>(),
             )
             .expect(&format!(
                 "Deposit descriptors creation error with ({}, {})",
@@ -367,105 +417,113 @@ mod tests {
 
     #[test]
     fn test_default_configuration_limits() {
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
+        let secp = secp256k1::Secp256k1::signing_only();
 
         assert_eq!(
-            deposit_descriptor(vec![get_random_pubkey(&mut rng)]),
-            Err(ScriptCreationError::BadParameters)
+            deposit_descriptor(vec![get_random_pubkey(&mut rng, &secp)])
+                .unwrap_err()
+                .to_string(),
+            ScriptCreationError::BadParameters.to_string()
         );
 
         assert_eq!(
             unvault_descriptor(
-                vec![get_random_pubkey(&mut rng)],
-                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng, &secp)],
+                vec![get_random_pubkey(&mut rng, &secp)],
                 1,
-                vec![get_random_pubkey(&mut rng), get_random_pubkey(&mut rng)],
+                vec![
+                    get_random_pubkey(&mut rng, &secp),
+                    get_random_pubkey(&mut rng, &secp)
+                ],
                 6
-            ),
-            Err(ScriptCreationError::BadParameters)
+            )
+            .unwrap_err()
+            .to_string(),
+            ScriptCreationError::BadParameters.to_string()
         );
 
         assert_eq!(
             unvault_descriptor(
-                vec![get_random_pubkey(&mut rng)],
-                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng, &secp)],
+                vec![get_random_pubkey(&mut rng, &secp)],
                 1,
-                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng, &secp)],
                 4194305
-            ),
-            Err(ScriptCreationError::BadParameters)
+            )
+            .unwrap_err()
+            .to_string(),
+            ScriptCreationError::BadParameters.to_string()
         );
 
         assert_eq!(
             unvault_descriptor(
-                vec![get_random_pubkey(&mut rng)],
-                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng, &secp)],
+                vec![get_random_pubkey(&mut rng, &secp)],
                 2,
-                vec![get_random_pubkey(&mut rng)],
+                vec![get_random_pubkey(&mut rng, &secp)],
                 4194305
-            ),
-            Err(ScriptCreationError::BadParameters)
+            )
+            .unwrap_err()
+            .to_string(),
+            ScriptCreationError::BadParameters.to_string()
         );
 
         // Maximum N-of-N
         let participants = (0..99)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         deposit_descriptor(participants).expect("Should be OK: max allowed value");
         // Now hit the limit
         let participants = (0..100)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            deposit_descriptor(participants),
-            Err(ScriptCreationError::PolicyCompilation(
-                CompilerError::LimitsExceeded
-            ))
+            deposit_descriptor(participants).unwrap_err().to_string(),
+            ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
         );
 
         // Maximum 1-of-N
         let managers = (0..20)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         cpfp_descriptor(managers).expect("Should be OK, that's the maximum allowed value");
         // Hit the limit
         let managers = (0..21)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            cpfp_descriptor(managers),
-            Err(ScriptCreationError::PolicyCompilation(
-                CompilerError::LimitsExceeded
-            ))
+            cpfp_descriptor(managers).unwrap_err().to_string(),
+            ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
         );
 
         // Maximum non-managers for 2 managers
         let stakeholders = (0..38)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         let managers = (0..2)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         let cosigners = (0..38)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         unvault_descriptor(stakeholders, managers, 2, cosigners, 145).unwrap();
 
         // Now hit the limit
         let stakeholders = (0..39)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         let managers = (0..2)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         let cosigners = (0..39)
-            .map(|_| get_random_pubkey(&mut rng))
-            .collect::<Vec<PublicKey>>();
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            unvault_descriptor(stakeholders, managers, 2, cosigners, 32),
-            Err(ScriptCreationError::PolicyCompilation(
-                CompilerError::LimitsExceeded
-            ))
+            unvault_descriptor(stakeholders, managers, 2, cosigners, 32)
+                .unwrap_err()
+                .to_string(),
+            ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
         );
     }
 
