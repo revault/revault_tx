@@ -4,7 +4,10 @@
 
 use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, RevaultTxOut, UnvaultTxOut};
 
-use miniscript::bitcoin::{OutPoint, TxIn};
+use miniscript::{
+    bitcoin::{OutPoint, TxIn},
+    DescriptorTrait,
+};
 
 use std::fmt;
 
@@ -74,7 +77,7 @@ impl DepositTxIn {
 
     /// Get the maximum size, in weight units, a satisfaction for this input would cost.
     pub fn max_sat_weight(&self) -> usize {
-        miniscript::Descriptor::Wsh(
+        miniscript::descriptor::Wsh::new(
             miniscript::Miniscript::parse(
                 self.prev_txout
                     .witness_script()
@@ -83,7 +86,8 @@ impl DepositTxIn {
             )
             .expect("DepositTxIn witness_script is created from a Miniscript"),
         )
-        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("DepositTxIn witness_script is a witness script hash")
+        .max_satisfaction_weight()
         .expect("It's a sane Script, derived from a Miniscript")
     }
 }
@@ -106,7 +110,7 @@ impl UnvaultTxIn {
 
     /// Get the maximum size, in weight units, a satisfaction for this input would cost.
     pub fn max_sat_weight(&self) -> usize {
-        miniscript::Descriptor::Wsh(
+        miniscript::descriptor::Wsh::new(
             miniscript::Miniscript::parse(
                 self.prev_txout
                     .witness_script()
@@ -115,7 +119,8 @@ impl UnvaultTxIn {
             )
             .expect("UnvaultTxIn witness_script is created from a Miniscript"),
         )
-        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("UnvaultTxIn is a P2WSH")
+        .max_satisfaction_weight()
         .expect("It's a sane Script, derived from a Miniscript")
     }
 }
