@@ -31,13 +31,21 @@ macro_rules! impl_descriptor_newtype {
     ($struct_name:ident, $derived_struct_name:ident, $doc_comment:meta, $der_doc_comment:meta) => {
         #[$doc_comment]
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-        pub struct $struct_name(pub Descriptor<DescriptorPublicKey>);
+        pub struct $struct_name(Descriptor<DescriptorPublicKey>);
 
         #[$der_doc_comment]
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-        pub struct $derived_struct_name(pub Descriptor<PublicKey>);
+        pub struct $derived_struct_name(Descriptor<PublicKey>);
 
         impl $struct_name {
+            pub fn inner(&self) -> &Descriptor<DescriptorPublicKey> {
+                &self.0
+            }
+
+            pub fn into_inner(self) -> Descriptor<DescriptorPublicKey> {
+                self.0
+            }
+
             /// Derives all wildcard keys in the descriptor using the supplied `child_number`
             pub fn derive<C: secp256k1::Verification>(
                 &self,
@@ -50,6 +58,16 @@ macro_rules! impl_descriptor_newtype {
                         .translate_pk2(|xpk| xpk.derive_public_key(secp))
                         .expect("All pubkeys are derived, no wildcard."),
                 )
+            }
+        }
+
+        impl $derived_struct_name {
+            pub fn inner(&self) -> &Descriptor<PublicKey> {
+                &self.0
+            }
+
+            pub fn into_inner(self) -> Descriptor<PublicKey> {
+                self.0
             }
         }
     };
@@ -82,52 +100,54 @@ impl_descriptor_newtype!(
             See the [cpfp_descriptor] function for more information."
 );
 
-/// Get the xpub miniscript descriptor for the deposit outputs.
-///
-/// The deposit policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
-///
-/// # Examples
-/// ```rust
-/// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorPublicKey, DescriptorTrait}};
-/// use std::str::FromStr;
-///
-/// let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
-/// let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
-///
-/// let deposit_descriptor =
-///     scripts::deposit_descriptor(vec![first_stakeholder, second_stakeholder]).expect("Compiling descriptor");
-/// println!("Deposit descriptor: {}", deposit_descriptor.0);
-///
-/// let secp = secp256k1::Secp256k1::verification_only();
-/// println!("Tenth child witness script: {}", deposit_descriptor.derive(bip32::ChildNumber::from(10), &secp).0.explicit_script());
-/// ```
-///
-/// # Errors
-/// - If the passed slice contains less than 2 public keys.
-/// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
-/// bug.
-pub fn deposit_descriptor(
-    participants: Vec<DescriptorPublicKey>,
-) -> Result<DepositDescriptor, ScriptCreationError> {
-    if participants.len() < 2 {
-        return Err(ScriptCreationError::BadParameters);
+impl DepositDescriptor {
+    /// Get the xpub miniscript descriptor for the deposit outputs.
+    ///
+    /// The deposit policy is an N-of-N, so `thresh(len(all_pubkeys), all_pubkeys)`.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorPublicKey, DescriptorTrait}};
+    /// use std::str::FromStr;
+    ///
+    /// let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
+    /// let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
+    ///
+    /// let deposit_descriptor =
+    ///     scripts::DepositDescriptor::new(vec![first_stakeholder, second_stakeholder]).expect("Compiling descriptor");
+    /// println!("Deposit descriptor: {}", deposit_descriptor.inner());
+    ///
+    /// let secp = secp256k1::Secp256k1::verification_only();
+    /// println!("Tenth child witness script: {}", deposit_descriptor.derive(bip32::ChildNumber::from(10), &secp).inner().explicit_script());
+    /// ```
+    ///
+    /// # Errors
+    /// - If the passed slice contains less than 2 public keys.
+    /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
+    /// bug.
+    pub fn new(
+        stakeholders: Vec<DescriptorPublicKey>,
+    ) -> Result<DepositDescriptor, ScriptCreationError> {
+        if stakeholders.len() < 2 {
+            return Err(ScriptCreationError::BadParameters);
+        }
+
+        let pubkeys = stakeholders
+            .into_iter()
+            .map(Policy::Key)
+            .collect::<Vec<Policy<DescriptorPublicKey>>>();
+
+        let policy = Policy::Threshold(pubkeys.len(), pubkeys);
+
+        // This handles the non-safe or malleable cases.
+        let ms = policy.compile::<Segwitv0>()?;
+        let desc = Descriptor::new_wsh(ms)?;
+        if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
+            return Err(ScriptCreationError::NonWildcardKeys);
+        }
+
+        Ok(DepositDescriptor(desc))
     }
-
-    let pubkeys = participants
-        .into_iter()
-        .map(Policy::Key)
-        .collect::<Vec<Policy<DescriptorPublicKey>>>();
-
-    let policy = Policy::Threshold(pubkeys.len(), pubkeys);
-
-    // This handles the non-safe or malleable cases.
-    let ms = policy.compile::<Segwitv0>()?;
-    let desc = Descriptor::new_wsh(ms)?;
-    if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
-        return Err(ScriptCreationError::NonWildcardKeys);
-    }
-
-    Ok(DepositDescriptor(desc))
 }
 
 /// Get the miniscript descriptors for the unvault outputs.
@@ -152,7 +172,7 @@ pub fn deposit_descriptor(
 /// let second_manager = DescriptorPublicKey::from_str("xpub6EWL35hY9uZZs5Ljt6J3G2ZK1Tu4GPVkFdeGvMknG3VmwVRHhtadCaw5hdRDBgrmx1nPVHWjGBb5xeuC1BfbJzjjcic2gNm1aA7ywWjj7G8/*").unwrap();
 ///
 ///
-/// let unvault_descriptor = scripts::unvault_descriptor(
+/// let unvault_descriptor = scripts::UnvaultDescriptor::new(
 ///     vec![first_stakeholder, second_stakeholder, third_stakeholder],
 ///     vec![first_manager, second_manager],
 ///     1,
@@ -161,10 +181,10 @@ pub fn deposit_descriptor(
 ///     // CSV
 ///     42
 /// ).expect("Compiling descriptor");
-/// println!("Unvault descriptor: {}", unvault_descriptor.0);
+/// println!("Unvault descriptor: {}", unvault_descriptor.inner());
 ///
 /// let secp = secp256k1::Secp256k1::verification_only();
-/// println!("Tenth child witness script: {}", unvault_descriptor.derive(bip32::ChildNumber::from(10), &secp).0.explicit_script());
+/// println!("Tenth child witness script: {}", unvault_descriptor.derive(bip32::ChildNumber::from(10), &secp).inner().explicit_script());
 /// ```
 ///
 /// # Errors
@@ -172,74 +192,76 @@ pub fn deposit_descriptor(
 /// not the same as the number of cosigners public key.
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn unvault_descriptor(
-    stakeholders: Vec<DescriptorPublicKey>,
-    managers: Vec<DescriptorPublicKey>,
-    managers_threshold: usize,
-    cosigners: Vec<DescriptorPublicKey>,
-    csv_value: u32,
-) -> Result<UnvaultDescriptor, ScriptCreationError> {
-    if stakeholders.is_empty() || managers.is_empty() || cosigners.len() != stakeholders.len() {
-        return Err(ScriptCreationError::BadParameters);
-    }
+impl UnvaultDescriptor {
+    pub fn new(
+        stakeholders: Vec<DescriptorPublicKey>,
+        managers: Vec<DescriptorPublicKey>,
+        managers_threshold: usize,
+        cosigners: Vec<DescriptorPublicKey>,
+        csv_value: u32,
+    ) -> Result<UnvaultDescriptor, ScriptCreationError> {
+        if stakeholders.is_empty() || managers.is_empty() || cosigners.len() != stakeholders.len() {
+            return Err(ScriptCreationError::BadParameters);
+        }
 
-    if managers_threshold > managers.len() {
-        return Err(ScriptCreationError::BadParameters);
-    }
+        if managers_threshold > managers.len() {
+            return Err(ScriptCreationError::BadParameters);
+        }
 
-    // Stakeholders' and managers' must be deriveable xpubs.
-    for key in stakeholders.iter().chain(managers.iter()) {
-        match key {
-            DescriptorPublicKey::XPub(xpub) => {
-                if matches!(xpub.wildcard, Wildcard::None) {
+        // Stakeholders' and managers' must be deriveable xpubs.
+        for key in stakeholders.iter().chain(managers.iter()) {
+            match key {
+                DescriptorPublicKey::XPub(xpub) => {
+                    if matches!(xpub.wildcard, Wildcard::None) {
+                        return Err(ScriptCreationError::NonWildcardKeys);
+                    }
+                }
+                DescriptorPublicKey::SinglePub(_) => {
                     return Err(ScriptCreationError::NonWildcardKeys);
                 }
             }
-            DescriptorPublicKey::SinglePub(_) => {
-                return Err(ScriptCreationError::NonWildcardKeys);
-            }
         }
+        // Cosigners' key may not be. We use DescriptorSinglePub for them downstream with static raw
+        // keys, but it's not hardcoded into the type system there to allow a more generic usage.
+
+        // We require the locktime to be in number of blocks, and of course to not be disabled.
+        // TODO: use rust-miniscript's constants after upgrading!
+        if (csv_value & (1 << 31)) != 0 || (csv_value & (1 << 22)) != 0 {
+            return Err(ScriptCreationError::BadParameters);
+        }
+
+        let mut pubkeys = managers
+            .into_iter()
+            .map(Policy::Key)
+            .collect::<Vec<Policy<DescriptorPublicKey>>>();
+        let spenders_thres = Policy::Threshold(managers_threshold, pubkeys);
+
+        pubkeys = stakeholders
+            .into_iter()
+            .map(Policy::Key)
+            .collect::<Vec<Policy<DescriptorPublicKey>>>();
+        let stakeholders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
+
+        pubkeys = cosigners
+            .into_iter()
+            .map(Policy::Key)
+            .collect::<Vec<Policy<DescriptorPublicKey>>>();
+        let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
+
+        let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older(csv_value)]);
+
+        let managers_and_cosigners_and_csv = Policy::And(vec![spenders_thres, cosigners_and_csv]);
+
+        let policy = Policy::Or(vec![
+            (1, stakeholders_thres),
+            (9, managers_and_cosigners_and_csv),
+        ]);
+
+        // This handles the non-safe or malleable cases.
+        let ms = policy.compile::<Segwitv0>()?;
+
+        Ok(UnvaultDescriptor(Descriptor::new_wsh(ms)?))
     }
-    // Cosigners' key may not be. We use DescriptorSinglePub for them downstream with static raw
-    // keys, but it's not hardcoded into the type system there to allow a more generic usage.
-
-    // We require the locktime to be in number of blocks, and of course to not be disabled.
-    // TODO: use rust-miniscript's constants after upgrading!
-    if (csv_value & (1 << 31)) != 0 || (csv_value & (1 << 22)) != 0 {
-        return Err(ScriptCreationError::BadParameters);
-    }
-
-    let mut pubkeys = managers
-        .into_iter()
-        .map(Policy::Key)
-        .collect::<Vec<Policy<DescriptorPublicKey>>>();
-    let spenders_thres = Policy::Threshold(managers_threshold, pubkeys);
-
-    pubkeys = stakeholders
-        .into_iter()
-        .map(Policy::Key)
-        .collect::<Vec<Policy<DescriptorPublicKey>>>();
-    let stakeholders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
-
-    pubkeys = cosigners
-        .into_iter()
-        .map(Policy::Key)
-        .collect::<Vec<Policy<DescriptorPublicKey>>>();
-    let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
-
-    let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older(csv_value)]);
-
-    let managers_and_cosigners_and_csv = Policy::And(vec![spenders_thres, cosigners_and_csv]);
-
-    let policy = Policy::Or(vec![
-        (1, stakeholders_thres),
-        (9, managers_and_cosigners_and_csv),
-    ]);
-
-    // This handles the non-safe or malleable cases.
-    let ms = policy.compile::<Segwitv0>()?;
-
-    Ok(UnvaultDescriptor(Descriptor::new_wsh(ms)?))
 }
 
 /// Get the miniscript descriptor for the unvault transaction CPFP output.
@@ -249,24 +271,24 @@ pub fn unvault_descriptor(
 /// # Errors
 /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
 /// bug.
-pub fn cpfp_descriptor(
-    managers: Vec<DescriptorPublicKey>,
-) -> Result<CpfpDescriptor, ScriptCreationError> {
-    let pubkeys = managers
-        .into_iter()
-        .map(Policy::Key)
-        .collect::<Vec<Policy<DescriptorPublicKey>>>();
+impl CpfpDescriptor {
+    pub fn new(managers: Vec<DescriptorPublicKey>) -> Result<CpfpDescriptor, ScriptCreationError> {
+        let pubkeys = managers
+            .into_iter()
+            .map(Policy::Key)
+            .collect::<Vec<Policy<DescriptorPublicKey>>>();
 
-    let policy = Policy::Threshold(1, pubkeys);
+        let policy = Policy::Threshold(1, pubkeys);
 
-    // This handles the non-safe or malleable cases.
-    let ms = policy.compile::<Segwitv0>()?;
-    let desc = Descriptor::new_wsh(ms)?;
-    if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
-        return Err(ScriptCreationError::NonWildcardKeys);
+        // This handles the non-safe or malleable cases.
+        let ms = policy.compile::<Segwitv0>()?;
+        let desc = Descriptor::new_wsh(ms)?;
+        if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
+            return Err(ScriptCreationError::NonWildcardKeys);
+        }
+
+        Ok(CpfpDescriptor(desc))
     }
-
-    Ok(CpfpDescriptor(desc))
 }
 
 /// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
@@ -313,7 +335,8 @@ impl<'de> de::Deserialize<'de> for EmergencyAddress {
 
 #[cfg(test)]
 mod tests {
-    use super::{cpfp_descriptor, deposit_descriptor, unvault_descriptor, ScriptCreationError};
+
+    use super::{CpfpDescriptor, DepositDescriptor, ScriptCreationError, UnvaultDescriptor};
 
     use miniscript::{
         bitcoin::{
@@ -388,7 +411,7 @@ mod tests {
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect::<Vec<DescriptorPublicKey>>();
 
-            unvault_descriptor(
+            UnvaultDescriptor::new(
                 stakeholders.clone(),
                 managers.clone(),
                 *thresh,
@@ -399,7 +422,7 @@ mod tests {
                 "Unvault descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
-            deposit_descriptor(
+            DepositDescriptor::new(
                 managers
                     .clone()
                     .iter()
@@ -411,7 +434,7 @@ mod tests {
                 "Deposit descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
-            cpfp_descriptor(managers).expect(&format!(
+            CpfpDescriptor::new(managers).expect(&format!(
                 "CPFP descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
@@ -424,14 +447,14 @@ mod tests {
         let secp = secp256k1::Secp256k1::signing_only();
 
         assert_eq!(
-            deposit_descriptor(vec![get_random_pubkey(&mut rng, &secp)])
+            DepositDescriptor::new(vec![get_random_pubkey(&mut rng, &secp)])
                 .unwrap_err()
                 .to_string(),
             ScriptCreationError::BadParameters.to_string()
         );
 
         assert_eq!(
-            unvault_descriptor(
+            UnvaultDescriptor::new(
                 vec![get_random_pubkey(&mut rng, &secp)],
                 vec![get_random_pubkey(&mut rng, &secp)],
                 1,
@@ -447,7 +470,7 @@ mod tests {
         );
 
         assert_eq!(
-            unvault_descriptor(
+            UnvaultDescriptor::new(
                 vec![get_random_pubkey(&mut rng, &secp)],
                 vec![get_random_pubkey(&mut rng, &secp)],
                 1,
@@ -460,7 +483,7 @@ mod tests {
         );
 
         assert_eq!(
-            unvault_descriptor(
+            UnvaultDescriptor::new(
                 vec![get_random_pubkey(&mut rng, &secp)],
                 vec![get_random_pubkey(&mut rng, &secp)],
                 2,
@@ -476,13 +499,15 @@ mod tests {
         let participants = (0..99)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
-        deposit_descriptor(participants).expect("Should be OK: max allowed value");
+        DepositDescriptor::new(participants).expect("Should be OK: max allowed value");
         // Now hit the limit
         let participants = (0..100)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            deposit_descriptor(participants).unwrap_err().to_string(),
+            DepositDescriptor::new(participants)
+                .unwrap_err()
+                .to_string(),
             ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
         );
 
@@ -490,13 +515,13 @@ mod tests {
         let managers = (0..20)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
-        cpfp_descriptor(managers).expect("Should be OK, that's the maximum allowed value");
+        CpfpDescriptor::new(managers).expect("Should be OK, that's the maximum allowed value");
         // Hit the limit
         let managers = (0..21)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            cpfp_descriptor(managers).unwrap_err().to_string(),
+            CpfpDescriptor::new(managers).unwrap_err().to_string(),
             ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
         );
 
@@ -510,7 +535,7 @@ mod tests {
         let cosigners = (0..38)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
-        unvault_descriptor(stakeholders, managers, 2, cosigners, 145).unwrap();
+        UnvaultDescriptor::new(stakeholders, managers, 2, cosigners, 145).unwrap();
 
         // Now hit the limit
         let stakeholders = (0..39)
@@ -523,7 +548,7 @@ mod tests {
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            unvault_descriptor(stakeholders, managers, 2, cosigners, 32)
+            UnvaultDescriptor::new(stakeholders, managers, 2, cosigners, 32)
                 .unwrap_err()
                 .to_string(),
             ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
