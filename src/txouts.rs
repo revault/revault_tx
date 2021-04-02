@@ -67,9 +67,9 @@ impl DepositTxOut {
         DepositTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(),
+                script_pubkey: script_descriptor.inner().script_pubkey(),
             },
-            witness_script: Some(script_descriptor.0.explicit_script()),
+            witness_script: Some(script_descriptor.inner().explicit_script()),
         }
     }
 }
@@ -81,9 +81,9 @@ impl UnvaultTxOut {
         UnvaultTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(),
+                script_pubkey: script_descriptor.inner().script_pubkey(),
             },
-            witness_script: Some(script_descriptor.0.explicit_script()),
+            witness_script: Some(script_descriptor.inner().explicit_script()),
         }
     }
 }
@@ -115,9 +115,9 @@ impl CpfpTxOut {
         CpfpTxOut {
             txout: TxOut {
                 value,
-                script_pubkey: script_descriptor.0.script_pubkey(),
+                script_pubkey: script_descriptor.inner().script_pubkey(),
             },
-            witness_script: Some(script_descriptor.0.explicit_script()),
+            witness_script: Some(script_descriptor.inner().explicit_script()),
         }
     }
 }

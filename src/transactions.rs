@@ -698,7 +698,7 @@ impl UnvaultTransaction {
         unvault_descriptor: &DerivedUnvaultDescriptor,
         sequence: u32,
     ) -> UnvaultTxIn {
-        let spk = unvault_descriptor.0.script_pubkey();
+        let spk = unvault_descriptor.inner().script_pubkey();
         let index = self
             .inner_tx()
             .global
@@ -740,7 +740,7 @@ impl UnvaultTransaction {
 
     /// Get the CPFP txo to be referenced in a spending transaction
     pub fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> CpfpTxIn {
-        let spk = cpfp_descriptor.0.script_pubkey();
+        let spk = cpfp_descriptor.inner().script_pubkey();
         let index = self
             .inner_tx()
             .global
@@ -1685,7 +1685,7 @@ mod tests {
         ) = get_participants_sets(n_stk, n_man, secp);
 
         // Get the script descriptors for the txos we're going to create
-        let unvault_descriptor = unvault_descriptor(
+        let unvault_descriptor = UnvaultDescriptor::new(
             stakeholders.clone(),
             managers.clone(),
             managers.len(),
@@ -1694,15 +1694,15 @@ mod tests {
         )
         .expect("Unvault descriptor generation error");
         let cpfp_descriptor =
-            cpfp_descriptor(managers).expect("Unvault CPFP descriptor generation error");
+            CpfpDescriptor::new(managers).expect("Unvault CPFP descriptor generation error");
         let deposit_descriptor =
-            deposit_descriptor(stakeholders).expect("Deposit descriptor generation error");
+            DepositDescriptor::new(stakeholders).expect("Deposit descriptor generation error");
 
         // We reuse the deposit descriptor for the emergency address
         let emergency_address = EmergencyAddress::from(Address::p2wsh(
             &deposit_descriptor
                 .derive(child_number, secp)
-                .0
+                .inner()
                 .explicit_script(),
             Network::Bitcoin,
         ))
@@ -1713,7 +1713,7 @@ mod tests {
         let der_cpfp_descriptor = cpfp_descriptor.derive(child_number, secp);
 
         // The funding transaction does not matter (random txid from my mempool)
-        let deposit_scriptpubkey = der_deposit_descriptor.0.script_pubkey();
+        let deposit_scriptpubkey = der_deposit_descriptor.inner().script_pubkey();
         let deposit_raw_tx = Transaction {
             version: 2,
             lock_time: 0,
