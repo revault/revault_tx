@@ -1494,23 +1494,19 @@ mod tests {
     };
     use crate::{error::*, scripts::*, txins::*, txouts::*};
 
-    use std::str::FromStr;
+    use std::{iter::repeat_with, str::FromStr};
 
     use miniscript::{
         bitcoin::{
-            secp256k1,
-            secp256k1::rand::{rngs::SmallRng, FromEntropy, RngCore},
-            util::bip32,
-            Address, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
+            secp256k1, util::bip32, Address, Network, OutPoint, SigHash, SigHashType, Transaction,
+            TxIn, TxOut,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         Descriptor, DescriptorTrait,
     };
 
-    fn get_random_privkey(rng: &mut SmallRng) -> bip32::ExtendedPrivKey {
-        let mut rand_bytes = [0u8; 64];
-
-        rng.fill_bytes(&mut rand_bytes);
+    fn get_random_privkey(rng: &mut fastrand::Rng) -> bip32::ExtendedPrivKey {
+        let rand_bytes: Vec<u8> = repeat_with(|| rng.u8(..)).take(64).collect();
 
         bip32::ExtendedPrivKey::new_master(Network::Bitcoin, &rand_bytes)
             .unwrap_or_else(|_| get_random_privkey(rng))
@@ -1527,7 +1523,7 @@ mod tests {
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
         (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
     ) {
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
 
         let managers_priv = (0..n_man)
             .map(|_| get_random_privkey(&mut rng))
@@ -1638,10 +1634,9 @@ mod tests {
     #[test]
     fn transaction_derivation() {
         let secp = secp256k1::Secp256k1::new();
-        let mut rng = SmallRng::from_entropy();
-        // FIXME: Miniscript mask for sequence check is bugged in this version. Uncomment when upgrading.
-        // let csv = rng.next_u32() % (1 << 22);
-        let csv = rng.next_u32() % (1 << 16);
+        // FIXME: Miniscript mask for sequence check is bugged in this version.
+        let csv = fastrand::u32(..1 << 16);
+        eprintln!("Using a CSV of '{}'", csv);
 
         // Test the dust limit
         assert_eq!(
@@ -1759,7 +1754,7 @@ mod tests {
 
         // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
         // We simulate a wallet utxo.
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
         let feebump_xpriv = get_random_privkey(&mut rng);
         let feebump_xpub = bip32::ExtendedPubKey::from_private(&secp, &feebump_xpriv);
         let feebump_descriptor = Descriptor::new_wpkh(

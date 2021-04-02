@@ -317,37 +317,29 @@ mod tests {
 
     use miniscript::{
         bitcoin::{
-            secp256k1::{
-                self,
-                rand::{rngs::SmallRng, FromEntropy, RngCore},
-            },
+            secp256k1::{self},
             util::bip32,
             Network,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         policy::compiler::CompilerError,
     };
+    use std::iter::repeat_with;
 
     fn rand_xpub<C: secp256k1::Signing>(
-        rng: &mut SmallRng,
+        rng: &mut fastrand::Rng,
         secp: &secp256k1::Secp256k1<C>,
     ) -> bip32::ExtendedPrivKey {
-        let mut rand_bytes = [0u8; 64];
-
-        rng.fill_bytes(&mut rand_bytes);
+        let rand_bytes: Vec<u8> = repeat_with(|| rng.u8(..)).take(64).collect();
 
         bip32::ExtendedPrivKey::new_master(Network::Bitcoin, &rand_bytes)
             .unwrap_or_else(|_| rand_xpub(rng, secp))
     }
 
     fn get_random_pubkey<C: secp256k1::Signing>(
-        rng: &mut SmallRng,
+        rng: &mut fastrand::Rng,
         secp: &secp256k1::Secp256k1<C>,
     ) -> DescriptorPublicKey {
-        let mut rand_bytes = [0u8; 64];
-
-        rng.fill_bytes(&mut rand_bytes);
-
         DescriptorPublicKey::XPub(DescriptorXKey {
             origin: None,
             xkey: bip32::ExtendedPubKey::from_private(&secp, &rand_xpub(rng, secp)),
@@ -378,7 +370,7 @@ mod tests {
         ];
         let secp = secp256k1::Secp256k1::signing_only();
 
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
         for ((thresh, n_managers), n_stakeholders) in configurations.iter() {
             let managers = (0..*n_managers)
                 .map(|_| get_random_pubkey(&mut rng, &secp))
@@ -422,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_default_configuration_limits() {
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = fastrand::Rng::new();
         let secp = secp256k1::Secp256k1::signing_only();
 
         assert_eq!(
