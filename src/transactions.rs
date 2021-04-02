@@ -1498,14 +1498,13 @@ mod tests {
 
     use miniscript::{
         bitcoin::{
-            secp256k1,
-            secp256k1::rand::{rngs::SmallRng, FromEntropy, RngCore},
-            util::bip32,
-            Address, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
+            secp256k1, util::bip32, Address, Network, OutPoint, SigHash, SigHashType, Transaction,
+            TxIn, TxOut,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         Descriptor, DescriptorTrait,
     };
+    use rand::{rngs::SmallRng, RngCore, SeedableRng};
 
     fn get_random_privkey(rng: &mut SmallRng) -> bip32::ExtendedPrivKey {
         let mut rand_bytes = [0u8; 64];

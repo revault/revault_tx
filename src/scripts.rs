@@ -317,16 +317,14 @@ mod tests {
 
     use miniscript::{
         bitcoin::{
-            secp256k1::{
-                self,
-                rand::{rngs::SmallRng, FromEntropy, RngCore},
-            },
+            secp256k1::{self},
             util::bip32,
             Network,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         policy::compiler::CompilerError,
     };
+    use rand::{rngs::SmallRng, RngCore, SeedableRng};
 
     fn rand_xpub<C: secp256k1::Signing>(
         rng: &mut SmallRng,
