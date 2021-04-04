@@ -17,6 +17,7 @@ use crate::error::*;
 use miniscript::{
     bitcoin::{secp256k1, util::bip32, Address, PublicKey},
     descriptor::{DescriptorPublicKey, Wildcard},
+    miniscript::limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     policy::concrete::Policy,
     Descriptor, ForEachKey, Segwitv0, TranslatePk2,
 };
@@ -135,8 +136,9 @@ macro_rules! unvault_desc_checks {
         }
 
         // We require the locktime to be in number of blocks, and of course to not be disabled.
-        // TODO: use rust-miniscript's constants after upgrading!
-        if ($csv_value & (1 << 31)) != 0 || ($csv_value & (1 << 22)) != 0 {
+        if ($csv_value & SEQUENCE_LOCKTIME_DISABLE_FLAG) != 0
+            || ($csv_value & SEQUENCE_LOCKTIME_TYPE_FLAG) != 0
+        {
             return Err(ScriptCreationError::BadParameters);
         }
     };
