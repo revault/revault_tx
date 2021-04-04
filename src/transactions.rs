@@ -724,11 +724,16 @@ impl UnvaultTransaction {
     }
 
     /// Get the Unvault txo to be referenced in a spending transaction
+    ///
+    /// # Panic
+    /// Will panic if passed a csv higher than
+    /// [SEQUENCE_LOCKTIME_MASK](crate::scripts::SEQUENCE_LOCKTIME_MASK)
     pub fn spend_unvault_txin(
         &self,
         unvault_descriptor: &DerivedUnvaultDescriptor,
         csv: u32,
     ) -> UnvaultTxIn {
+        assert!(csv <= SEQUENCE_LOCKTIME_MASK, "{}", csv);
         self.unvault_txin(unvault_descriptor, csv)
     }
 
@@ -1636,7 +1641,7 @@ mod tests {
     #[test]
     fn transaction_derivation() {
         let secp = secp256k1::Secp256k1::new();
-        let csv = fastrand::u32(..1 << 22);
+        let csv = fastrand::u32(..SEQUENCE_LOCKTIME_MASK);
         eprintln!("Using a CSV of '{}'", csv);
 
         // Test the dust limit
@@ -1646,6 +1651,10 @@ mod tests {
                 .to_string(),
             Error::TransactionCreation(TransactionCreationError::Dust).to_string()
         );
+        // Non-minimal CSV
+        derive_transactions(2, 1, SEQUENCE_LOCKTIME_MASK + 1, 300_000, &secp)
+            .expect_err("Unclean CSV");
+
         // Absolute minimum
         derive_transactions(2, 1, csv, 234_632, &secp).expect(&format!(
             "Tx chain with 2 stakeholders, 1 manager, {} csv, 235_250 deposit",
@@ -1692,8 +1701,7 @@ mod tests {
             managers.len(),
             cosigners.clone(),
             csv,
-        )
-        .expect("Unvault descriptor generation error");
+        )?;
         let cpfp_descriptor =
             CpfpDescriptor::new(managers).expect("Unvault CPFP descriptor generation error");
         let deposit_descriptor =

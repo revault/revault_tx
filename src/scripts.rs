@@ -30,6 +30,10 @@ use std::{
 #[cfg(feature = "use-serde")]
 use serde::de;
 
+/// Flag applied to the nSequence and CSV value before comparing them.
+/// https://github.com/bitcoin/bitcoin/blob/4a540683ec40393d6369da1a9e02e45614db936d/src/primitives/transaction.h#L87-L89
+pub const SEQUENCE_LOCKTIME_MASK: u32 = 0x00_00_ff_ff;
+
 // These are useful to create TxOuts out of the right Script descriptor
 
 macro_rules! impl_descriptor_newtype {
@@ -135,9 +139,13 @@ macro_rules! unvault_desc_checks {
             return Err(ScriptCreationError::BadParameters);
         }
 
-        // We require the locktime to be in number of blocks, and of course to not be disabled.
+        // We require the locktime to:
+        //  - not be disabled
+        //  - be in number of blocks
+        //  - be 'clean' / minimal, ie all bits without consensus meaning should be 0
         if ($csv_value & SEQUENCE_LOCKTIME_DISABLE_FLAG) != 0
             || ($csv_value & SEQUENCE_LOCKTIME_TYPE_FLAG) != 0
+            || ($csv_value & SEQUENCE_LOCKTIME_MASK) != $csv_value
         {
             return Err(ScriptCreationError::BadParameters);
         }
