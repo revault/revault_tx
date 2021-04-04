@@ -1,4 +1,5 @@
-//! Revault txouts
+//! # Revault PSBT outputs
+//!
 //! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
@@ -59,7 +60,9 @@ macro_rules! implem_revault_txout {
 
 implem_revault_txout!(
     DepositTxOut,
-    doc = "A deposit transaction output. Used by the funding / deposit transactions, the cancel transactions, and the spend transactions (for the change)."
+    doc = "A deposit transaction output. Used by the [Deposit](crate::transactions::DepositTransaction), \
+            the [Cancel](crate::transactions::CancelTransaction), and the \
+            [Spend](crate::transactions::SpendTransaction)."
 );
 impl DepositTxOut {
     /// Create a new DepositTxOut out of the given Deposit script descriptor
@@ -74,7 +77,7 @@ impl DepositTxOut {
     }
 }
 
-implem_revault_txout!(UnvaultTxOut, doc = "*The* unvault transaction output.");
+implem_revault_txout!(UnvaultTxOut, doc = "*The* Unvault transaction output.");
 impl UnvaultTxOut {
     /// Create a new UnvaultTxOut out of the given Unvault script descriptor
     pub fn new(value: u64, script_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxOut {
@@ -90,7 +93,7 @@ impl UnvaultTxOut {
 
 implem_revault_txout!(
     EmergencyTxOut,
-    doc = "The Emergency Deep Vault, the destination of the emergency transactions fund."
+    doc = "The Emergency Deep Vault, the destination of the Emergency transactions fund."
 );
 impl EmergencyTxOut {
     /// Create a new EmergencyTxOut, note that we don't know the witness_script!
@@ -107,7 +110,8 @@ impl EmergencyTxOut {
 
 implem_revault_txout!(
     CpfpTxOut,
-    doc = "The output attached to the unvault transaction so that the fund managers can CPFP."
+    doc = "The output attached to the [Unvault](crate::transactions::UnvaultTransaction) \
+            so that the fund managers can fee-bump it."
 );
 impl CpfpTxOut {
     /// Create a new CpfpTxOut out of the given Cpfp descriptor
@@ -124,7 +128,7 @@ impl CpfpTxOut {
 
 implem_revault_txout!(
     FeeBumpTxOut,
-    doc = "The output spent by the revaulting transactions to bump their feerate"
+    doc = "The output spent by the revocation transactions to bump their feerate"
 );
 impl FeeBumpTxOut {
     /// Create a new FeeBumpTxOut, note that it's managed externally so we don't need a witness
@@ -143,11 +147,12 @@ impl FeeBumpTxOut {
 
 implem_revault_txout!(
     ExternalTxOut,
-    doc = "An untagged external output, as spent by the deposit transaction or created by the spend transaction."
+    doc = "An untagged external output, as spent / created by the \
+            [Deposit](crate::transactions::DepositTransaction) or created by the \
+            [Spend](crate::transactions::SpendTransaction)."
 );
 impl ExternalTxOut {
-    /// Create a new ExternalTxOut, note that it's managed externally so we don't need a witness
-    /// Script.
+    /// Create an external txout, hence without a witness script.
     pub fn new(txout: TxOut) -> ExternalTxOut {
         ExternalTxOut {
             txout,
@@ -156,8 +161,8 @@ impl ExternalTxOut {
     }
 }
 
-/// A spend transaction output can be either a change one (DepositTxOut) or a payee-controlled
-/// one (ExternalTxOut).
+/// A [Spend](crate::transactions::SpendTransaction) output can be either a change one (DepositTxOut)
+/// or a payee-controlled one (ExternalTxOut).
 #[derive(Debug, Clone)]
 pub enum SpendTxOut {
     /// The actual destination of the funds, many such output can be present in a Spend
