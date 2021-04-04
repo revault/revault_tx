@@ -17,10 +17,13 @@ use miniscript::{
     bitcoin::{secp256k1, util::bip32, Address, PublicKey},
     descriptor::{DescriptorPublicKey, Wildcard},
     policy::concrete::Policy,
-    Descriptor, Segwitv0, TranslatePk2,
+    Descriptor, ForEachKey, Segwitv0, TranslatePk2,
 };
 
-use std::fmt;
+use std::{
+    fmt::{self, Display},
+    str::FromStr,
+};
 
 #[cfg(feature = "use-serde")]
 use serde::de;
@@ -215,7 +218,10 @@ impl DepositDescriptor {
     ///
     /// let deposit_descriptor =
     ///     scripts::DepositDescriptor::new(vec![first_stakeholder, second_stakeholder]).expect("Compiling descriptor");
-    /// println!("Deposit descriptor: {}", deposit_descriptor.inner());
+    /// println!("Deposit descriptor: {}", deposit_descriptor);
+    ///
+    /// let desc_str = deposit_descriptor.to_string();
+    /// assert_eq!(deposit_descriptor, scripts::DepositDescriptor::from_str(&desc_str).unwrap());
     ///
     /// let secp = secp256k1::Secp256k1::verification_only();
     /// println!("Tenth child witness script: {}", deposit_descriptor.derive(bip32::ChildNumber::from(10), &secp).inner().explicit_script());
@@ -236,6 +242,26 @@ impl DepositDescriptor {
     }
 }
 
+impl Display for DepositDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for DepositDescriptor {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<DepositDescriptor, Self::Err> {
+        let desc: Descriptor<DescriptorPublicKey> = FromStr::from_str(s)?;
+
+        if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
+            return Err(ScriptCreationError::NonWildcardKeys);
+        }
+
+        Ok(DepositDescriptor(desc))
+    }
+}
+
 impl DerivedDepositDescriptor {
     /// Get the derived miniscript descriptor for deposit outputs.
     ///
@@ -251,7 +277,10 @@ impl DerivedDepositDescriptor {
     ///
     /// let deposit_descriptor =
     ///     scripts::DerivedDepositDescriptor::new(vec![first_stakeholder, second_stakeholder]).expect("Compiling descriptor");
-    /// println!("Concrete deposit descriptor: {}", deposit_descriptor.inner());
+    /// println!("Concrete deposit descriptor: {}", deposit_descriptor);
+    ///
+    /// let desc_str = deposit_descriptor.to_string();
+    /// assert_eq!(deposit_descriptor, scripts::DerivedDepositDescriptor::from_str(&desc_str).unwrap());
     /// ```
     ///
     /// # Errors
@@ -264,6 +293,22 @@ impl DerivedDepositDescriptor {
         deposit_desc_checks!(stakeholders);
 
         Ok(DerivedDepositDescriptor(deposit_desc!(stakeholders)))
+    }
+}
+
+impl Display for DerivedDepositDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for DerivedDepositDescriptor {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<DerivedDepositDescriptor, Self::Err> {
+        let desc: Descriptor<PublicKey> = FromStr::from_str(s)?;
+
+        Ok(DerivedDepositDescriptor(desc))
     }
 }
 
@@ -299,7 +344,10 @@ impl UnvaultDescriptor {
     ///     // CSV
     ///     42
     /// ).expect("Compiling descriptor");
-    /// println!("Unvault descriptor: {}", unvault_descriptor.inner());
+    /// println!("Unvault descriptor: {}", unvault_descriptor);
+    ///
+    /// let desc_str = unvault_descriptor.to_string();
+    /// assert_eq!(unvault_descriptor, scripts::UnvaultDescriptor::from_str(&desc_str).unwrap());
     ///
     /// let secp = secp256k1::Secp256k1::verification_only();
     /// println!("Tenth child witness script: {}", unvault_descriptor.derive(bip32::ChildNumber::from(10), &secp).inner().explicit_script());
@@ -342,6 +390,29 @@ impl UnvaultDescriptor {
     }
 }
 
+impl Display for UnvaultDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for UnvaultDescriptor {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<UnvaultDescriptor, Self::Err> {
+        let desc: Descriptor<DescriptorPublicKey> = FromStr::from_str(s)?;
+
+        if !desc.for_each_key(|k| match k.as_key() {
+            DescriptorPublicKey::SinglePub(_) => true, // For cosigning servers keys
+            DescriptorPublicKey::XPub(xpub) => xpub.wildcard != Wildcard::None,
+        }) {
+            return Err(ScriptCreationError::NonWildcardKeys);
+        }
+
+        Ok(UnvaultDescriptor(desc))
+    }
+}
+
 impl DerivedUnvaultDescriptor {
     /// Get the miniscript descriptors for Unvault outputs.
     ///
@@ -374,7 +445,10 @@ impl DerivedUnvaultDescriptor {
     ///     // CSV
     ///     42
     /// ).expect("Compiling descriptor");
-    /// println!("Unvault descriptor: {}", unvault_descriptor.inner());
+    /// println!("Unvault descriptor: {}", unvault_descriptor);
+    ///
+    /// let desc_str = unvault_descriptor.to_string();
+    /// assert_eq!(unvault_descriptor, scripts::DerivedUnvaultDescriptor::from_str(&desc_str).unwrap());
     /// ```
     ///
     /// # Errors
@@ -404,6 +478,22 @@ impl DerivedUnvaultDescriptor {
             cosigners,
             csv_value
         )))
+    }
+}
+
+impl Display for DerivedUnvaultDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for DerivedUnvaultDescriptor {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<DerivedUnvaultDescriptor, Self::Err> {
+        let desc: Descriptor<PublicKey> = FromStr::from_str(s)?;
+
+        Ok(DerivedUnvaultDescriptor(desc))
     }
 }
 
@@ -437,11 +527,14 @@ impl CpfpDescriptor {
     ///
     /// let cpfp_descriptor =
     ///     scripts::CpfpDescriptor::new(vec![first_manager, second_manager]).expect("Compiling descriptor");
-    /// println!("CPFP descriptor: {}", cpfp_descriptor.inner());
+    /// println!("CPFP descriptor: {}", cpfp_descriptor);
     ///
     /// let secp = secp256k1::Secp256k1::verification_only();
     /// println!("Tenth child witness script: {}", cpfp_descriptor.derive(bip32::ChildNumber::from(10), &secp).inner().explicit_script());
     /// ```
+    ///
+    /// let desc_str = cpfp_descriptor.to_string();
+    /// assert_eq!(cpfp_descriptor, scripts::CpfpDescriptor::from_str(&desc_str).unwrap());
     ///
     /// # Errors
     /// - If the given `DescriptorPublickKey`s are not wildcards (can be derived from).
@@ -451,6 +544,26 @@ impl CpfpDescriptor {
         check_deriveable(managers.iter())?;
 
         Ok(CpfpDescriptor(cpfp_descriptor!(managers)))
+    }
+}
+
+impl Display for CpfpDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for CpfpDescriptor {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<CpfpDescriptor, Self::Err> {
+        let desc: Descriptor<DescriptorPublicKey> = FromStr::from_str(s)?;
+
+        if !desc.for_each_key(|k| k.as_key().is_deriveable()) {
+            return Err(ScriptCreationError::NonWildcardKeys);
+        }
+
+        Ok(CpfpDescriptor(desc))
     }
 }
 
@@ -469,7 +582,10 @@ impl DerivedCpfpDescriptor {
     ///
     /// let cpfp_descriptor =
     ///     scripts::DerivedCpfpDescriptor::new(vec![first_manager, second_manager]).expect("Compiling descriptor");
-    /// println!("Concrete CPFP descriptor: {}", cpfp_descriptor.inner());
+    /// println!("Concrete CPFP descriptor: {}", cpfp_descriptor);
+    ///
+    /// let desc_str = cpfp_descriptor.to_string();
+    /// assert_eq!(cpfp_descriptor, scripts::DerivedCpfpDescriptor::from_str(&desc_str).unwrap());
     /// ```
     ///
     /// # Errors
@@ -477,6 +593,22 @@ impl DerivedCpfpDescriptor {
     /// bug.
     pub fn new(managers: Vec<PublicKey>) -> Result<DerivedCpfpDescriptor, ScriptCreationError> {
         Ok(DerivedCpfpDescriptor(cpfp_descriptor!(managers)))
+    }
+}
+
+impl Display for DerivedCpfpDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for DerivedCpfpDescriptor {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<DerivedCpfpDescriptor, Self::Err> {
+        let desc: Descriptor<PublicKey> = FromStr::from_str(s)?;
+
+        Ok(DerivedCpfpDescriptor(desc))
     }
 }
 
@@ -525,7 +657,10 @@ impl<'de> de::Deserialize<'de> for EmergencyAddress {
 #[cfg(test)]
 mod tests {
 
-    use super::{CpfpDescriptor, DepositDescriptor, ScriptCreationError, UnvaultDescriptor};
+    use super::{
+        CpfpDescriptor, DepositDescriptor, DerivedCpfpDescriptor, DerivedDepositDescriptor,
+        DerivedUnvaultDescriptor, PublicKey, ScriptCreationError, UnvaultDescriptor,
+    };
 
     use miniscript::{
         bitcoin::{secp256k1, util::bip32, Network},
@@ -622,21 +757,21 @@ mod tests {
             vec![
                 first_stakeholder.clone(),
                 second_stakeholder.clone(),
-                third_stakeholder,
+                third_stakeholder.clone(),
             ],
             vec![first_manager.clone(), invalid_man],
             1,
-            vec![first_cosig, second_cosig, third_cosig],
+            vec![first_cosig.clone(), second_cosig.clone(), third_cosig],
             128,
         )
         .expect_err("Accepting a non wildcard manager xpub");
 
         // But for cosigning servers it's fine
-        let first_cosig = DescriptorPublicKey::from_str(
+        let xpub_first_cosig = DescriptorPublicKey::from_str(
             "xpub6Da8z6vMdBgtfZraAEjruVSyASFbrWqSm724PPbnezQidGH5wVavF6xFKrbpGCC4VtDVnLP5J5NXm8c8do9zC6MRPkgEsxt4oPY7dukETw2",
         )
         .unwrap();
-        let second_cosig = DescriptorPublicKey::from_str(
+        let xpub_second_cosig = DescriptorPublicKey::from_str(
             "xpub6Cp57dqxsjzveK5XQYJmzRrofaMJLUC3zQjwNNKKWB9kPn1YtUrrPMXxXGQjs9r2RRQ7e9vExWLJinTZmaosezisGG9nTwEVV15iFQYzFfa",
         )
         .unwrap();
@@ -644,16 +779,16 @@ mod tests {
             vec![first_stakeholder.clone(), second_stakeholder.clone()],
             vec![first_manager.clone(), second_manager.clone()],
             1,
-            vec![first_cosig, second_cosig],
+            vec![xpub_first_cosig, xpub_second_cosig],
             128,
         )
         .expect("Refusing a non wildcard cosigning server xpub");
 
-        let first_cosig = DescriptorPublicKey::from_str(
+        let xpub_first_cosig = DescriptorPublicKey::from_str(
             "xpub6Da8z6vMdBgtfZraAEjruVSyASFbrWqSm724PPbnezQidGH5wVavF6xFKrbpGCC4VtDVnLP5J5NXm8c8do9zC6MRPkgEsxt4oPY7dukETw2/*",
         )
         .unwrap();
-        let second_cosig = DescriptorPublicKey::from_str(
+        let xpub_second_cosig = DescriptorPublicKey::from_str(
             "xpub6Cp57dqxsjzveK5XQYJmzRrofaMJLUC3zQjwNNKKWB9kPn1YtUrrPMXxXGQjs9r2RRQ7e9vExWLJinTZmaosezisGG9nTwEVV15iFQYzFfa/*",
         )
         .unwrap();
@@ -661,10 +796,85 @@ mod tests {
             vec![first_stakeholder.clone(), second_stakeholder.clone()],
             vec![first_manager.clone(), second_manager.clone()],
             1,
-            vec![first_cosig, second_cosig],
+            vec![xpub_first_cosig, xpub_second_cosig],
             128,
         )
         .expect("Refusing a wildcard cosigning server xpub");
+
+        // You can't mess up by from_str a wildcard descriptor from a derived one, and the other
+        // way around.
+        let raw_pk_a = PublicKey::from_str(
+            "02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap();
+        let raw_pk_b = PublicKey::from_str(
+            "02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c",
+        )
+        .unwrap();
+        let raw_pk_c = PublicKey::from_str(
+            "0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf",
+        )
+        .unwrap();
+        let raw_pk_d = PublicKey::from_str(
+            "03b330723c5ebc2b6f2b29b5a8429e020c0806eed0bcbbddfe5fcad2bb2d02e946",
+        )
+        .unwrap();
+        let raw_pk_e = PublicKey::from_str(
+            "02c8bd230d2a5cdd0c5716f0ebe774d5a7341e9cbcc87f4f43e39acc43a73d72a9",
+        )
+        .unwrap();
+        let raw_pk_f = PublicKey::from_str(
+            "02d07b4b45f93d161b0846a5dd1691720069d8a27baab2f85022fe78b5f896ba07",
+        )
+        .unwrap();
+
+        let deposit_desc = DepositDescriptor::new(vec![
+            first_stakeholder.clone(),
+            second_stakeholder.clone(),
+            third_stakeholder.clone(),
+        ])
+        .expect("Valid wildcard xpubs");
+        DerivedDepositDescriptor::from_str(&deposit_desc.to_string())
+            .expect_err("FromStr on an xpub descriptor");
+        let der_deposit_desc =
+            DerivedDepositDescriptor::new(vec![raw_pk_a.clone(), raw_pk_b.clone()])
+                .expect("Derived pubkeys");
+        DepositDescriptor::from_str(&der_deposit_desc.to_string())
+            .expect_err("FromStr on a derived descriptor");
+
+        let unvault_desc = UnvaultDescriptor::new(
+            vec![first_stakeholder.clone(), second_stakeholder.clone()],
+            vec![first_manager.clone(), second_manager.clone()],
+            1,
+            vec![first_cosig, second_cosig],
+            128,
+        )
+        .expect("Valid, with xpubs");
+        DerivedUnvaultDescriptor::from_str(&unvault_desc.to_string())
+            .expect_err("FromStr on an xpub descriptor");
+        let der_unvault_desc = DerivedUnvaultDescriptor::new(
+            vec![raw_pk_a.clone(), raw_pk_b.clone()],
+            vec![raw_pk_c, raw_pk_d],
+            2,
+            vec![raw_pk_e, raw_pk_f],
+            1024,
+        )
+        .expect("Derived pubkeys");
+        UnvaultDescriptor::from_str(&der_unvault_desc.to_string())
+            .expect_err("FromStr on a derived descriptor");
+
+        let cpfp_desc = CpfpDescriptor::new(vec![
+            first_stakeholder.clone(),
+            second_stakeholder.clone(),
+            third_stakeholder.clone(),
+        ])
+        .expect("Valid wildcard xpubs");
+        DerivedCpfpDescriptor::from_str(&cpfp_desc.to_string())
+            .expect_err("FromStr on an xpub descriptor");
+        let der_cpfp_desc =
+            DerivedCpfpDescriptor::new(vec![raw_pk_a, raw_pk_b]).expect("Derived pubkeys");
+        CpfpDescriptor::from_str(&der_cpfp_desc.to_string())
+            .expect_err("FromStr on a derived descriptor");
     }
 
     #[test]
