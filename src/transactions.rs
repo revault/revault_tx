@@ -34,7 +34,7 @@ use {
 use std::{collections::BTreeMap, convert::TryInto, fmt};
 
 /// The value of the CPFP output in the Unvault transaction.
-/// See https://github.com/revault/practical-revault/blob/master/transactions.md#unvault_tx
+/// See [practical-revault](https://github.com/revault/practical-revault/blob/master/transactions.md#unvault_tx).
 pub const UNVAULT_CPFP_VALUE: u64 = 30000;
 
 /// The feerate, in sat / W, to create the unvaulting transactions with.
@@ -77,9 +77,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     fn into_psbt(self) -> Psbt;
 
     /// Get the sighash for an input spending an internal Revault TXO.
-    /// **Do not use it for fee bumping inputs, use [signature_hash_feebump_input] instead**
+    /// **Do not use it for fee bumping inputs, use
+    /// [RevaultTransaction::signature_hash_feebump_input] instead**
     ///
-    /// Returns `None` if the input does not exist.
+    /// Will error if the input is out of bounds or the PSBT input does not contain a Witness
+    /// Script (ie was already finalized).
     fn signature_hash_internal_input(
         &self,
         input_index: usize,
@@ -232,8 +234,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Check the transaction is valid (fully-signed) and can be finalized.
-    /// Slighty more efficient than calling [finalize] on a clone as it gets rid of the
-    /// belt-and-suspenders checks.
+    /// Slighty more efficient than calling [RevaultTransaction::finalize] on a clone as it gets
+    /// rid of the belt-and-suspenders checks.
     fn is_finalizable(&self, ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>) -> bool {
         miniscript::psbt::finalize(&mut self.inner_tx().clone(), ctx).is_ok()
     }

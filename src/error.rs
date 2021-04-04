@@ -1,4 +1,4 @@
-//! Errors related to Revault transactions and Scripts management
+//! # Errors related to Revault transactions and Scripts management
 
 use crate::transactions::INSANE_FEES;
 
@@ -13,7 +13,7 @@ use miniscript::{
 
 use std::{convert::From, error, fmt};
 
-/// Error when creating a Revault Bitcoin Script
+/// Error when creating a Revault Miniscript Descriptor
 #[derive(Debug)]
 pub enum ScriptCreationError {
     /// Invalid number of keys, threshold, or timelock

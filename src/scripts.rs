@@ -1,14 +1,15 @@
-//! # Revault scripts
+//! # Revault Miniscript descriptors
 //!
-//! Miniscript descriptors for policies specific to the Revault architecture.
+//! Miniscript descriptors compilation and handling for policies specific to the Revault
+//! architecture.
 //!
-//! We use [miniscript](http://bitcoin.sipa.be/miniscript/) in order to "safely" derive
-//! scripts depending on the setup configuration (ie the number of stakeholders, the
-//! number of fund managers, and the relative timelock) for all script but the (unknown Emergency
-//! one).
+//! We use [miniscript](http://bitcoin.sipa.be/miniscript/) in order to "safely" compile,
+//! derive, and satisfy Scripts depending on the setup configuration (ie the number of
+//! stakeholders, the number of fund managers, and the relative timelock) for all script
+//! but the (unknown) Emergency one.
 //!
-//! Note these functions are not safe to reuse after initial set up, as the returned descriptors
-//! are non-deterministically compiled from an abstract policy.
+//! **NOTE**: the compilation functions are not safe to reuse after initial set up, as the
+//! returned descriptors are non-deterministically compiled from an abstract policy.
 //! Backup the output Miniscript descriptors instead.
 
 use crate::error::*;
@@ -79,28 +80,22 @@ macro_rules! impl_descriptor_newtype {
 impl_descriptor_newtype!(
     DepositDescriptor,
     DerivedDepositDescriptor,
-    doc = "A **generalistic** (with wildcard xpubs) vault / deposit miniscript descriptor. \
-            See the [deposit_descriptor] function for more information.",
-    doc = "A **concrete** (with raw public keys) vault / deposit miniscript descriptor. \
-            See the [deposit_descriptor] function for more information."
+    doc = "A **generalistic** (with wildcard xpubs) deposit Miniscript descriptor.",
+    doc = "A **concrete** (with raw public keys) deposit Miniscript descriptor. "
 );
 
 impl_descriptor_newtype!(
     UnvaultDescriptor,
     DerivedUnvaultDescriptor,
-    doc = "A **generalistic** (with wildcard xpubs) Unvault miniscript descriptor. \
-            See the [unvault_descriptor] function for more information.",
-    doc = "A **concrete** (with raw public keys) Unvault miniscript descriptor. \
-            See the [unvault_descriptor] function for more information."
+    doc = "A **generalistic** (with wildcard xpubs) Unvault miniscript descriptor.",
+    doc = "A **concrete** (with raw public keys) Unvault miniscript descriptor."
 );
 
 impl_descriptor_newtype!(
     CpfpDescriptor,
     DerivedCpfpDescriptor,
-    doc = "A **generalistic** (with wildcard xpubs) CPFP miniscript descriptor. \
-            See the [cpfp_descriptor] function for more information.",
-    doc = "A **concrete** (with raw public keys) CPFP miniscript descriptor. \
-            See the [cpfp_descriptor] function for more information."
+    doc = "A **generalistic** (with wildcard xpubs) CPFP miniscript descriptor.",
+    doc = "A **concrete** (with raw public keys) CPFP miniscript descriptor."
 );
 
 macro_rules! deposit_desc_checks {
@@ -612,7 +607,7 @@ impl FromStr for DerivedCpfpDescriptor {
     }
 }
 
-/// The "emergency address", it's kept obfuscated for the entire duration of the vault and is
+/// The "Emergency address", it's kept obfuscated for the entire duration of the vault and is
 /// necessarily a v0 P2WSH
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EmergencyAddress(Address);
