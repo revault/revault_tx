@@ -1636,8 +1636,7 @@ mod tests {
     #[test]
     fn transaction_derivation() {
         let secp = secp256k1::Secp256k1::new();
-        // FIXME: Miniscript mask for sequence check is bugged in this version.
-        let csv = fastrand::u32(..1 << 16);
+        let csv = fastrand::u32(..1 << 22);
         eprintln!("Using a CSV of '{}'", csv);
 
         // Test the dust limit
@@ -2106,17 +2105,11 @@ mod tests {
             Some(child_number),
             SigHashType::All,
         )?;
-        match spend_tx.finalize(&secp) {
-            Err(e) => assert!(
-                // FIXME: uncomment when upgrading miniscript
-                //e.to_string().contains("required relative locktime CSV"),
-                e.to_string().contains("could not satisfy at index 0"),
-                "Invalid error: got '{}' \n {:#?}",
-                e,
-                spend_tx
-            ),
-            Ok(_) => unreachable!(),
-        }
+        assert!(spend_tx
+            .finalize(&secp)
+            .unwrap_err()
+            .to_string()
+            .contains("could not satisfy at index 0"));
 
         // "This time for sure !"
         let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor, csv); // Right csv
