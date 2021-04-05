@@ -77,6 +77,8 @@ pub enum TransactionCreationError {
     Dust,
     /// Sends more than it spends
     NegativeFees,
+    /// Transaction weight more than 400k weight units.
+    TooLarge,
 }
 
 impl fmt::Display for TransactionCreationError {
@@ -87,6 +89,10 @@ impl fmt::Display for TransactionCreationError {
             Self::NegativeFees => write!(
                 f,
                 "The sum of the inputs value is less than the sum of the outputs value"
+            ),
+            Self::TooLarge => write!(
+                f,
+                "Transaction too large: satisfied it could be >400k weight units"
             ),
         }
     }
@@ -146,6 +152,7 @@ pub enum PsbtValidationError {
     InvalidPrevoutType(PsbtInput),
     PartiallyFinalized,
     InsaneAmounts,
+    TransactionTooLarge,
 }
 
 impl fmt::Display for PsbtValidationError {
@@ -195,6 +202,10 @@ impl fmt::Display for PsbtValidationError {
             Self::InsaneAmounts => write!(
                 f,
                 "PSBT contains either overflowing amounts or creates more coins than it spends"
+            ),
+            Self::TransactionTooLarge => write!(
+                f,
+                "Transaction too large: satisfied it could be >400k weight units"
             ),
         }
     }
