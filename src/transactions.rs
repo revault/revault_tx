@@ -20,7 +20,7 @@ use miniscript::{
             },
         },
         Address, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
-        Transaction,
+        Transaction, Txid, Wtxid,
     },
     BitcoinSig, DescriptorTrait,
 };
@@ -371,6 +371,16 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         value_in
             .checked_sub(value_out)
             .expect("We never create a transaction with negative fees")
+    }
+
+    /// Get the inner unsigned transaction id
+    fn txid(&self) -> Txid {
+        self.inner_tx().global.unsigned_tx.txid()
+    }
+
+    /// Get the inner unsigned transaction hash with witness data
+    fn wtxid(&self) -> Wtxid {
+        self.inner_tx().global.unsigned_tx.wtxid()
     }
 }
 
