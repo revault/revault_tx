@@ -19,8 +19,8 @@ use miniscript::{
                 PartiallySignedTransaction as Psbt,
             },
         },
-        Address, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
-        Transaction, Txid, Wtxid,
+        Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash,
+        SigHashType, Transaction, Txid, Wtxid,
     },
     BitcoinSig, DescriptorTrait,
 };
@@ -1464,7 +1464,8 @@ pub struct FeeBumpTransaction(pub Transaction);
 /// Get the chain of pre-signed transaction out of a deposit available for a manager.
 /// No feebump input.
 pub fn transaction_chain_manager<C: secp256k1::Verification>(
-    deposit_txin: DepositTxIn,
+    deposit_outpoint: OutPoint,
+    deposit_amount: Amount,
     deposit_descriptor: &DepositDescriptor,
     unvault_descriptor: &UnvaultDescriptor,
     cpfp_descriptor: &CpfpDescriptor,
@@ -1478,12 +1479,17 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
         cpfp_descriptor.derive(derivation_index, secp),
     );
 
+    let deposit_txin = DepositTxIn::new(
+        deposit_outpoint,
+        DepositTxOut::new(deposit_amount.as_sat(), &der_deposit_descriptor),
+    );
     let unvault_tx = UnvaultTransaction::new(
-        deposit_txin.clone(),
+        deposit_txin,
         &der_unvault_descriptor,
         &der_cpfp_descriptor,
         lock_time,
     )?;
+
     let cancel_tx = CancelTransaction::new(
         unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
         None,
@@ -1493,9 +1499,11 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
 
     Ok((unvault_tx, cancel_tx))
 }
+
 /// Get the entire chain of pre-signed transaction for this derivation index out of a deposit. No feebump input.
 pub fn transaction_chain<C: secp256k1::Verification>(
-    deposit_txin: DepositTxIn,
+    deposit_outpoint: OutPoint,
+    deposit_amount: Amount,
     deposit_descriptor: &DepositDescriptor,
     unvault_descriptor: &UnvaultDescriptor,
     cpfp_descriptor: &CpfpDescriptor,
@@ -1513,7 +1521,8 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     Error,
 > {
     let (unvault_tx, cancel_tx) = transaction_chain_manager(
-        deposit_txin.clone(),
+        deposit_outpoint,
+        deposit_amount,
         deposit_descriptor,
         unvault_descriptor,
         cpfp_descriptor,
@@ -1522,15 +1531,18 @@ pub fn transaction_chain<C: secp256k1::Verification>(
         secp,
     )?;
 
+    let der_deposit_descriptor = deposit_descriptor.derive(derivation_index, secp);
+    let deposit_txin = DepositTxIn::new(
+        deposit_outpoint,
+        DepositTxOut::new(deposit_amount.as_sat(), &der_deposit_descriptor),
+    );
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
+
     let der_unvault_descriptor = unvault_descriptor.derive(derivation_index, secp);
-    let unvault_emergency_tx = UnvaultEmergencyTransaction::new(
-        unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
-        None,
-        emer_address,
-        lock_time,
-    );
+    let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
+    let unvault_emergency_tx =
+        UnvaultEmergencyTransaction::new(unvault_txin, None, emer_address, lock_time);
 
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
@@ -1574,8 +1586,8 @@ mod tests {
 
     use miniscript::{
         bitcoin::{
-            secp256k1, util::bip32, Address, Network, OutPoint, SigHash, SigHashType, Transaction,
-            TxIn, TxOut,
+            secp256k1, util::bip32, Address, Amount, Network, OutPoint, SigHash, SigHashType,
+            Transaction, TxIn, TxOut,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         Descriptor, DescriptorTrait,
@@ -1815,17 +1827,16 @@ mod tests {
         let deposit_txo =
             DepositTxOut::new(deposit_raw_tx.output[0].value, &der_deposit_descriptor);
         let deposit_tx = DepositTransaction(deposit_raw_tx);
-        let deposit_txin = DepositTxIn::new(
-            OutPoint {
-                txid: deposit_tx.0.txid(),
-                vout: 0,
-            },
-            deposit_txo.clone(),
-        );
+        let deposit_outpoint = OutPoint {
+            txid: deposit_tx.0.txid(),
+            vout: 0,
+        };
+        let deposit_txin = DepositTxIn::new(deposit_outpoint, deposit_txo.clone());
 
         // Test that the transaction helper(s) derive the same transactions as we do
         let (h_unvault, h_cancel, h_emer, h_unemer) = transaction_chain(
-            deposit_txin.clone(),
+            deposit_outpoint,
+            Amount::from_sat(deposit_txo.txout().value),
             &deposit_descriptor,
             &unvault_descriptor,
             &cpfp_descriptor,
