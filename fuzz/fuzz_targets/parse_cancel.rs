@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
 
 use revault_tx::{
     miniscript::bitcoin::{
-        secp256k1::{Secp256k1, Signature, SECP256K1},
+        secp256k1::{Signature, SECP256K1},
         PublicKey, SigHashType,
     },
     transactions::{CancelTransaction, RevaultTransaction},
