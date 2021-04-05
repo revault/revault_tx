@@ -1547,27 +1547,44 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
 
-/// Get a spend transaction out of a list of deposits and derivation indexes. The
-/// `unvault_descriptor` will be derived for each and should not be beforehand.
-pub fn spend_tx_from_deposits(
-    deposit_txins: Vec<(DepositTxIn, DerivedUnvaultDescriptor, DerivedCpfpDescriptor)>,
+/// Get a spend transaction out of a list of deposits and derivation indexes.
+/// The derivation index used for the Spend CPFP is the highest of the deposits one.
+pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
+    deposit_txins: Vec<(OutPoint, Amount, ChildNumber)>,
     spend_txos: Vec<SpendTxOut>,
-    cpfp_descriptor: &DerivedCpfpDescriptor,
+    deposit_descriptor: &DepositDescriptor,
+    unvault_descriptor: &UnvaultDescriptor,
+    cpfp_descriptor: &CpfpDescriptor,
     lock_time: u32,
     check_insane_fees: bool,
+    secp: &secp256k1::Secp256k1<C>,
 ) -> Result<SpendTransaction, TransactionCreationError> {
+    let mut max_deriv_index = ChildNumber::from(0);
     let unvault_txins = deposit_txins
         .into_iter()
-        .map(|(txin, unvault_desc, cpfp_desc)| {
-            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_desc, lock_time)
-                .and_then(|unvault_tx| Ok(unvault_tx.spend_unvault_txin(&unvault_desc)))
+        .map(|(outpoint, amount, deriv_index)| {
+            let der_deposit_desc = deposit_descriptor.derive(deriv_index, secp);
+            let der_unvault_desc = unvault_descriptor.derive(deriv_index, secp);
+            let der_cpfp_desc = cpfp_descriptor.derive(deriv_index, secp);
+
+            let txin = DepositTxIn::new(
+                outpoint,
+                DepositTxOut::new(amount.as_sat(), &der_deposit_desc),
+            );
+            if deriv_index > max_deriv_index {
+                max_deriv_index = deriv_index;
+            }
+
+            UnvaultTransaction::new(txin, &der_unvault_desc, &der_cpfp_desc, lock_time)
+                .and_then(|unvault_tx| Ok(unvault_tx.spend_unvault_txin(&der_unvault_desc)))
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
+    let der_cpfp_descriptor = cpfp_descriptor.derive(max_deriv_index, secp);
     SpendTransaction::new(
         unvault_txins,
         spend_txos,
-        cpfp_descriptor,
+        &der_cpfp_descriptor,
         lock_time,
         check_insane_fees,
     )
