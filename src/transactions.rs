@@ -55,6 +55,10 @@ pub const INSANE_FEES: u64 = 20_000_000;
 /// This enables CSV and is easier to apply to all transactions anyways.
 pub const TX_VERSION: i32 = 2;
 
+/// Maximum weight of a transaction to be relayed.
+/// https://github.com/bitcoin/bitcoin/blob/590e49ccf2af27c6c1f1e0eb8be3a4bf4d92ce8b/src/policy/policy.h#L23-L24
+pub const MAX_STANDARD_TX_WEIGHT: u32 = 400_000;
+
 /// A Revault transaction.
 ///
 /// Wraps a rust-bitcoin PSBT and defines some BIP174 roles as methods.
@@ -679,6 +683,11 @@ impl UnvaultTransaction {
             return Err(TransactionCreationError::InsaneFees);
         }
 
+        assert!(
+            total_weight <= MAX_STANDARD_TX_WEIGHT as u64,
+            "A single input and two outputs"
+        );
+
         // The unvault output value is then equal to the deposit value minus the fees and the CPFP.
         let deposit_value = deposit_input.txout().txout().value;
         if fees + UNVAULT_CPFP_VALUE + DUST_LIMIT > deposit_value {
@@ -822,6 +831,8 @@ impl UnvaultTransaction {
             }
         }
 
+        // NOTE: the Unvault transaction cannot get larger than MAX_STANDARD_TX_WEIGHT
+
         Ok(UnvaultTransaction(psbt))
     }
 }
@@ -864,6 +875,11 @@ impl CancelTransaction {
             .expect("Properly computed weight won't overflow");
         // Without the feebump input, it should not be reachable.
         debug_assert!(fees < INSANE_FEES);
+
+        assert!(
+            total_weight <= MAX_STANDARD_TX_WEIGHT as u64,
+            "At most 2 inputs and single output"
+        );
 
         // Now, get the revaulting output value out of it.
         let unvault_value = unvault_input.txout().txout().value;
@@ -984,6 +1000,11 @@ impl EmergencyTransaction {
         // Without the feebump input, it should not be reachable.
         debug_assert!(fees < INSANE_FEES);
 
+        assert!(
+            total_weight <= MAX_STANDARD_TX_WEIGHT as u64,
+            "At most 2 inputs and a single output"
+        );
+
         // Now, get the emergency output value out of it.
         let deposit_value = deposit_input.txout().txout().value;
         let emer_value = deposit_value
@@ -1078,6 +1099,11 @@ impl UnvaultEmergencyTransaction {
         // Without the feebump input, it should not be reachable.
         debug_assert!(fees < INSANE_FEES);
 
+        assert!(
+            total_weight <= MAX_STANDARD_TX_WEIGHT as u64,
+            "At most 2 inputs and a single output"
+        );
+
         // Now, get the emergency output value out of it.
         let deposit_value = unvault_input.txout().txout().value;
         let emer_value = deposit_value
@@ -1160,6 +1186,12 @@ impl SpendTransaction {
             lock_time,
         );
 
+        // Used later to check the maximum transaction size.
+        let sat_weight = unvault_inputs
+            .iter()
+            .map(|txin| txin.max_sat_weight())
+            .sum::<usize>();
+
         // Record the value spent
         let mut value_in: u64 = 0;
 
@@ -1220,7 +1252,17 @@ impl SpendTransaction {
                 .collect(),
         };
 
-        let value_out: u64 = psbt.global.unsigned_tx.output.iter().map(|o| o.value).sum();
+        // Make sure we didn't create a Monster Tx :tm: ..
+        let unsigned_tx = &psbt.global.unsigned_tx;
+        let witstrip_weight = unsigned_tx.get_weight();
+        let total_weight = sat_weight
+            .checked_add(witstrip_weight)
+            .expect("Weight computation bug: cannot overflow");
+        if total_weight > MAX_STANDARD_TX_WEIGHT as usize {
+            return Err(TransactionCreationError::TooLarge);
+        }
+
+        let value_out: u64 = unsigned_tx.output.iter().map(|o| o.value).sum();
         let fees = value_in
             .checked_sub(value_out)
             .ok_or(TransactionCreationError::NegativeFees)?;
@@ -1345,6 +1387,7 @@ impl SpendTransaction {
             return Err(PsbtValidationError::InvalidInputCount(0).into());
         }
 
+        let mut max_sat_weight = 0;
         for input in psbt.inputs.iter() {
             if input.final_script_witness.is_some() {
                 continue;
@@ -1363,9 +1406,32 @@ impl SpendTransaction {
             } else {
                 return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
             }
+
+            max_sat_weight += miniscript::descriptor::Wsh::new(
+                miniscript::Miniscript::parse(
+                    input
+                        .witness_script
+                        .as_ref()
+                        .ok_or_else(|| PsbtValidationError::InvalidInputField(input.clone()))?,
+                )
+                .map_err(|_| PsbtValidationError::InvalidInputField(input.clone()))?,
+            )
+            .map_err(|_| PsbtValidationError::InvalidInputField(input.clone()))?
+            .max_satisfaction_weight()
+            .map_err(|_| PsbtValidationError::InvalidInputField(input.clone()))?;
         }
 
-        Ok(SpendTransaction(psbt))
+        // Make sure the transaction cannot get out of standardness bounds once finalized
+        let spend_tx = SpendTransaction(psbt);
+        let witstrip_weight = spend_tx.inner_tx().global.unsigned_tx.get_weight();
+        let total_weight = witstrip_weight
+            .checked_add(max_sat_weight)
+            .expect("Weight computation bug");
+        if total_weight > MAX_STANDARD_TX_WEIGHT as usize {
+            return Err(PsbtValidationError::TransactionTooLarge.into());
+        }
+
+        Ok(spend_tx)
     }
 }
 
