@@ -737,13 +737,8 @@ impl UnvaultTransaction {
     /// # Panic
     /// Will panic if passed a csv higher than
     /// [SEQUENCE_LOCKTIME_MASK](crate::scripts::SEQUENCE_LOCKTIME_MASK)
-    pub fn spend_unvault_txin(
-        &self,
-        unvault_descriptor: &DerivedUnvaultDescriptor,
-        csv: u32,
-    ) -> UnvaultTxIn {
-        assert!(csv <= SEQUENCE_LOCKTIME_MASK, "{}", csv);
-        self.unvault_txin(unvault_descriptor, csv)
+    pub fn spend_unvault_txin(&self, unvault_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxIn {
+        self.unvault_txin(unvault_descriptor, unvault_descriptor.csv_value())
     }
 
     /// Get the Unvault txo to be referenced in a revocation transaction
@@ -1536,16 +1531,14 @@ pub fn spend_tx_from_deposits(
     deposit_txins: Vec<(DepositTxIn, DerivedUnvaultDescriptor, DerivedCpfpDescriptor)>,
     spend_txos: Vec<SpendTxOut>,
     cpfp_descriptor: &DerivedCpfpDescriptor,
-    unvault_csv: u32,
     lock_time: u32,
     check_insane_fees: bool,
 ) -> Result<SpendTransaction, TransactionCreationError> {
     let unvault_txins = deposit_txins
         .into_iter()
         .map(|(txin, unvault_desc, cpfp_desc)| {
-            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_desc, lock_time).and_then(
-                |unvault_tx| Ok(unvault_tx.spend_unvault_txin(&unvault_desc, unvault_csv)),
-            )
+            UnvaultTransaction::new(txin, &unvault_desc, &cpfp_desc, lock_time)
+                .and_then(|unvault_tx| Ok(unvault_tx.spend_unvault_txin(&unvault_desc)))
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
@@ -1768,6 +1761,7 @@ mod tests {
             cosigners.clone(),
             csv,
         )?;
+        assert_eq!(unvault_descriptor.csv_value(), csv);
         let cpfp_descriptor =
             CpfpDescriptor::new(managers).expect("Unvault CPFP descriptor generation error");
         let deposit_descriptor =
@@ -1785,6 +1779,10 @@ mod tests {
 
         let der_deposit_descriptor = deposit_descriptor.derive(child_number, secp);
         let der_unvault_descriptor = unvault_descriptor.derive(child_number, secp);
+        assert_eq!(
+            der_unvault_descriptor.csv_value(),
+            unvault_descriptor.csv_value()
+        );
         let der_cpfp_descriptor = cpfp_descriptor.derive(child_number, secp);
 
         // The funding transaction does not matter (random txid from my mempool)
@@ -2137,7 +2135,7 @@ mod tests {
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor, csv - 1); // Off-by-one csv
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor); // Off-by-one csv
         let dummy_txo = ExternalTxOut::default();
         let cpfp_value = SpendTransaction::cpfp_txout(
             vec![spend_unvault_txin.clone()],
@@ -2153,40 +2151,9 @@ mod tests {
             value: spend_unvault_txin.txout().txout().value - cpfp_value - fees,
             ..TxOut::default()
         });
-        // Test satisfaction failure with a wrong CSV value
-        let mut spend_tx = SpendTransaction::new(
-            vec![spend_unvault_txin],
-            vec![SpendTxOut::Destination(spend_txo.clone())],
-            &der_cpfp_descriptor,
-            0,
-            true,
-        )
-        .expect("Fees ok");
-        assert_eq!(spend_tx.fees(), fees);
-        let spend_tx_sighash = spend_tx
-            .signature_hash_internal_input(0, SigHashType::All)
-            .expect("Input exists");
-        satisfy_transaction_input(
-            &secp,
-            &mut spend_tx,
-            0,
-            &spend_tx_sighash,
-            &managers_priv
-                .iter()
-                .chain(cosigners_priv.iter())
-                .copied()
-                .collect::<Vec<bip32::ExtendedPrivKey>>(),
-            Some(child_number),
-            SigHashType::All,
-        )?;
-        assert!(spend_tx
-            .finalize(&secp)
-            .unwrap_err()
-            .to_string()
-            .contains("could not satisfy at index 0"));
 
         // "This time for sure !"
-        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor, csv); // Right csv
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor); // Right csv
         let mut spend_tx = SpendTransaction::new(
             vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],

@@ -16,10 +16,10 @@ use crate::error::*;
 
 use miniscript::{
     bitcoin::{secp256k1, util::bip32, Address, PublicKey},
-    descriptor::{DescriptorPublicKey, Wildcard},
+    descriptor::{DescriptorPublicKey, Wildcard, WshInner},
     miniscript::limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     policy::concrete::Policy,
-    Descriptor, ForEachKey, Segwitv0, TranslatePk2,
+    Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, TranslatePk2,
 };
 
 use std::{
@@ -317,6 +317,25 @@ impl FromStr for DerivedDepositDescriptor {
     }
 }
 
+fn unvault_descriptor_csv<Pk: MiniscriptKey>(desc: &Descriptor<Pk>) -> u32 {
+    let ms = match desc {
+        Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+            WshInner::Ms(ms) => ms,
+            WshInner::SortedMulti(_) => unreachable!("Unvault descriptor is not a sorted multi"),
+        },
+        _ => unreachable!("Unvault descriptor is always a P2WSH"),
+    };
+
+    let csv_frag = ms
+        .iter()
+        .find(|ms| matches!(ms.node, Terminal::Older(_)))
+        .expect("Unvault Miniscript always contains a CSV fragment");
+    match csv_frag.node {
+        Terminal::Older(csv_value) => csv_value,
+        _ => unreachable!("Just matched."),
+    }
+}
+
 impl UnvaultDescriptor {
     /// Get the miniscript descriptors for Unvault outputs.
     ///
@@ -392,6 +411,11 @@ impl UnvaultDescriptor {
             cosigners,
             csv_value
         )))
+    }
+
+    /// Get the relative locktime in blocks contained in the Unvault descriptor
+    pub fn csv_value(&self) -> u32 {
+        unvault_descriptor_csv(&self.0)
     }
 }
 
@@ -483,6 +507,11 @@ impl DerivedUnvaultDescriptor {
             cosigners,
             csv_value
         )))
+    }
+
+    /// Get the relative locktime in blocks contained in the Unvault descriptor
+    pub fn csv_value(&self) -> u32 {
+        unvault_descriptor_csv(&self.0)
     }
 }
 
