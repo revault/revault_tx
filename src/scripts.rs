@@ -683,7 +683,10 @@ impl<'de> de::Deserialize<'de> for EmergencyAddress {
     where
         D: de::Deserializer<'de>,
     {
-        let addr = Address::deserialize(deserializer)?;
+        // FIXME: the windows CI build is preventing us from using the 'use-serde' feature of
+        // rust-bitcoin.
+        let addr_str = String::deserialize(deserializer)?;
+        let addr = Address::from_str(&addr_str).map_err(|e| de::Error::custom(e))?;
         EmergencyAddress::from(addr).map_err(de::Error::custom)
     }
 }
