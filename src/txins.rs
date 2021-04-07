@@ -1,10 +1,14 @@
-//! Revault txins
-//! Wrappers around bitcoin's OutPoint and previous TxOut to statically check Revault transaction
-//! creation and ease PSBT management.
+//! # Revault PSBT inputs
+//!
+//! Wrappers around bitcoin's OutPoint and previous TxOut to statically check Revault
+//! transaction creation and ease PSBT management.
 
 use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, RevaultTxOut, UnvaultTxOut};
 
-use miniscript::bitcoin::{OutPoint, TxIn};
+use miniscript::{
+    bitcoin::{OutPoint, TxIn},
+    DescriptorTrait,
+};
 
 use std::fmt;
 
@@ -60,7 +64,8 @@ macro_rules! implem_revault_txin {
 implem_revault_txin!(
     DepositTxIn,
     DepositTxOut,
-    doc = "A deposit txo spent by the unvault transaction and the emergency transaction"
+    doc = "A deposit txo spent by the [Unvault](crate::transactions::UnvaultTransaction) \
+            transaction and the [Emergency](crate::transactions::EmergencyTransaction)"
 );
 impl DepositTxIn {
     /// Instanciate a TxIn referencing a deposit txout which signals for RBF.
@@ -74,7 +79,7 @@ impl DepositTxIn {
 
     /// Get the maximum size, in weight units, a satisfaction for this input would cost.
     pub fn max_sat_weight(&self) -> usize {
-        miniscript::Descriptor::Wsh(
+        miniscript::descriptor::Wsh::new(
             miniscript::Miniscript::parse(
                 self.prev_txout
                     .witness_script()
@@ -83,7 +88,8 @@ impl DepositTxIn {
             )
             .expect("DepositTxIn witness_script is created from a Miniscript"),
         )
-        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("DepositTxIn witness_script is a witness script hash")
+        .max_satisfaction_weight()
         .expect("It's a sane Script, derived from a Miniscript")
     }
 }
@@ -91,7 +97,10 @@ impl DepositTxIn {
 implem_revault_txin!(
     UnvaultTxIn,
     UnvaultTxOut,
-    doc="An unvault txo spent by the cancel transaction, an emergency transaction, and the spend transaction."
+    doc = "An [Unvault](crate::transactions::UnvaultTransaction) txo spent by the \
+        [Cancel](crate::transactions::CancelTransaction), \
+        [UnvaultEmergency](crate::transactions::UnvaultEmergencyTransaction), and the \
+        [Spend](crate::transactions::SpendTransaction)."
 );
 impl UnvaultTxIn {
     /// Instanciate a TxIn referencing an unvault txout. We need the sequence to be explicitly
@@ -106,7 +115,7 @@ impl UnvaultTxIn {
 
     /// Get the maximum size, in weight units, a satisfaction for this input would cost.
     pub fn max_sat_weight(&self) -> usize {
-        miniscript::Descriptor::Wsh(
+        miniscript::descriptor::Wsh::new(
             miniscript::Miniscript::parse(
                 self.prev_txout
                     .witness_script()
@@ -115,7 +124,8 @@ impl UnvaultTxIn {
             )
             .expect("UnvaultTxIn witness_script is created from a Miniscript"),
         )
-        .max_satisfaction_weight(miniscript::NullCtx)
+        .expect("UnvaultTxIn is a P2WSH")
+        .max_satisfaction_weight()
         .expect("It's a sane Script, derived from a Miniscript")
     }
 }
@@ -123,12 +133,13 @@ impl UnvaultTxIn {
 implem_revault_txin!(
     FeeBumpTxIn,
     FeeBumpTxOut,
-    doc = "A wallet txo spent by a revaulting (cancel, emergency) transaction to bump the transaction feerate.\
-           This output is often created by a first stage transaction, but may directly be a wallet\
-           utxo."
+    doc = "A wallet txo spent by a revocation ([Cancel](crate::transactions::CancelTransaction), \
+           [Emergency](crate::transactions::EmergencyTransaction)) transaction to bump the package feerate. \
+           \
+           This output is from an external wallet and is often created by a first stage transaction."
 );
 impl FeeBumpTxIn {
-    /// Instanciate a txin referencing a feebumpt txout which signals for RBF.
+    /// Instanciate a txin referencing a feebump txout which signals for RBF.
     pub fn new(outpoint: OutPoint, prev_txout: FeeBumpTxOut) -> FeeBumpTxIn {
         FeeBumpTxIn {
             outpoint,
@@ -141,7 +152,8 @@ impl FeeBumpTxIn {
 implem_revault_txin!(
     CpfpTxIn,
     CpfpTxOut,
-    doc = "The unvault CPFP txo spent to accelerate the confirmation of the unvault transaction."
+    doc = "The [Unvault CPFP txo](crate::txouts::CpfpTxOut) spent to accelerate the confirmation of the \
+            [Unvault](crate::transactions::UnvaultTransaction)."
 );
 impl CpfpTxIn {
     /// Instanciate a TxIn referencing a CPFP txout which signals for RBF.

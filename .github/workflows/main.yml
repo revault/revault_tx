@@ -1,6 +1,6 @@
 name: CI
 
-on: [push, pull_request]
+on: [pull_request]
 
 jobs:
   unittesting:
@@ -45,7 +45,7 @@ jobs:
           override: true
           profile: minimal
       - name: Run fuzz testing script
-        run: ./fuzz/run.sh
+        run: ./contrib/ci_fuzz.sh
 
   rustfmt_check:
     runs-on: ubuntu-latest

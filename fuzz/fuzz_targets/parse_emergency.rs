@@ -3,7 +3,7 @@ use libfuzzer_sys::fuzz_target;
 
 use revault_tx::{
     miniscript::bitcoin::{
-        secp256k1::{Secp256k1, Signature},
+        secp256k1::{Signature, SECP256K1},
         PublicKey, SigHashType,
     },
     transactions::{EmergencyTransaction, RevaultTransaction},
@@ -87,10 +87,8 @@ fuzz_target!(|data: &[u8]| {
         #[allow(unused_must_use)]
         tx.verify_input(0);
 
-        // FIXME: find a way to use the global context of secp...
-        let secp = Secp256k1::new();
         // Same for the finalization
         #[allow(unused_must_use)]
-        tx.finalize(&secp);
+        tx.finalize(&SECP256K1);
     }
 });
