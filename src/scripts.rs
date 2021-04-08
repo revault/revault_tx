@@ -17,7 +17,10 @@ use crate::error::*;
 use miniscript::{
     bitcoin::{secp256k1, util::bip32, Address, PublicKey},
     descriptor::{DescriptorPublicKey, Wildcard, WshInner},
-    miniscript::limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
+    miniscript::{
+        iter::PkPkh,
+        limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
+    },
     policy::concrete::Policy,
     Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, TranslatePk2,
 };
@@ -245,6 +248,27 @@ impl DepositDescriptor {
 
         Ok(DepositDescriptor(deposit_desc!(stakeholders)))
     }
+
+    /// Get the stakeholders xpubs used in this deposit descriptor.
+    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
+        let ms = match self.0 {
+            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                WshInner::Ms(ms) => ms,
+                WshInner::SortedMulti(_) => {
+                    unreachable!("Deposit descriptor is not a sorted multi")
+                }
+            },
+            _ => unreachable!("Deposit descriptor is always a P2WSH"),
+        };
+
+        // For DescriptorPublicKey, Pk::Hash == Self.
+        ms.iter_pk_pkh()
+            .map(|pkpkh| match pkpkh {
+                PkPkh::PlainPubkey(xpub) => xpub,
+                PkPkh::HashedPubkey(xpub) => xpub,
+            })
+            .collect()
+    }
 }
 
 impl Display for DepositDescriptor {
@@ -417,6 +441,27 @@ impl UnvaultDescriptor {
     pub fn csv_value(&self) -> u32 {
         unvault_descriptor_csv(&self.0)
     }
+
+    /// Get all the xpubs used in this Unvault descriptor.
+    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
+        let ms = match self.0 {
+            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                WshInner::Ms(ms) => ms,
+                WshInner::SortedMulti(_) => {
+                    unreachable!("Unvault descriptor is not a sorted multi")
+                }
+            },
+            _ => unreachable!("Unvault descriptor is always a P2WSH"),
+        };
+
+        // For DescriptorPublicKey, Pk::Hash == Self.
+        ms.iter_pk_pkh()
+            .map(|pkpkh| match pkpkh {
+                PkPkh::PlainPubkey(xpub) => xpub,
+                PkPkh::HashedPubkey(xpub) => xpub,
+            })
+            .collect()
+    }
 }
 
 impl Display for UnvaultDescriptor {
@@ -578,6 +623,27 @@ impl CpfpDescriptor {
         check_deriveable(managers.iter())?;
 
         Ok(CpfpDescriptor(cpfp_descriptor!(managers)))
+    }
+
+    /// Get all the xpubs used in this Cpfp descriptor.
+    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
+        let ms = match self.0 {
+            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                WshInner::Ms(ms) => ms,
+                WshInner::SortedMulti(_) => {
+                    unreachable!("Cpfp descriptor is not a sorted multi")
+                }
+            },
+            _ => unreachable!("Cpfp descriptor is always a P2WSH"),
+        };
+
+        // For DescriptorPublicKey, Pk::Hash == Self.
+        ms.iter_pk_pkh()
+            .map(|pkpkh| match pkpkh {
+                PkPkh::PlainPubkey(xpub) => xpub,
+                PkPkh::HashedPubkey(xpub) => xpub,
+            })
+            .collect()
     }
 }
 
@@ -912,6 +978,82 @@ mod tests {
             DerivedCpfpDescriptor::new(vec![raw_pk_a, raw_pk_b]).expect("Derived pubkeys");
         CpfpDescriptor::from_str(&der_cpfp_desc.to_string())
             .expect_err("FromStr on a derived descriptor");
+    }
+
+    #[test]
+    fn test_xpubs_from_descriptor() {
+        let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
+        let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
+        let third_stakeholder = DescriptorPublicKey::from_str("xpub6Br1DUfrzxTVGo1sanuKDCUmSxDfLRrxLQBqpMqygkQLkQWodoyvvGtUV8Rp3r6d6BNYvedBSU8c7whhn2U8haRVxsWwuQiZ9LoFp7jXPQA/*").unwrap();
+
+        let first_cosig = DescriptorPublicKey::from_str(
+            "02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap();
+        let second_cosig = DescriptorPublicKey::from_str(
+            "02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c",
+        )
+        .unwrap();
+        let third_cosig = DescriptorPublicKey::from_str(
+            "0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf",
+        )
+        .unwrap();
+
+        let first_manager = DescriptorPublicKey::from_str("xpub6Duq1ob3cQ8Wxees2fTGNK2wTsVjgTPQcKJiPquXY2rQJTDjeCxkXFxTCGhcunFDt26Ddz45KQu7pbLmmUGG2PXTRVx3iDpBPEhdrijJf4U/*").unwrap();
+        let second_manager = DescriptorPublicKey::from_str("xpub6EWL35hY9uZZs5Ljt6J3G2ZK1Tu4GPVkFdeGvMknG3VmwVRHhtadCaw5hdRDBgrmx1nPVHWjGBb5xeuC1BfbJzjjcic2gNm1aA7ywWjj7G8/*").unwrap();
+
+        let deposit_desc = DepositDescriptor::new(vec![
+            first_stakeholder.clone(),
+            second_stakeholder.clone(),
+            third_stakeholder.clone(),
+        ])
+        .expect("Valid wildcard xpubs");
+        assert_eq!(
+            deposit_desc.xpubs(),
+            vec![
+                first_stakeholder.clone(),
+                second_stakeholder.clone(),
+                third_stakeholder.clone()
+            ]
+        );
+
+        let cpfp_desc = DepositDescriptor::new(vec![first_manager.clone(), second_manager.clone()])
+            .expect("Valid wildcard xpubs");
+        assert_eq!(
+            cpfp_desc.xpubs(),
+            vec![first_manager.clone(), second_manager.clone(),]
+        );
+
+        let unvault_desc = UnvaultDescriptor::new(
+            vec![
+                first_stakeholder.clone(),
+                second_stakeholder.clone(),
+                third_stakeholder.clone(),
+            ],
+            vec![first_manager.clone(), second_manager.clone()],
+            2,
+            vec![
+                first_cosig.clone(),
+                second_cosig.clone(),
+                third_cosig.clone(),
+            ],
+            2018,
+        )
+        .expect("Valid, with xpubs");
+        assert_eq!(
+            unvault_desc.xpubs().sort(),
+            vec![
+                first_stakeholder,
+                second_stakeholder,
+                third_stakeholder,
+                first_manager,
+                second_manager,
+                first_cosig,
+                second_cosig,
+                third_cosig
+            ]
+            .sort()
+        );
     }
 
     #[test]
