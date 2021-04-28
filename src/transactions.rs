@@ -252,7 +252,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             }
         }
 
-        return false;
+        false
     }
 
     /// Check the transaction is valid
@@ -1388,7 +1388,7 @@ impl SpendTransaction {
         let psbt = Decodable::consensus_decode(raw_psbt)?;
         let psbt = psbt_common_sanity_checks(psbt)?;
 
-        if psbt.inputs.len() < 1 {
+        if psbt.inputs.is_empty() {
             return Err(PsbtValidationError::InvalidInputCount(0).into());
         }
 
@@ -1576,7 +1576,7 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
             }
 
             UnvaultTransaction::new(txin, &der_unvault_desc, &der_cpfp_desc, lock_time)
-                .and_then(|unvault_tx| Ok(unvault_tx.spend_unvault_txin(&der_unvault_desc)))
+                .map(|unvault_tx| unvault_tx.spend_unvault_txin(&der_unvault_desc))
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
