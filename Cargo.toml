@@ -1,6 +1,6 @@
 [package]
 name = "revault_tx"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Antoine Poinsot <darosior@protonmail.com>"]
 edition = "2018"
 repository = "https://github.com/revault/revault_tx"
