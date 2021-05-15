@@ -743,10 +743,6 @@ impl UnvaultTransaction {
     }
 
     /// Get the Unvault txo to be referenced in a spending transaction
-    ///
-    /// # Panic
-    /// Will panic if passed a csv higher than
-    /// [SEQUENCE_LOCKTIME_MASK](crate::scripts::SEQUENCE_LOCKTIME_MASK)
     pub fn spend_unvault_txin(&self, unvault_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxIn {
         self.unvault_txin(unvault_descriptor, unvault_descriptor.csv_value())
     }
