@@ -1199,7 +1199,7 @@ impl SpendTransaction {
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
         txos.push(cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
-            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
+            SpendTxOut::Destination(ref txo) => txo.clone(),
             SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
         }));
 
@@ -1210,7 +1210,7 @@ impl SpendTransaction {
             spend_txouts
                 .into_iter()
                 .map(|spend_txout| match spend_txout {
-                    SpendTxOut::Destination(txo) => txo.into_witness_script(), // None
+                    SpendTxOut::Destination(_) => None,
                     SpendTxOut::Change(txo) => txo.into_witness_script(),
                 }),
         );
@@ -1290,7 +1290,7 @@ impl SpendTransaction {
         let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor);
         txos.push(dummy_cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
-            SpendTxOut::Destination(ref txo) => txo.clone().into_txout(),
+            SpendTxOut::Destination(ref txo) => txo.clone(),
             SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
         }));
         let dummy_tx = Transaction {
@@ -2170,7 +2170,7 @@ mod tests {
 
         // Create and sign a spend transaction
         let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor); // Off-by-one csv
-        let dummy_txo = ExternalTxOut::default();
+        let dummy_txo = TxOut::default();
         let cpfp_value = SpendTransaction::cpfp_txout(
             vec![spend_unvault_txin.clone()],
             vec![SpendTxOut::Destination(dummy_txo.clone())],
@@ -2180,11 +2180,11 @@ mod tests {
         .txout()
         .value;
         let fees = 20_000;
-        let spend_txo = ExternalTxOut::new(TxOut {
+        let spend_txo = TxOut {
             // The CPFP output value won't be > 150k sats for our parameters
             value: spend_unvault_txin.txout().txout().value - cpfp_value - fees,
             ..TxOut::default()
-        });
+        };
 
         // "This time for sure !"
         let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor); // Right csv
@@ -2250,7 +2250,7 @@ mod tests {
             ),
         ];
         let n_txins = spend_unvault_txins.len();
-        let dummy_txo = ExternalTxOut::default();
+        let dummy_txo = TxOut::default();
         let cpfp_value = SpendTransaction::cpfp_txout(
             spend_unvault_txins.clone(),
             vec![SpendTxOut::Destination(dummy_txo.clone())],
@@ -2260,7 +2260,7 @@ mod tests {
         .txout()
         .value;
         let fees = 30_000;
-        let spend_txo = ExternalTxOut::new(TxOut {
+        let spend_txo = TxOut {
             value: spend_unvault_txins
                 .iter()
                 .map(|txin| txin.txout().txout().value)
@@ -2268,7 +2268,7 @@ mod tests {
                 - cpfp_value
                 - fees,
             ..TxOut::default()
-        });
+        };
         let mut spend_tx = SpendTransaction::new(
             spend_unvault_txins,
             vec![SpendTxOut::Destination(spend_txo.clone())],

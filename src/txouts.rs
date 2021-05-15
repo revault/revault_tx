@@ -145,29 +145,13 @@ impl FeeBumpTxOut {
     }
 }
 
-implem_revault_txout!(
-    ExternalTxOut,
-    doc = "An untagged external output, as spent / created by the \
-            [Deposit](crate::transactions::DepositTransaction) or created by the \
-            [Spend](crate::transactions::SpendTransaction)."
-);
-impl ExternalTxOut {
-    /// Create an external txout, hence without a witness script.
-    pub fn new(txout: TxOut) -> ExternalTxOut {
-        ExternalTxOut {
-            txout,
-            witness_script: None,
-        }
-    }
-}
-
 /// A [Spend](crate::transactions::SpendTransaction) output can be either a change one (DepositTxOut)
 /// or a payee-controlled one (ExternalTxOut).
 #[derive(Debug, Clone)]
 pub enum SpendTxOut {
     /// The actual destination of the funds, many such output can be present in a Spend
     /// transaction
-    Destination(ExternalTxOut),
+    Destination(TxOut),
     /// The change output, usually only one such output is present in a Spend transaction
     Change(DepositTxOut),
 }
