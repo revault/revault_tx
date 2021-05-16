@@ -126,10 +126,28 @@ impl CpfpTxOut {
     }
 }
 
-implem_revault_txout!(
-    FeeBumpTxOut,
-    doc = "The output spent by the revocation transactions to bump their feerate"
-);
+/// The output spent by the revocation transactions to bump their feerate
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FeeBumpTxOut(TxOut);
+
+impl RevaultTxOut for FeeBumpTxOut {
+    fn txout(&self) -> &TxOut {
+        &self.0
+    }
+
+    fn into_txout(self) -> TxOut {
+        self.0
+    }
+
+    fn witness_script(&self) -> &Option<Script> {
+        &None
+    }
+
+    fn into_witness_script(self) -> Option<Script> {
+        None
+    }
+}
+
 impl FeeBumpTxOut {
     /// Create a new FeeBumpTxOut, note that it's managed externally so we don't need a witness
     /// Script.
@@ -138,10 +156,7 @@ impl FeeBumpTxOut {
             return Err(TxoutCreationError::InvalidScriptPubkeyType);
         }
 
-        Ok(FeeBumpTxOut {
-            txout,
-            witness_script: None,
-        })
+        Ok(FeeBumpTxOut(txout))
     }
 }
 
