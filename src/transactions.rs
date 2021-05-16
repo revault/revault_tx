@@ -443,44 +443,6 @@ macro_rules! impl_revault_transaction {
     };
 }
 
-// Boilerplate for creating an actual (inner) transaction with a known number of prevouts / txouts.
-macro_rules! create_tx {
-    ( [$( ($revault_txin:expr, $sighash_type:expr) ),* $(,)?], [$($txout:expr),* $(,)?], $lock_time:expr $(,)?) => {
-        Psbt {
-            global: PsbtGlobal {
-                unsigned_tx: Transaction {
-                    version: TX_VERSION,
-                    lock_time: $lock_time,
-                    input: vec![$(
-                        $revault_txin.unsigned_txin(),
-                    )*],
-                    output: vec![$(
-                        $txout.clone().into_txout(),
-                    )*],
-                },
-                version: 0,
-                xpub: BTreeMap::new(),
-                proprietary: BTreeMap::new(),
-                unknown: BTreeMap::new(),
-            },
-            inputs: vec![$(
-                PsbtIn {
-                    witness_script: $revault_txin.clone().into_txout().into_witness_script(),
-                    sighash_type: Some($sighash_type),
-                    witness_utxo: Some($revault_txin.into_txout().into_txout()),
-                    ..PsbtIn::default()
-                },
-            )*],
-            outputs: vec![$(
-                PsbtOut {
-                    witness_script: $txout.into_witness_script(),
-                    ..PsbtOut::default()
-                },
-            )*],
-        }
-    }
-}
-
 // Sanity check a PSBT representing a RevaultTransaction, the part common to all transactions
 fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError> {
     let inner_tx = &psbt.global.unsigned_tx;
@@ -656,6 +618,37 @@ impl_revault_transaction!(
     doc = "The unvaulting transaction, spending a deposit and being eventually spent by a spend transaction (if not revaulted)."
 );
 impl UnvaultTransaction {
+    // Internal DRY routine for creating the inner PSBT
+    fn create_psbt(
+        deposit_txin: DepositTxIn,
+        unvault_txout: UnvaultTxOut,
+        cpfp_txout: CpfpTxOut,
+        lock_time: u32,
+    ) -> Psbt {
+        Psbt {
+            global: PsbtGlobal {
+                unsigned_tx: Transaction {
+                    version: TX_VERSION,
+                    lock_time,
+                    input: vec![deposit_txin.unsigned_txin()],
+                    output: vec![unvault_txout.into_txout(), cpfp_txout.into_txout()],
+                },
+                version: 0,
+                xpub: BTreeMap::new(),
+                proprietary: BTreeMap::new(),
+                unknown: BTreeMap::new(),
+            },
+            inputs: vec![PsbtIn {
+                witness_script: deposit_txin.txout().witness_script().clone(),
+                sighash_type: Some(SigHashType::All),
+                witness_utxo: Some(deposit_txin.into_txout().into_txout()),
+                ..PsbtIn::default()
+            }],
+            // 1 Unvault, 1 CPFP
+            outputs: vec![PsbtOut::default(), PsbtOut::default()],
+        }
+    }
+
     /// An unvault transaction always spends one deposit output and contains one CPFP output in
     /// addition to the unvault one.
     /// It's always created using a fixed feerate and the CPFP output value is fixed as well.
@@ -670,9 +663,10 @@ impl UnvaultTransaction {
         // First, create a dummy transaction to get its weight without Witness
         let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor);
         let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor);
-        let dummy_tx = create_tx!(
-            [(deposit_input.clone(), SigHashType::All)],
-            [dummy_unvault_txout, dummy_cpfp_txout],
+        let dummy_tx = UnvaultTransaction::create_psbt(
+            deposit_input.clone(),
+            dummy_unvault_txout,
+            dummy_cpfp_txout,
             lock_time,
         )
         .global
@@ -707,9 +701,10 @@ impl UnvaultTransaction {
 
         let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor);
         let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor);
-        Ok(UnvaultTransaction(create_tx!(
-            [(deposit_input, SigHashType::All)],
-            [unvault_txout, cpfp_txout],
+        Ok(UnvaultTransaction(UnvaultTransaction::create_psbt(
+            deposit_input,
+            unvault_txout,
+            cpfp_txout,
             lock_time,
         )))
     }
@@ -815,23 +810,6 @@ impl UnvaultTransaction {
             }
         }
 
-        // We only create P2WSH txos
-        for (index, psbtout) in psbt.outputs.iter().enumerate() {
-            if psbtout.witness_script.is_none() {
-                return Err(PsbtValidationError::MissingOutWitnessScript(psbtout.clone()).into());
-            }
-
-            if psbtout.redeem_script.is_some() {
-                return Err(PsbtValidationError::InvalidOutputField(psbtout.clone()).into());
-            }
-
-            if psbt.global.unsigned_tx.output[index].script_pubkey
-                != psbtout.witness_script.as_ref().unwrap().to_v0_p2wsh()
-            {
-                return Err(PsbtValidationError::InvalidOutWitnessScript(psbtout.clone()).into());
-            }
-        }
-
         // NOTE: the Unvault transaction cannot get larger than MAX_STANDARD_TX_WEIGHT
 
         Ok(UnvaultTransaction(psbt))
@@ -843,6 +821,48 @@ impl_revault_transaction!(
     doc = "The transaction \"revaulting\" a spend attempt, i.e. spending the unvaulting transaction back to a deposit txo."
 );
 impl CancelTransaction {
+    // Internal DRY routine for creating the inner PSBT
+    fn create_psbt(
+        unvault_txin: UnvaultTxIn,
+        feebump_txin: Option<FeeBumpTxIn>,
+        deposit_txo: DepositTxOut,
+        lock_time: u32,
+    ) -> Psbt {
+        let mut txins = vec![unvault_txin.unsigned_txin()];
+        let mut psbtins = vec![PsbtIn {
+            witness_script: unvault_txin.txout().witness_script().clone(),
+            sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
+            witness_utxo: Some(unvault_txin.into_txout().into_txout()),
+            ..PsbtIn::default()
+        }];
+        if let Some(feebump_txin) = feebump_txin {
+            txins.push(feebump_txin.unsigned_txin());
+            psbtins.push(PsbtIn {
+                sighash_type: Some(SigHashType::All),
+                witness_utxo: Some(feebump_txin.into_txout().into_txout()),
+                ..PsbtIn::default()
+            });
+        }
+
+        Psbt {
+            global: PsbtGlobal {
+                unsigned_tx: Transaction {
+                    version: TX_VERSION,
+                    lock_time,
+                    input: txins,
+                    output: vec![deposit_txo.into_txout()],
+                },
+                version: 0,
+                xpub: BTreeMap::new(),
+                proprietary: BTreeMap::new(),
+                unknown: BTreeMap::new(),
+            },
+            inputs: psbtins,
+            // Deposit txout
+            outputs: vec![PsbtOut::default()],
+        }
+    }
+
     /// A cancel transaction always pays to a deposit output and spends the unvault output, and
     /// may have a fee-bumping input.
     ///
@@ -855,10 +875,11 @@ impl CancelTransaction {
     ) -> CancelTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It pays for itself.
-        let deposit_txo = DepositTxOut::new(u64::MAX, deposit_descriptor);
-        let dummy_tx = create_tx!(
-            [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
-            [deposit_txo],
+        let dummy_deposit_txo = DepositTxOut::new(u64::MAX, deposit_descriptor);
+        let dummy_tx = CancelTransaction::create_psbt(
+            unvault_input.clone(),
+            None,
+            dummy_deposit_txo,
             lock_time,
         )
         .global
@@ -889,22 +910,12 @@ impl CancelTransaction {
             .expect("We would not create a dust unvault txo");
         let deposit_txo = DepositTxOut::new(revault_value, deposit_descriptor);
 
-        CancelTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!(
-                [
-                    (unvault_input, SigHashType::AllPlusAnyoneCanPay),
-                    (feebump_input, SigHashType::All),
-                ],
-                [deposit_txo],
-                lock_time,
-            )
-        } else {
-            create_tx!(
-                [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [deposit_txo],
-                lock_time,
-            )
-        })
+        CancelTransaction(CancelTransaction::create_psbt(
+            unvault_input,
+            feebump_input,
+            deposit_txo,
+            lock_time,
+        ))
     }
 
     /// Parse a Cancel transaction from a PSBT
@@ -940,23 +951,6 @@ impl CancelTransaction {
             .ok_or(PsbtValidationError::MissingRevocationInput)?;
         check_revocationtx_input(&input)?;
 
-        // We only create P2WSH txos
-        for (index, psbtout) in psbt.outputs.iter().enumerate() {
-            if psbtout.witness_script.is_none() {
-                return Err(PsbtValidationError::MissingOutWitnessScript(psbtout.clone()).into());
-            }
-
-            if psbtout.redeem_script.is_some() {
-                return Err(PsbtValidationError::InvalidOutputField(psbtout.clone()).into());
-            }
-
-            if psbt.global.unsigned_tx.output[index].script_pubkey
-                != psbtout.witness_script.as_ref().unwrap().to_v0_p2wsh()
-            {
-                return Err(PsbtValidationError::InvalidOutWitnessScript(psbtout.clone()).into());
-            }
-        }
-
         Ok(CancelTransaction(psbt))
     }
 }
@@ -966,6 +960,48 @@ impl_revault_transaction!(
     doc = "The transaction spending a deposit output to The Emergency Script."
 );
 impl EmergencyTransaction {
+    // Internal DRY routine for creating the inner PSBT
+    fn create_psbt(
+        deposit_txin: DepositTxIn,
+        feebump_txin: Option<FeeBumpTxIn>,
+        emergency_txo: EmergencyTxOut,
+        lock_time: u32,
+    ) -> Psbt {
+        let mut txins = vec![deposit_txin.unsigned_txin()];
+        let mut psbtins = vec![PsbtIn {
+            witness_script: deposit_txin.txout().witness_script().clone(),
+            sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
+            witness_utxo: Some(deposit_txin.into_txout().into_txout()),
+            ..PsbtIn::default()
+        }];
+        if let Some(feebump_txin) = feebump_txin {
+            txins.push(feebump_txin.unsigned_txin());
+            psbtins.push(PsbtIn {
+                sighash_type: Some(SigHashType::All),
+                witness_utxo: Some(feebump_txin.into_txout().into_txout()),
+                ..PsbtIn::default()
+            });
+        }
+
+        Psbt {
+            global: PsbtGlobal {
+                unsigned_tx: Transaction {
+                    version: TX_VERSION,
+                    lock_time,
+                    input: txins,
+                    output: vec![emergency_txo.into_txout()],
+                },
+                version: 0,
+                xpub: BTreeMap::new(),
+                proprietary: BTreeMap::new(),
+                unknown: BTreeMap::new(),
+            },
+            inputs: psbtins,
+            // Deposit txout
+            outputs: vec![PsbtOut::default()],
+        }
+    }
+
     /// The first emergency transaction always spends a deposit output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
     /// Will error **only** when trying to spend a dust deposit.
@@ -980,13 +1016,10 @@ impl EmergencyTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
-        let dummy_tx = create_tx!(
-            [(deposit_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
-            [emer_txo],
-            lock_time,
-        )
-        .global
-        .unsigned_tx;
+        let dummy_tx =
+            EmergencyTransaction::create_psbt(deposit_input.clone(), None, emer_txo, lock_time)
+                .global
+                .unsigned_tx;
 
         // The weight of the emergency transaction without a feebump input is the weight of the
         // witness-stripped transaction plus the weight required to satisfy the deposit txin
@@ -1013,24 +1046,12 @@ impl EmergencyTransaction {
             .ok_or_else(|| TransactionCreationError::Dust)?;
         let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
 
-        Ok(EmergencyTransaction(
-            if let Some(feebump_input) = feebump_input {
-                create_tx!(
-                    [
-                        (deposit_input, SigHashType::AllPlusAnyoneCanPay),
-                        (feebump_input, SigHashType::All)
-                    ],
-                    [emer_txo],
-                    lock_time,
-                )
-            } else {
-                create_tx!(
-                    [(deposit_input, SigHashType::AllPlusAnyoneCanPay)],
-                    [emer_txo],
-                    lock_time,
-                )
-            },
-        ))
+        Ok(EmergencyTransaction(EmergencyTransaction::create_psbt(
+            deposit_input.clone(),
+            feebump_input,
+            emer_txo,
+            lock_time,
+        )))
     }
 
     /// Parse an Emergency transaction from a PSBT
@@ -1066,6 +1087,48 @@ impl_revault_transaction!(
     doc = "The transaction spending an unvault output to The Emergency Script."
 );
 impl UnvaultEmergencyTransaction {
+    // Internal DRY routine for creating the inner PSBT
+    fn create_psbt(
+        unvault_txin: UnvaultTxIn,
+        feebump_txin: Option<FeeBumpTxIn>,
+        emergency_txo: EmergencyTxOut,
+        lock_time: u32,
+    ) -> Psbt {
+        let mut txins = vec![unvault_txin.unsigned_txin()];
+        let mut psbtins = vec![PsbtIn {
+            witness_script: unvault_txin.txout().witness_script().clone(),
+            sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
+            witness_utxo: Some(unvault_txin.into_txout().into_txout()),
+            ..PsbtIn::default()
+        }];
+        if let Some(feebump_txin) = feebump_txin {
+            txins.push(feebump_txin.unsigned_txin());
+            psbtins.push(PsbtIn {
+                sighash_type: Some(SigHashType::All),
+                witness_utxo: Some(feebump_txin.into_txout().into_txout()),
+                ..PsbtIn::default()
+            });
+        }
+
+        Psbt {
+            global: PsbtGlobal {
+                unsigned_tx: Transaction {
+                    version: TX_VERSION,
+                    lock_time,
+                    input: txins,
+                    output: vec![emergency_txo.into_txout()],
+                },
+                version: 0,
+                xpub: BTreeMap::new(),
+                proprietary: BTreeMap::new(),
+                unknown: BTreeMap::new(),
+            },
+            inputs: psbtins,
+            // Deposit txout
+            outputs: vec![PsbtOut::default()],
+        }
+    }
+
     /// The second emergency transaction always spends an unvault output and pays to the Emergency
     /// Script. It may also spend an additional output for fee-bumping.
     ///
@@ -1079,9 +1142,10 @@ impl UnvaultEmergencyTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
-        let dummy_tx = create_tx!(
-            [(unvault_input.clone(), SigHashType::AllPlusAnyoneCanPay)],
-            [emer_txo],
+        let dummy_tx = UnvaultEmergencyTransaction::create_psbt(
+            unvault_input.clone(),
+            None,
+            emer_txo,
             lock_time,
         )
         .global
@@ -1112,22 +1176,12 @@ impl UnvaultEmergencyTransaction {
             .expect("We would never create a dust unvault txo");
         let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
 
-        UnvaultEmergencyTransaction(if let Some(feebump_input) = feebump_input {
-            create_tx!(
-                [
-                    (unvault_input, SigHashType::AllPlusAnyoneCanPay),
-                    (feebump_input, SigHashType::All)
-                ],
-                [emer_txo],
-                lock_time,
-            )
-        } else {
-            create_tx!(
-                [(unvault_input, SigHashType::AllPlusAnyoneCanPay)],
-                [emer_txo],
-                lock_time,
-            )
-        })
+        UnvaultEmergencyTransaction(UnvaultEmergencyTransaction::create_psbt(
+            unvault_input.clone(),
+            feebump_input,
+            emer_txo,
+            lock_time,
+        ))
     }
 
     /// Parse an UnvaultEmergency transaction from a PSBT

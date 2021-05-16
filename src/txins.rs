@@ -3,7 +3,7 @@
 //! Wrappers around bitcoin's OutPoint and previous TxOut to statically check Revault
 //! transaction creation and ease PSBT management.
 
-use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, RevaultTxOut, UnvaultTxOut};
+use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, RevaultInternalTxOut, UnvaultTxOut};
 
 use miniscript::{
     bitcoin::{OutPoint, TxIn},

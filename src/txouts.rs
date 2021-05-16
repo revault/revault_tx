@@ -17,12 +17,17 @@ use miniscript::{
 
 use std::fmt;
 
-/// A transaction output created by a Revault transaction.
+/// Any output of a Revault transaction.
 pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
     /// Get a reference to the inner txout
     fn txout(&self) -> &TxOut;
     /// Get the actual inner txout
     fn into_txout(self) -> TxOut;
+}
+
+/// An output of a Revault transaction that we manage "internally", ie for which we have the
+/// descriptor.
+pub trait RevaultInternalTxOut: fmt::Debug + Clone + PartialEq {
     /// Get a reference to the inner witness script ("redeem Script of the witness program")
     fn witness_script(&self) -> &Option<Script>;
     /// Get the actual inner witness script ("redeem Script of the witness program")
@@ -46,7 +51,9 @@ macro_rules! implem_revault_txout {
             fn into_txout(self) -> TxOut {
                 self.txout
             }
+        }
 
+        impl RevaultInternalTxOut for $struct_name {
             fn witness_script(&self) -> &Option<Script> {
                 &self.witness_script
             }
@@ -91,20 +98,26 @@ impl UnvaultTxOut {
     }
 }
 
-implem_revault_txout!(
-    EmergencyTxOut,
-    doc = "The Emergency Deep Vault, the destination of the Emergency transactions fund."
-);
+/// The Emergency Deep Vault, the destination of the Emergency transactions fund.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct EmergencyTxOut(TxOut);
 impl EmergencyTxOut {
     /// Create a new EmergencyTxOut, note that we don't know the witness_script!
     pub fn new(address: EmergencyAddress, value: u64) -> EmergencyTxOut {
-        EmergencyTxOut {
-            txout: TxOut {
-                script_pubkey: address.address().script_pubkey(),
-                value,
-            },
-            witness_script: None,
-        }
+        EmergencyTxOut(TxOut {
+            script_pubkey: address.address().script_pubkey(),
+            value,
+        })
+    }
+}
+
+impl RevaultTxOut for EmergencyTxOut {
+    fn txout(&self) -> &TxOut {
+        &self.0
+    }
+
+    fn into_txout(self) -> TxOut {
+        self.0
     }
 }
 
@@ -129,25 +142,6 @@ impl CpfpTxOut {
 /// The output spent by the revocation transactions to bump their feerate
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FeeBumpTxOut(TxOut);
-
-impl RevaultTxOut for FeeBumpTxOut {
-    fn txout(&self) -> &TxOut {
-        &self.0
-    }
-
-    fn into_txout(self) -> TxOut {
-        self.0
-    }
-
-    fn witness_script(&self) -> &Option<Script> {
-        &None
-    }
-
-    fn into_witness_script(self) -> Option<Script> {
-        None
-    }
-}
-
 impl FeeBumpTxOut {
     /// Create a new FeeBumpTxOut, note that it's managed externally so we don't need a witness
     /// Script.
@@ -157,6 +151,16 @@ impl FeeBumpTxOut {
         }
 
         Ok(FeeBumpTxOut(txout))
+    }
+}
+
+impl RevaultTxOut for FeeBumpTxOut {
+    fn txout(&self) -> &TxOut {
+        &self.0
+    }
+
+    fn into_txout(self) -> TxOut {
+        self.0
     }
 }
 
