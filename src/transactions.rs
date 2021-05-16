@@ -639,7 +639,7 @@ impl UnvaultTransaction {
                 unknown: BTreeMap::new(),
             },
             inputs: vec![PsbtIn {
-                witness_script: deposit_txin.txout().witness_script().clone(),
+                witness_script: Some(deposit_txin.txout().witness_script().clone()),
                 sighash_type: Some(SigHashType::All),
                 witness_utxo: Some(deposit_txin.into_txout().into_txout()),
                 ..PsbtIn::default()
@@ -830,7 +830,7 @@ impl CancelTransaction {
     ) -> Psbt {
         let mut txins = vec![unvault_txin.unsigned_txin()];
         let mut psbtins = vec![PsbtIn {
-            witness_script: unvault_txin.txout().witness_script().clone(),
+            witness_script: Some(unvault_txin.txout().witness_script().clone()),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
             witness_utxo: Some(unvault_txin.into_txout().into_txout()),
             ..PsbtIn::default()
@@ -969,7 +969,7 @@ impl EmergencyTransaction {
     ) -> Psbt {
         let mut txins = vec![deposit_txin.unsigned_txin()];
         let mut psbtins = vec![PsbtIn {
-            witness_script: deposit_txin.txout().witness_script().clone(),
+            witness_script: Some(deposit_txin.txout().witness_script().clone()),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
             witness_utxo: Some(deposit_txin.into_txout().into_txout()),
             ..PsbtIn::default()
@@ -1096,7 +1096,7 @@ impl UnvaultEmergencyTransaction {
     ) -> Psbt {
         let mut txins = vec![unvault_txin.unsigned_txin()];
         let mut psbtins = vec![PsbtIn {
-            witness_script: unvault_txin.txout().witness_script().clone(),
+            witness_script: Some(unvault_txin.txout().witness_script().clone()),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
             witness_utxo: Some(unvault_txin.into_txout().into_txout()),
             ..PsbtIn::default()
@@ -1256,18 +1256,7 @@ impl SpendTransaction {
             SpendTxOut::Destination(ref txo) => txo.clone(),
             SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
         }));
-
-        // For the PsbtOut s
-        let mut txos_wit_script = Vec::with_capacity(spend_txouts.len() + 1);
-        txos_wit_script.push(cpfp_txo.into_witness_script());
-        txos_wit_script.extend(
-            spend_txouts
-                .into_iter()
-                .map(|spend_txout| match spend_txout {
-                    SpendTxOut::Destination(_) => None,
-                    SpendTxOut::Change(txo) => txo.into_witness_script(),
-                }),
-        );
+        let psbtouts = txos.iter().map(|_| PsbtOut::default()).collect();
 
         let psbt = Psbt {
             global: PsbtGlobal {
@@ -1291,20 +1280,14 @@ impl SpendTransaction {
                     let prev_txout = input.into_txout();
                     value_in += prev_txout.txout().value;
                     PsbtIn {
-                        witness_script: prev_txout.witness_script().clone(),
+                        witness_script: Some(prev_txout.witness_script().clone()),
                         sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
                         witness_utxo: Some(prev_txout.into_txout()),
                         ..PsbtIn::default()
                     }
                 })
                 .collect(),
-            outputs: txos_wit_script
-                .into_iter()
-                .map(|witness_script| PsbtOut {
-                    witness_script,
-                    ..PsbtOut::default()
-                })
-                .collect(),
+            outputs: psbtouts,
         };
 
         // Make sure we didn't create a Monster Tx :tm: ..

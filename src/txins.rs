@@ -80,13 +80,8 @@ impl DepositTxIn {
     /// Get the maximum size, in weight units, a satisfaction for this input would cost.
     pub fn max_sat_weight(&self) -> usize {
         miniscript::descriptor::Wsh::new(
-            miniscript::Miniscript::parse(
-                self.prev_txout
-                    .witness_script()
-                    .as_ref()
-                    .expect("DepositTxOut has a witness_script"),
-            )
-            .expect("DepositTxIn witness_script is created from a Miniscript"),
+            miniscript::Miniscript::parse(self.prev_txout.witness_script())
+                .expect("DepositTxIn witness_script is created from a Miniscript"),
         )
         .expect("DepositTxIn witness_script is a witness script hash")
         .max_satisfaction_weight()
@@ -116,13 +111,8 @@ impl UnvaultTxIn {
     /// Get the maximum size, in weight units, a satisfaction for this input would cost.
     pub fn max_sat_weight(&self) -> usize {
         miniscript::descriptor::Wsh::new(
-            miniscript::Miniscript::parse(
-                self.prev_txout
-                    .witness_script()
-                    .as_ref()
-                    .expect("UnvaultTxOut has a witness_script"),
-            )
-            .expect("UnvaultTxIn witness_script is created from a Miniscript"),
+            miniscript::Miniscript::parse(self.prev_txout.witness_script())
+                .expect("UnvaultTxIn witness_script is created from a Miniscript"),
         )
         .expect("UnvaultTxIn is a P2WSH")
         .max_satisfaction_weight()

@@ -29,9 +29,9 @@ pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
 /// descriptor.
 pub trait RevaultInternalTxOut: fmt::Debug + Clone + PartialEq {
     /// Get a reference to the inner witness script ("redeem Script of the witness program")
-    fn witness_script(&self) -> &Option<Script>;
+    fn witness_script(&self) -> &Script;
     /// Get the actual inner witness script ("redeem Script of the witness program")
-    fn into_witness_script(self) -> Option<Script>;
+    fn into_witness_script(self) -> Script;
 }
 
 macro_rules! implem_revault_txout {
@@ -40,7 +40,7 @@ macro_rules! implem_revault_txout {
         #[derive(Debug, Clone, PartialEq, Default)]
         pub struct $struct_name {
             txout: TxOut,
-            witness_script: Option<Script>,
+            witness_script: Script,
         }
 
         impl RevaultTxOut for $struct_name {
@@ -54,11 +54,11 @@ macro_rules! implem_revault_txout {
         }
 
         impl RevaultInternalTxOut for $struct_name {
-            fn witness_script(&self) -> &Option<Script> {
+            fn witness_script(&self) -> &Script {
                 &self.witness_script
             }
 
-            fn into_witness_script(self) -> Option<Script> {
+            fn into_witness_script(self) -> Script {
                 self.witness_script
             }
         }
@@ -79,7 +79,7 @@ impl DepositTxOut {
                 value,
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
-            witness_script: Some(script_descriptor.inner().explicit_script()),
+            witness_script: script_descriptor.inner().explicit_script(),
         }
     }
 }
@@ -93,7 +93,7 @@ impl UnvaultTxOut {
                 value,
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
-            witness_script: Some(script_descriptor.inner().explicit_script()),
+            witness_script: script_descriptor.inner().explicit_script(),
         }
     }
 }
@@ -134,7 +134,7 @@ impl CpfpTxOut {
                 value,
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
-            witness_script: Some(script_descriptor.inner().explicit_script()),
+            witness_script: script_descriptor.inner().explicit_script(),
         }
     }
 }
