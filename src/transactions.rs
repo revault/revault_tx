@@ -10,6 +10,8 @@ use crate::{error::*, scripts::*, txins::*, txouts::*};
 use miniscript::{
     bitcoin::{
         consensus::encode::{Decodable, Encodable},
+        hash_types,
+        hashes::Hash,
         secp256k1,
         util::{
             bip143::SigHashCache,
@@ -80,13 +82,12 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Move inner transaction out
     fn into_psbt(self) -> Psbt;
 
-    /// Get the sighash for an input spending an internal Revault TXO.
-    /// **Do not use it for fee bumping inputs, use
-    /// [RevaultTransaction::signature_hash_feebump_input] instead**
+    /// Get the sighash for an input of a Revault transaction. Will deduce the scriptCode from
+    /// the previous scriptPubKey type, assuming either P2WSH or P2WPKH.
     ///
-    /// Will error if the input is out of bounds or the PSBT input does not contain a Witness
-    /// Script (ie was already finalized).
-    fn signature_hash_internal_input(
+    /// Will error if the input is out of bounds or the PSBT input is insane (eg a P2WSH that
+    /// does not contain a Witness Script (ie was already finalized)).
+    fn signature_hash(
         &self,
         input_index: usize,
         sighash_type: SigHashType,
@@ -96,46 +97,30 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             .inputs
             .get(input_index)
             .ok_or(InputSatisfactionError::OutOfBounds)?;
-
         let prev_txo = psbtin
             .witness_utxo
             .as_ref()
             .expect("We always set witness_txo");
-        // We always create transactions' PSBT inputs with a witness_script, and this script is
-        // always the script code as we always spend P2WSH outputs.
-        let witscript = psbtin
-            .witness_script
-            .as_ref()
-            .ok_or(InputSatisfactionError::MissingWitnessScript)?;
-        assert!(prev_txo.script_pubkey.is_v0_p2wsh());
 
         // TODO: maybe cache the cache at some point (for huge spend txs)
         let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
-        Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
-    }
 
-    /// Get the signature hash for an externally-managed fee-bumping input.
-    ///
-    /// Returns `None` if the input does not exist.
-    fn signature_hash_feebump_input(
-        &self,
-        input_index: usize,
-        script_code: &Script,
-        sighash_type: SigHashType,
-    ) -> Result<SigHash, InputSatisfactionError> {
-        let psbt = self.inner_tx();
-        let psbtin = psbt
-            .inputs
-            .get(input_index)
-            .ok_or(InputSatisfactionError::OutOfBounds)?;
-
-        // TODO: maybe cache the cache at some point (for huge spend txs)
-        let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
-        let prev_txo = psbtin
-            .witness_utxo
-            .as_ref()
-            .expect("We always set witness_utxo");
-        Ok(cache.signature_hash(input_index, &script_code, prev_txo.value, sighash_type))
+        if prev_txo.script_pubkey.is_v0_p2wsh() {
+            let witscript = psbtin
+                .witness_script
+                .as_ref()
+                .ok_or(InputSatisfactionError::MissingWitnessScript)?;
+            Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
+        } else {
+            assert!(
+                prev_txo.script_pubkey.is_v0_p2wpkh(),
+                "If not a P2WSH, it must be a feebump input."
+            );
+            let raw_pkh = &prev_txo.script_pubkey[2..];
+            let pkh = hash_types::PubkeyHash::from_slice(raw_pkh).expect("Never fails");
+            let witscript = Script::new_p2pkh(&pkh);
+            Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
+        }
     }
 
     /// Add a signature in order to eventually satisfy this input.
@@ -1946,13 +1931,12 @@ mod tests {
         );
         // We cannot get a sighash for a non-existing input
         assert_eq!(
-            emergency_tx_no_feebump
-                .signature_hash_internal_input(10, SigHashType::AllPlusAnyoneCanPay),
+            emergency_tx_no_feebump.signature_hash(10, SigHashType::AllPlusAnyoneCanPay),
             Err(InputSatisfactionError::OutOfBounds)
         );
         // But for an existing one, all good
         let emergency_tx_sighash_vault = emergency_tx_no_feebump
-            .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
+            .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
             .expect("Input exists");
         // We can't force it to accept a SIGHASH_ALL signature:
         let err = satisfy_transaction_input(
@@ -1996,7 +1980,7 @@ mod tests {
         )
         .unwrap();
         let emergency_tx_sighash_feebump = emergency_tx
-            .signature_hash_feebump_input(1, &feebump_descriptor.script_code(), SigHashType::All)
+            .signature_hash(1, SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2055,7 +2039,7 @@ mod tests {
             (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
         );
         let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
-            .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
+            .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2093,7 +2077,7 @@ mod tests {
             "Base fees when computing with with feebump differ !!"
         );
         let cancel_tx_sighash_feebump = cancel_tx
-            .signature_hash_feebump_input(1, &feebump_descriptor.script_code(), SigHashType::All)
+            .signature_hash(1, SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2129,7 +2113,7 @@ mod tests {
             (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
         );
         let unemergency_tx_sighash = unemergency_tx_no_feebump
-            .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
+            .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2177,7 +2161,7 @@ mod tests {
         }
         // Now actually satisfy it, libbitcoinconsensus should not yell
         let unemer_tx_sighash_feebump = unemergency_tx
-            .signature_hash_feebump_input(1, &feebump_descriptor.script_code(), SigHashType::All)
+            .signature_hash(1, SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2192,7 +2176,7 @@ mod tests {
 
         // Now we can sign the unvault
         let unvault_tx_sighash = unvault_tx
-            .signature_hash_internal_input(0, SigHashType::All)
+            .signature_hash(0, SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2235,7 +2219,7 @@ mod tests {
         )
         .expect("Amounts ok");
         let spend_tx_sighash = spend_tx
-            .signature_hash_internal_input(0, SigHashType::All)
+            .signature_hash(0, SigHashType::All)
             .expect("Input exists");
         satisfy_transaction_input(
             &secp,
@@ -2318,7 +2302,7 @@ mod tests {
         assert_eq!(spend_tx.fees(), fees);
         for i in 0..n_txins {
             let spend_tx_sighash = spend_tx
-                .signature_hash_internal_input(i, SigHashType::All)
+                .signature_hash(i, SigHashType::All)
                 .expect("Input exists");
             satisfy_transaction_input(
                 &secp,
