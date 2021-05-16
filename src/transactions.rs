@@ -676,7 +676,7 @@ impl UnvaultTransaction {
         // transaction plus the size of the single input's witness.
         let total_weight = dummy_tx
             .get_weight()
-            .checked_add(deposit_input.max_sat_weight())
+            .checked_add(deposit_input.txout().max_sat_weight())
             .expect("Properly-computed weights cannot overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = UNVAULT_TX_FEERATE
@@ -889,7 +889,7 @@ impl CancelTransaction {
         // witness-stripped transaction plus the weight required to satisfy the unvault txin
         let total_weight = dummy_tx
             .get_weight()
-            .checked_add(unvault_input.max_sat_weight())
+            .checked_add(unvault_input.txout().max_sat_weight())
             .expect("Properly computed weight won't overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = REVAULTING_TX_FEERATE
@@ -1025,7 +1025,7 @@ impl EmergencyTransaction {
         // witness-stripped transaction plus the weight required to satisfy the deposit txin
         let total_weight = dummy_tx
             .get_weight()
-            .checked_add(deposit_input.max_sat_weight())
+            .checked_add(deposit_input.txout().max_sat_weight())
             .expect("Weight computation bug");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = REVAULTING_TX_FEERATE
@@ -1155,7 +1155,7 @@ impl UnvaultEmergencyTransaction {
         // the witness-stripped transaction plus the weight required to satisfy the unvault txin
         let total_weight = dummy_tx
             .get_weight()
-            .checked_add(unvault_input.max_sat_weight())
+            .checked_add(unvault_input.txout().max_sat_weight())
             .expect("Weight computation bug");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
         let fees = REVAULTING_TX_FEERATE
@@ -1244,7 +1244,7 @@ impl SpendTransaction {
         // Used later to check the maximum transaction size.
         let sat_weight = unvault_inputs
             .iter()
-            .map(|txin| txin.max_sat_weight())
+            .map(|txin| txin.txout().max_sat_weight())
             .sum::<usize>();
 
         // Record the value spent
@@ -1342,7 +1342,7 @@ impl SpendTransaction {
 
         let sat_weight: u64 = unvault_inputs
             .iter()
-            .map(|txin| txin.max_sat_weight())
+            .map(|txin| txin.txout().max_sat_weight())
             .sum::<usize>()
             .try_into()
             .expect("An usize doesn't fit in an u64?");
@@ -1392,6 +1392,7 @@ impl SpendTransaction {
                     .try_into()
                     .expect("Bug: witness size >u64::MAX")
             } else {
+                // FIXME: this panic can probably be triggered...
                 miniscript::descriptor::Wsh::new(
                     miniscript::Miniscript::parse(
                         txin.witness_script
@@ -1941,7 +1942,7 @@ mod tests {
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
             emergency_tx_no_feebump.fees(),
-            (376 + deposit_txin.max_sat_weight() as u64) * 22,
+            (376 + deposit_txin.txout().max_sat_weight() as u64) * 22,
         );
         // We cannot get a sighash for a non-existing input
         assert_eq!(
@@ -2020,7 +2021,7 @@ mod tests {
 
         // Create but don't sign the unvaulting transaction until all revaulting transactions
         // are finalized
-        let deposit_txin_sat_cost = deposit_txin.max_sat_weight();
+        let deposit_txin_sat_cost = deposit_txin.txout().max_sat_weight();
         let mut unvault_tx = UnvaultTransaction::new(
             deposit_txin.clone(),
             &der_unvault_descriptor,
@@ -2051,7 +2052,7 @@ mod tests {
         // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
             cancel_tx_without_feebump.fees(),
-            (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
+            (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
         );
         let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)
@@ -2125,7 +2126,7 @@ mod tests {
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
             unemergency_tx_no_feebump.fees(),
-            (376 + rev_unvault_txin.max_sat_weight() as u64) * 22,
+            (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
         );
         let unemergency_tx_sighash = unemergency_tx_no_feebump
             .signature_hash_internal_input(0, SigHashType::AllPlusAnyoneCanPay)

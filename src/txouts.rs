@@ -21,17 +21,30 @@ use std::fmt;
 pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
     /// Get a reference to the inner txout
     fn txout(&self) -> &TxOut;
+
     /// Get the actual inner txout
     fn into_txout(self) -> TxOut;
 }
 
 /// An output of a Revault transaction that we manage "internally", ie for which we have the
 /// descriptor.
-pub trait RevaultInternalTxOut: fmt::Debug + Clone + PartialEq {
+pub trait RevaultInternalTxOut: fmt::Debug + Clone + PartialEq + RevaultTxOut {
     /// Get a reference to the inner witness script ("redeem Script of the witness program")
     fn witness_script(&self) -> &Script;
+
     /// Get the actual inner witness script ("redeem Script of the witness program")
     fn into_witness_script(self) -> Script;
+
+    /// Get the maximum size, in weight units, a satisfaction for this scriptPubKey would cost.
+    fn max_sat_weight(&self) -> usize {
+        miniscript::descriptor::Wsh::new(
+            miniscript::Miniscript::parse(self.witness_script())
+                .expect("The witness_script is always created from a Miniscript"),
+        )
+        .expect("The witness_script is always a P2WSH")
+        .max_satisfaction_weight()
+        .expect("It's a sane Script, derived from a Miniscript")
+    }
 }
 
 macro_rules! implem_revault_txout {
