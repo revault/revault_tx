@@ -6,7 +6,6 @@
 //! for data structure as well as roles distribution.
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
-
 use miniscript::{
     bitcoin::{
         consensus::encode::Encodable,
@@ -95,6 +94,17 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         input_index: usize,
         sighash_type: SigHashType,
     ) -> Result<SigHash, InputSatisfactionError> {
+        let mut cache = SigHashCache::new(self.tx());
+        self.signature_hash_cached(input_index, sighash_type, &mut cache)
+    }
+
+    /// Cached version of [RevaultTransaction::signature_hash]
+    fn signature_hash_cached(
+        &self,
+        input_index: usize,
+        sighash_type: SigHashType,
+        cache: &mut SigHashCache<&Transaction>,
+    ) -> Result<SigHash, InputSatisfactionError> {
         let psbt = self.inner_tx();
         let psbtin = psbt
             .inputs
@@ -104,9 +114,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             .witness_utxo
             .as_ref()
             .expect("We always set witness_txo");
-
-        // TODO: maybe cache the cache at some point (for huge spend txs)
-        let mut cache = SigHashCache::new(&psbt.global.unsigned_tx);
 
         if prev_txo.script_pubkey.is_v0_p2wsh() {
             let witscript = psbtin
@@ -551,8 +558,9 @@ mod tests {
 
     use miniscript::{
         bitcoin::{
-            secp256k1, util::bip32, Address, Amount, Network, OutPoint, SigHash, SigHashType,
-            Transaction, TxIn, TxOut,
+            secp256k1,
+            util::{bip143::SigHashCache, bip32},
+            Address, Amount, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
         },
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
         Descriptor, DescriptorTrait,
@@ -1229,10 +1237,16 @@ mod tests {
         )
         .expect("Amounts Ok");
         assert_eq!(spend_tx.fees(), fees);
-        for i in 0..n_txins {
-            let spend_tx_sighash = spend_tx
-                .signature_hash(i, SigHashType::All)
-                .expect("Input exists");
+        let mut hash_cache = SigHashCache::new(spend_tx.tx());
+        let sighashes: Vec<SigHash> = (0..n_txins)
+            .into_iter()
+            .map(|i| {
+                spend_tx
+                    .signature_hash_cached(i, SigHashType::All, &mut hash_cache)
+                    .expect("Input exists")
+            })
+            .collect();
+        for (i, spend_tx_sighash) in sighashes.into_iter().enumerate() {
             satisfy_transaction_input(
                 &secp,
                 &mut spend_tx,
