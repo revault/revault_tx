@@ -127,21 +127,21 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     }
 
     /// Add a signature in order to eventually satisfy this input.
-    /// Some sanity checks against the PSBT Input are done here, but no signature check.
     ///
-    /// Bigger warning: **the signature is not checked for its validity**.
+    /// Checks the signature according to the specified expected sighash type in the PSBT input.
     ///
     /// The BIP174 Signer role.
-    fn add_signature(
+    fn add_signature<C: secp256k1::Verification>(
         &mut self,
         input_index: usize,
         pubkey: BitcoinPubKey,
         signature: BitcoinSig,
+        secp: &secp256k1::Secp256k1<C>,
     ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
         let psbtin = self
-            .inner_tx_mut()
+            .inner_tx()
             .inputs
-            .get_mut(input_index)
+            .get(input_index)
             .ok_or(InputSatisfactionError::OutOfBounds)?;
 
         // If we were already finalized, our witness script was wiped.
@@ -192,9 +192,19 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             return Err(InputSatisfactionError::UnexpectedSighashType);
         }
 
+        let sighash = self.signature_hash(input_index, expected_sighash_type)?;
+        let sighash = secp256k1::Message::from_slice(&sighash).expect("sighash is 32 a bytes hash");
+        secp.verify(&sighash, &sig, &pubkey.key)
+            .map_err(|_| InputSatisfactionError::InvalidSignature(sig, pubkey.key, sighash))?;
+
         let mut rawsig = sig.serialize_der().to_vec();
         rawsig.push(sighash_type.as_u32() as u8);
 
+        let psbtin = self
+            .inner_tx_mut()
+            .inputs
+            .get_mut(input_index)
+            .expect("Checked at the beginning.");
         Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
     }
 
@@ -370,6 +380,11 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the inner unsigned transaction hash with witness data
     fn wtxid(&self) -> Wtxid {
         self.inner_tx().global.unsigned_tx.wtxid()
+    }
+
+    /// Get a reference to the inner transaction
+    fn tx(&self) -> &Transaction {
+        &self.inner_tx().global.unsigned_tx
     }
 }
 
@@ -663,7 +678,7 @@ mod tests {
             .derive_public_key(secp)
             .unwrap();
 
-            tx.add_signature(input_index, key, sig)?;
+            tx.add_signature(input_index, key, sig, secp)?;
         }
 
         Ok(())

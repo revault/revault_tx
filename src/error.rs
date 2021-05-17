@@ -6,6 +6,7 @@ use bitcoinconsensus::Error as LibConsensusError;
 use miniscript::{
     bitcoin::{
         consensus::encode::Error as EncodeError,
+        secp256k1,
         util::psbt::{Input as PsbtInput, Output as PsbtOutput},
     },
     policy::compiler::CompilerError,
@@ -111,6 +112,12 @@ pub enum InputSatisfactionError {
     AlreadyFinalized,
     /// The PSBT input does not comport a witness_script field
     MissingWitnessScript,
+    /// Trying to add an invalid signature
+    InvalidSignature(
+        secp256k1::Signature,
+        secp256k1::PublicKey,
+        secp256k1::Message,
+    ),
 }
 
 impl fmt::Display for InputSatisfactionError {
@@ -124,6 +131,11 @@ impl fmt::Display for InputSatisfactionError {
             Self::MissingWitnessScript => write!(
                 f,
                 "Missing witness_script field in PSBT input. Wrong sighash function used?"
+            ),
+            Self::InvalidSignature(sig, pk, hash) => write!(
+                f,
+                "Invalid signature '{:x?}' for key '{:x?}' and sighash '{:x?}'",
+                &sig, &pk, &hash
             ),
         }
     }
