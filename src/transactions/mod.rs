@@ -232,12 +232,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
         // Miniscript's finalize does not check against libbitcoinconsensus. And we are better safe
         // than sorry when dealing with Script ...
-        for i in 0..psbt.inputs.len() {
-            // BIP174:
-            // For each input, the Input Finalizer determines if the input has enough data to pass
-            // validation.
-            self.verify_input(i)?;
-        }
+        self.verify_inputs()?;
 
         Ok(())
     }
@@ -268,41 +263,29 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
         // Miniscript's finalize does not check against libbitcoinconsensus. And we are better safe
         // than sorry when dealing with Script ...
-        for i in 0..self.psbt().inputs.len() {
-            if self.verify_input(i).is_err() {
-                return false;
-            }
+        if self.verify_inputs().is_err() {
+            return false;
         }
+        assert_eq!(self.psbt().inputs.len(), self.tx().input.len());
 
         miniscript::psbt::interpreter_check(&self.psbt(), ctx).is_ok()
     }
 
-    /// Verify an input of the transaction against libbitcoinconsensus out of the information
-    /// contained in the PSBT input.
-    fn verify_input(&self, input_index: usize) -> Result<(), Error> {
-        let psbtin = self
-            .psbt()
-            .inputs
-            .get(input_index)
-            // It's not exactly an Input satisfaction error, but hey, out of bounds.
-            .ok_or(Error::InputSatisfaction(
-                InputSatisfactionError::OutOfBounds,
-            ))?;
-        let utxo = psbtin
-            .witness_utxo
-            .as_ref()
-            .expect("A witness_utxo is always set");
-        let (prev_scriptpubkey, prev_value) = (utxo.script_pubkey.as_bytes(), utxo.value);
+    /// Verify all PSBT inputs against libbitcoinconsensus
+    fn verify_inputs(&self) -> Result<(), Error> {
+        let ser_tx = self.clone().into_bitcoin_serialized();
 
-        bitcoinconsensus::verify(
-            prev_scriptpubkey,
-            prev_value,
-            // FIXME: we could change this method to be verify_tx() and not clone() for each
-            // input..
-            self.clone().into_bitcoin_serialized().as_slice(),
-            input_index,
-        )
-        .map_err(|e| e.into())
+        for (i, psbtin) in self.psbt().inputs.iter().enumerate() {
+            let utxo = psbtin
+                .witness_utxo
+                .as_ref()
+                .expect("A witness_utxo is always set");
+            let (prev_scriptpubkey, prev_value) = (utxo.script_pubkey.as_bytes(), utxo.value);
+
+            bitcoinconsensus::verify(prev_scriptpubkey, prev_value, &ser_tx, i)?;
+        }
+
+        Ok(())
     }
 
     /// Get the network-serialized (inner) transaction. You likely want to be sure
