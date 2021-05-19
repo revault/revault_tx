@@ -393,6 +393,15 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     fn tx(&self) -> &Transaction {
         &self.psbt().global.unsigned_tx
     }
+
+    /// Extract the inner transaction of the inner PSBT. You likely want to be sure
+    /// the transaction [RevaultTransaction.is_finalized] before serializing it.
+    ///
+    /// The BIP174 Transaction Extractor (without any check, which are done in
+    /// [RevaultTransaction.finalize]).
+    fn into_tx(self) -> Transaction {
+        self.into_psbt().extract_tx()
+    }
 }
 
 /// The funding transaction, we don't create nor sign it.
