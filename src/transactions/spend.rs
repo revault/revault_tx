@@ -191,7 +191,7 @@ impl SpendTransaction {
     /// is already finalized, returns the exact size in witness units. Otherwise computes the
     /// maximum reasonable weight of a satisfaction.
     pub fn max_weight(&self) -> u64 {
-        let psbt = self.inner_tx();
+        let psbt = self.psbt();
         let tx = &psbt.global.unsigned_tx;
 
         let mut weight: u64 = tx.get_weight().try_into().expect("Can't be >u64::MAX");
@@ -276,7 +276,7 @@ impl SpendTransaction {
 
         // Make sure the transaction cannot get out of standardness bounds once finalized
         let spend_tx = SpendTransaction(psbt);
-        let witstrip_weight = spend_tx.inner_tx().global.unsigned_tx.get_weight();
+        let witstrip_weight = spend_tx.psbt().global.unsigned_tx.get_weight();
         let total_weight = witstrip_weight
             .checked_add(max_sat_weight)
             .expect("Weight computation bug");

@@ -132,7 +132,7 @@ impl UnvaultTransaction {
     ) -> UnvaultTxIn {
         let spk = unvault_descriptor.inner().script_pubkey();
         let index = self
-            .inner_tx()
+            .psbt()
             .global
             .unsigned_tx
             .output
@@ -141,11 +141,11 @@ impl UnvaultTransaction {
             .expect("UnvaultTransaction is always created with an Unvault txo");
 
         // Unwraped above
-        let txo = &self.inner_tx().global.unsigned_tx.output[index];
+        let txo = &self.psbt().global.unsigned_tx.output[index];
         let prev_txout = UnvaultTxOut::new(Amount::from_sat(txo.value), unvault_descriptor);
         UnvaultTxIn::new(
             OutPoint {
-                txid: self.inner_tx().global.unsigned_tx.txid(),
+                txid: self.psbt().global.unsigned_tx.txid(),
                 vout: index.try_into().expect("There are two outputs"),
             },
             prev_txout,
@@ -170,7 +170,7 @@ impl UnvaultTransaction {
     pub fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> CpfpTxIn {
         let spk = cpfp_descriptor.inner().script_pubkey();
         let index = self
-            .inner_tx()
+            .psbt()
             .global
             .unsigned_tx
             .output
@@ -179,11 +179,11 @@ impl UnvaultTransaction {
             .expect("We always create UnvaultTransaction with a CPFP output");
 
         // Unwraped above
-        let txo = &self.inner_tx().global.unsigned_tx.output[index];
+        let txo = &self.psbt().global.unsigned_tx.output[index];
         let prev_txout = CpfpTxOut::new(Amount::from_sat(txo.value), cpfp_descriptor);
         CpfpTxIn::new(
             OutPoint {
-                txid: self.inner_tx().global.unsigned_tx.txid(),
+                txid: self.psbt().global.unsigned_tx.txid(),
                 vout: index.try_into().expect("There are two outputs"),
             },
             prev_txout,

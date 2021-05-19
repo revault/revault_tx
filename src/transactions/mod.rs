@@ -73,15 +73,15 @@ pub const MAX_STANDARD_TX_WEIGHT: u32 = 400_000;
 /// - Finalizer
 /// - Extractor and serializer
 pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
-    /// Get the inner transaction
-    fn inner_tx(&self) -> &Psbt;
+    /// Get the inner PSBT
+    fn psbt(&self) -> &Psbt;
 
     // FIXME: how can we not expose this? This in theory breaks our internal assumptions as the
     // caller could just put the inner PSBT in an insane state..
-    /// Get the inner transaction
-    fn inner_tx_mut(&mut self) -> &mut Psbt;
+    /// Get the inner PSBT
+    fn psbt_mut(&mut self) -> &mut Psbt;
 
-    /// Move inner transaction out
+    /// Move inner PSBT out
     fn into_psbt(self) -> Psbt;
 
     /// Get the sighash for an input of a Revault transaction. Will deduce the scriptCode from
@@ -105,7 +105,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         sighash_type: SigHashType,
         cache: &mut SigHashCache<&Transaction>,
     ) -> Result<SigHash, InputSatisfactionError> {
-        let psbt = self.inner_tx();
+        let psbt = self.psbt();
         let psbtin = psbt
             .inputs
             .get(input_index)
@@ -146,7 +146,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         secp: &secp256k1::Secp256k1<C>,
     ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
         let psbtin = self
-            .inner_tx()
+            .psbt()
             .inputs
             .get(input_index)
             .ok_or(InputSatisfactionError::OutOfBounds)?;
@@ -208,7 +208,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         rawsig.push(sighash_type.as_u32() as u8);
 
         let psbtin = self
-            .inner_tx_mut()
+            .psbt_mut()
             .inputs
             .get_mut(input_index)
             .expect("Checked at the beginning.");
@@ -225,7 +225,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         // We could operate on a clone for state consistency in case of error. But we can only end
         // up in an inconsistent state if miniscript's interpreter checks pass but not
         // libbitcoinconsensus' one.
-        let mut psbt = self.inner_tx_mut();
+        let mut psbt = self.psbt_mut();
 
         miniscript::psbt::finalize(&mut psbt, ctx)
             .map_err(|e| Error::TransactionFinalisation(e.to_string()))?;
@@ -246,12 +246,12 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Slighty more efficient than calling [RevaultTransaction::finalize] on a clone as it gets
     /// rid of the belt-and-suspenders checks.
     fn is_finalizable(&self, ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>) -> bool {
-        miniscript::psbt::finalize(&mut self.inner_tx().clone(), ctx).is_ok()
+        miniscript::psbt::finalize(&mut self.psbt().clone(), ctx).is_ok()
     }
 
     /// Check if the transaction was already finalized.
     fn is_finalized(&self) -> bool {
-        for i in self.inner_tx().inputs.iter() {
+        for i in self.psbt().inputs.iter() {
             if i.final_script_witness.is_some() {
                 return true;
             }
@@ -268,20 +268,20 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
         // Miniscript's finalize does not check against libbitcoinconsensus. And we are better safe
         // than sorry when dealing with Script ...
-        for i in 0..self.inner_tx().inputs.len() {
+        for i in 0..self.psbt().inputs.len() {
             if self.verify_input(i).is_err() {
                 return false;
             }
         }
 
-        miniscript::psbt::interpreter_check(&self.inner_tx(), ctx).is_ok()
+        miniscript::psbt::interpreter_check(&self.psbt(), ctx).is_ok()
     }
 
     /// Verify an input of the transaction against libbitcoinconsensus out of the information
     /// contained in the PSBT input.
     fn verify_input(&self, input_index: usize) -> Result<(), Error> {
         let psbtin = self
-            .inner_tx()
+            .psbt()
             .inputs
             .get(input_index)
             // It's not exactly an Input satisfaction error, but hey, out of bounds.
@@ -322,7 +322,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Get the BIP174-serialized (inner) transaction.
     fn as_psbt_serialized(&self) -> Vec<u8> {
         let mut buff = Vec::with_capacity(256);
-        self.inner_tx()
+        self.psbt()
             .consensus_encode(&mut buff)
             .expect("We only create valid PSBT, serialization cannot fail");
         buff
@@ -356,7 +356,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     fn fees(&self) -> u64 {
         let mut value_in: u64 = 0;
-        for i in self.inner_tx().inputs.iter() {
+        for i in self.psbt().inputs.iter() {
             value_in = value_in
                 .checked_add(
                     i.witness_utxo
@@ -368,7 +368,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         }
 
         let mut value_out: u64 = 0;
-        for o in self.inner_tx().global.unsigned_tx.output.iter() {
+        for o in self.psbt().global.unsigned_tx.output.iter() {
             value_out = value_out
                 .checked_add(o.value)
                 .expect("PSBT bug: overflow while computing created coins value");
@@ -381,17 +381,17 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Get the inner unsigned transaction id
     fn txid(&self) -> Txid {
-        self.inner_tx().global.unsigned_tx.txid()
+        self.psbt().global.unsigned_tx.txid()
     }
 
     /// Get the inner unsigned transaction hash with witness data
     fn wtxid(&self) -> Wtxid {
-        self.inner_tx().global.unsigned_tx.wtxid()
+        self.psbt().global.unsigned_tx.wtxid()
     }
 
     /// Get a reference to the inner transaction
     fn tx(&self) -> &Transaction {
-        &self.inner_tx().global.unsigned_tx
+        &self.psbt().global.unsigned_tx
     }
 }
 
@@ -525,10 +525,7 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
             let der_unvault_desc = unvault_descriptor.derive(deriv_index, secp);
             let der_cpfp_desc = cpfp_descriptor.derive(deriv_index, secp);
 
-            let txin = DepositTxIn::new(
-                outpoint,
-                DepositTxOut::new(amount, &der_deposit_desc),
-            );
+            let txin = DepositTxIn::new(outpoint, DepositTxOut::new(amount, &der_deposit_desc));
             if deriv_index > max_deriv_index {
                 max_deriv_index = deriv_index;
             }
@@ -956,7 +953,7 @@ mod tests {
         )?;
 
         assert_eq!(h_unvault, unvault_tx);
-        let unvault_value = unvault_tx.inner_tx().global.unsigned_tx.output[0].value;
+        let unvault_value = unvault_tx.psbt().global.unsigned_tx.output[0].value;
         // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
         // feerate is sat/WU, and 30_000 is the CPFP output value.
         assert_eq!(unvault_tx.fees(), (548 + deposit_txin_sat_cost as u64) * 6);
@@ -969,12 +966,7 @@ mod tests {
             CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0);
         assert_eq!(h_cancel, cancel_tx_without_feebump);
         // Keep track of the fees we computed..
-        let value_no_feebump = cancel_tx_without_feebump
-            .inner_tx()
-            .global
-            .unsigned_tx
-            .output[0]
-            .value;
+        let value_no_feebump = cancel_tx_without_feebump.psbt().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
             cancel_tx_without_feebump.fees(),
@@ -1009,12 +1001,7 @@ mod tests {
         );
         // It really is a belt-and-suspenders check as the sighash would differ too.
         assert_eq!(
-            cancel_tx_without_feebump
-                .inner_tx()
-                .global
-                .unsigned_tx
-                .output[0]
-                .value,
+            cancel_tx_without_feebump.psbt().global.unsigned_tx.output[0].value,
             value_no_feebump,
             "Base fees when computing with with feebump differ !!"
         );

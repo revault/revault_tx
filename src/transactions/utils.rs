@@ -14,11 +14,11 @@ macro_rules! impl_revault_transaction {
         pub struct $transaction_name(Psbt);
 
         impl RevaultTransaction for $transaction_name {
-            fn inner_tx(&self) -> &Psbt {
+            fn psbt(&self) -> &Psbt {
                 &self.0
             }
 
-            fn inner_tx_mut(&mut self) -> &mut Psbt {
+            fn psbt_mut(&mut self) -> &mut Psbt {
                 &mut self.0
             }
 
