@@ -11,7 +11,7 @@ use crate::{
 };
 
 use miniscript::{
-    bitcoin::{Script, TxOut},
+    bitcoin::{Amount, Script, TxOut},
     DescriptorTrait,
 };
 
@@ -86,10 +86,10 @@ implem_revault_txout!(
 );
 impl DepositTxOut {
     /// Create a new DepositTxOut out of the given Deposit script descriptor
-    pub fn new(value: u64, script_descriptor: &DerivedDepositDescriptor) -> DepositTxOut {
+    pub fn new(value: Amount, script_descriptor: &DerivedDepositDescriptor) -> DepositTxOut {
         DepositTxOut {
             txout: TxOut {
-                value,
+                value: value.as_sat(),
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
             witness_script: script_descriptor.inner().explicit_script(),
@@ -100,10 +100,10 @@ impl DepositTxOut {
 implem_revault_txout!(UnvaultTxOut, doc = "*The* Unvault transaction output.");
 impl UnvaultTxOut {
     /// Create a new UnvaultTxOut out of the given Unvault script descriptor
-    pub fn new(value: u64, script_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxOut {
+    pub fn new(value: Amount, script_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxOut {
         UnvaultTxOut {
             txout: TxOut {
-                value,
+                value: value.as_sat(),
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
             witness_script: script_descriptor.inner().explicit_script(),
@@ -116,10 +116,10 @@ impl UnvaultTxOut {
 pub struct EmergencyTxOut(TxOut);
 impl EmergencyTxOut {
     /// Create a new EmergencyTxOut, note that we don't know the witness_script!
-    pub fn new(address: EmergencyAddress, value: u64) -> EmergencyTxOut {
+    pub fn new(address: EmergencyAddress, value: Amount) -> EmergencyTxOut {
         EmergencyTxOut(TxOut {
             script_pubkey: address.address().script_pubkey(),
-            value,
+            value: value.as_sat(),
         })
     }
 }
@@ -141,10 +141,10 @@ implem_revault_txout!(
 );
 impl CpfpTxOut {
     /// Create a new CpfpTxOut out of the given Cpfp descriptor
-    pub fn new(value: u64, script_descriptor: &DerivedCpfpDescriptor) -> CpfpTxOut {
+    pub fn new(value: Amount, script_descriptor: &DerivedCpfpDescriptor) -> CpfpTxOut {
         CpfpTxOut {
             txout: TxOut {
-                value,
+                value: value.as_sat(),
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
             witness_script: script_descriptor.inner().explicit_script(),

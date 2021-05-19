@@ -15,7 +15,7 @@ use miniscript::bitcoin::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    SigHashType, Transaction,
+    Amount, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -85,7 +85,7 @@ impl UnvaultEmergencyTransaction {
     ) -> UnvaultEmergencyTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
-        let emer_txo = EmergencyTxOut::new(emer_address.clone(), u64::MAX);
+        let emer_txo = EmergencyTxOut::new(emer_address.clone(), Amount::from_sat(u64::MAX));
         let dummy_tx = UnvaultEmergencyTransaction::create_psbt(
             unvault_input.clone(),
             None,
@@ -118,7 +118,7 @@ impl UnvaultEmergencyTransaction {
         let emer_value = deposit_value
             .checked_sub(fees)
             .expect("We would never create a dust unvault txo");
-        let emer_txo = EmergencyTxOut::new(emer_address, emer_value);
+        let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
         UnvaultEmergencyTransaction(UnvaultEmergencyTransaction::create_psbt(
             unvault_input.clone(),

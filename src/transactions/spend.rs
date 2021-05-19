@@ -1,7 +1,7 @@
 use crate::{
     error::*,
     scripts::*,
-    transactions::{RevaultTransaction, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION, utils},
+    transactions::{utils, RevaultTransaction, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION},
     txins::*,
     txouts::*,
 };
@@ -13,7 +13,7 @@ use miniscript::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        SigHashType, Transaction,
+        Amount, SigHashType, Transaction,
     },
     DescriptorTrait,
 };
@@ -138,7 +138,7 @@ impl SpendTransaction {
         lock_time: u32,
     ) -> CpfpTxOut {
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
-        let dummy_cpfp_txo = CpfpTxOut::new(u64::MAX, &cpfp_descriptor);
+        let dummy_cpfp_txo = CpfpTxOut::new(Amount::from_sat(u64::MAX), &cpfp_descriptor);
         txos.push(dummy_cpfp_txo.txout().clone());
         txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
             SpendTxOut::Destination(ref txo) => txo.clone(),
@@ -171,7 +171,7 @@ impl SpendTransaction {
         // See https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx
         // for this arbirtrary value.
         let cpfp_value = 16 * total_weight;
-        CpfpTxOut::new(cpfp_value, &cpfp_descriptor)
+        CpfpTxOut::new(Amount::from_sat(cpfp_value), &cpfp_descriptor)
     }
 
     /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction

@@ -16,7 +16,7 @@ use miniscript::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        OutPoint, SigHashType, Transaction,
+        Amount, OutPoint, SigHashType, Transaction,
     },
     DescriptorTrait,
 };
@@ -77,8 +77,8 @@ impl UnvaultTransaction {
         lock_time: u32,
     ) -> Result<UnvaultTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness
-        let dummy_unvault_txout = UnvaultTxOut::new(u64::MAX, unvault_descriptor);
-        let dummy_cpfp_txout = CpfpTxOut::new(u64::MAX, cpfp_descriptor);
+        let dummy_unvault_txout = UnvaultTxOut::new(Amount::from_sat(u64::MAX), unvault_descriptor);
+        let dummy_cpfp_txout = CpfpTxOut::new(Amount::from_sat(u64::MAX), cpfp_descriptor);
         let dummy_tx = UnvaultTransaction::create_psbt(
             deposit_input.clone(),
             dummy_unvault_txout,
@@ -115,8 +115,8 @@ impl UnvaultTransaction {
         }
         let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE; // Arithmetic checked above
 
-        let unvault_txout = UnvaultTxOut::new(unvault_value, unvault_descriptor);
-        let cpfp_txout = CpfpTxOut::new(UNVAULT_CPFP_VALUE, cpfp_descriptor);
+        let unvault_txout = UnvaultTxOut::new(Amount::from_sat(unvault_value), unvault_descriptor);
+        let cpfp_txout = CpfpTxOut::new(Amount::from_sat(UNVAULT_CPFP_VALUE), cpfp_descriptor);
         Ok(UnvaultTransaction(UnvaultTransaction::create_psbt(
             deposit_input,
             unvault_txout,
@@ -142,7 +142,7 @@ impl UnvaultTransaction {
 
         // Unwraped above
         let txo = &self.inner_tx().global.unsigned_tx.output[index];
-        let prev_txout = UnvaultTxOut::new(txo.value, unvault_descriptor);
+        let prev_txout = UnvaultTxOut::new(Amount::from_sat(txo.value), unvault_descriptor);
         UnvaultTxIn::new(
             OutPoint {
                 txid: self.inner_tx().global.unsigned_tx.txid(),
@@ -180,7 +180,7 @@ impl UnvaultTransaction {
 
         // Unwraped above
         let txo = &self.inner_tx().global.unsigned_tx.output[index];
-        let prev_txout = CpfpTxOut::new(txo.value, cpfp_descriptor);
+        let prev_txout = CpfpTxOut::new(Amount::from_sat(txo.value), cpfp_descriptor);
         CpfpTxIn::new(
             OutPoint {
                 txid: self.inner_tx().global.unsigned_tx.txid(),

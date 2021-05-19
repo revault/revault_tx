@@ -15,7 +15,7 @@ use miniscript::bitcoin::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    SigHashType, Transaction,
+    Amount, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -85,7 +85,7 @@ impl CancelTransaction {
     ) -> CancelTransaction {
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It pays for itself.
-        let dummy_deposit_txo = DepositTxOut::new(u64::MAX, deposit_descriptor);
+        let dummy_deposit_txo = DepositTxOut::new(Amount::from_sat(u64::MAX), deposit_descriptor);
         let dummy_tx = CancelTransaction::create_psbt(
             unvault_input.clone(),
             None,
@@ -118,7 +118,7 @@ impl CancelTransaction {
         let revault_value = unvault_value
             .checked_sub(fees)
             .expect("We would not create a dust unvault txo");
-        let deposit_txo = DepositTxOut::new(revault_value, deposit_descriptor);
+        let deposit_txo = DepositTxOut::new(Amount::from_sat(revault_value), deposit_descriptor);
 
         CancelTransaction(CancelTransaction::create_psbt(
             unvault_input,

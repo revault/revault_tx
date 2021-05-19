@@ -408,7 +408,10 @@ impl DepositTransaction {
         assert!(outpoint.txid == self.0.txid());
         let txo = self.0.output[outpoint.vout as usize].clone();
 
-        DepositTxIn::new(outpoint, DepositTxOut::new(txo.value, deposit_descriptor))
+        DepositTxIn::new(
+            outpoint,
+            DepositTxOut::new(Amount::from_sat(txo.value), deposit_descriptor),
+        )
     }
 }
 
@@ -436,7 +439,7 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
 
     let deposit_txin = DepositTxIn::new(
         deposit_outpoint,
-        DepositTxOut::new(deposit_amount.as_sat(), &der_deposit_descriptor),
+        DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
     );
     let unvault_tx = UnvaultTransaction::new(
         deposit_txin,
@@ -489,7 +492,7 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     let der_deposit_descriptor = deposit_descriptor.derive(derivation_index, secp);
     let deposit_txin = DepositTxIn::new(
         deposit_outpoint,
-        DepositTxOut::new(deposit_amount.as_sat(), &der_deposit_descriptor),
+        DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
     );
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
@@ -524,7 +527,7 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
 
             let txin = DepositTxIn::new(
                 outpoint,
-                DepositTxOut::new(amount.as_sat(), &der_deposit_desc),
+                DepositTxOut::new(amount, &der_deposit_desc),
             );
             if deriv_index > max_deriv_index {
                 max_deriv_index = deriv_index;
@@ -797,8 +800,10 @@ mod tests {
                 script_pubkey: deposit_scriptpubkey.clone(),
             }],
         };
-        let deposit_txo =
-            DepositTxOut::new(deposit_raw_tx.output[0].value, &der_deposit_descriptor);
+        let deposit_txo = DepositTxOut::new(
+            Amount::from_sat(deposit_raw_tx.output[0].value),
+            &der_deposit_descriptor,
+        );
         let deposit_tx = DepositTransaction(deposit_raw_tx);
         let deposit_outpoint = OutPoint {
             txid: deposit_tx.0.txid(),
@@ -1180,7 +1185,7 @@ mod tests {
                     "0ed7dc14fe8d1364b3185fa46e940cb8e858f8de32e63f88353a2bd66eb99e2a:0",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value, &der_unvault_descriptor),
+                UnvaultTxOut::new(Amount::from_sat(deposit_value), &der_unvault_descriptor),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -1188,7 +1193,7 @@ mod tests {
                     "23aacfca328942892bb007a86db0bf5337005f642b3c46aef50c23af03ec333a:1",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value * 4, &der_unvault_descriptor),
+                UnvaultTxOut::new(Amount::from_sat(deposit_value * 4), &der_unvault_descriptor),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -1196,7 +1201,7 @@ mod tests {
                     "fccabf4077b7e44ba02378a97a84611b545c11a1ef2af16cbb6e1032aa059b1d:0",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value / 2, &der_unvault_descriptor),
+                UnvaultTxOut::new(Amount::from_sat(deposit_value / 2), &der_unvault_descriptor),
                 csv,
             ),
             UnvaultTxIn::new(
@@ -1204,7 +1209,10 @@ mod tests {
                     "71dc04303184d54e6cc2f92d843282df2854d6dd66f10081147b84aeed830ae1:0",
                 )
                 .unwrap(),
-                UnvaultTxOut::new(deposit_value * 50, &der_unvault_descriptor),
+                UnvaultTxOut::new(
+                    Amount::from_sat(deposit_value * 50),
+                    &der_unvault_descriptor,
+                ),
                 csv,
             ),
         ];
