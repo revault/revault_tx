@@ -9,6 +9,8 @@ use miniscript::bitcoin::{
 /// RevaultTransaction for it.
 macro_rules! impl_revault_transaction {
     ( $transaction_name:ident, $doc_comment:meta ) => {
+        use std::{fmt, str};
+
         #[$doc_comment]
         #[derive(Debug, Clone, PartialEq)]
         pub struct $transaction_name(Psbt);
@@ -60,6 +62,20 @@ macro_rules! impl_revault_transaction {
                     $transaction_name::from_psbt_serialized(&Vec::<u8>::deserialize(deserializer)?)
                         .map_err(de::Error::custom)
                 }
+            }
+        }
+
+        impl fmt::Display for $transaction_name {
+            fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.as_psbt_string())
+            }
+        }
+
+        impl str::FromStr for $transaction_name {
+            type Err = TransactionSerialisationError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                $transaction_name::from_psbt_str(s)
             }
         }
     };
