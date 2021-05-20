@@ -2,8 +2,10 @@ use crate::{error::*, transactions::TX_VERSION};
 
 use miniscript::bitcoin::{
     util::psbt::{Input as PsbtIn, PartiallySignedTransaction as Psbt},
-    SigHashType,
+    OutPoint, SigHashType,
 };
+
+use std::collections::HashSet;
 
 /// Boilerplate for defining a Revault transaction as a newtype over a Psbt and implementing
 /// RevaultTransaction for it.
@@ -107,6 +109,12 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
             output_count,
             psbt_output_count,
         ));
+    }
+
+    // Check for duplicated inputs
+    let uniq_txins: HashSet<OutPoint> = inner_tx.input.iter().map(|i| i.previous_output).collect();
+    if uniq_txins.len() != input_count {
+        return Err(PsbtValidationError::DuplicatedInput);
     }
 
     // None: unknown, Some(true): an input was final, Some(false) an input was non-final

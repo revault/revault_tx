@@ -151,6 +151,7 @@ pub enum PsbtValidationError {
     OutputCountMismatch(usize, usize),
     InvalidInputCount(usize),
     InvalidOutputCount(usize),
+    DuplicatedInput,
     MissingRevocationInput,
     MissingFeeBumpingInput,
     MissingWitnessUtxo(PsbtInput),
@@ -183,6 +184,7 @@ impl fmt::Display for PsbtValidationError {
             ),
             Self::InvalidInputCount(c) => write!(f, "Invalid input count: '{}'", c),
             Self::InvalidOutputCount(c) => write!(f, "Invalid output count: '{}'", c),
+            Self::DuplicatedInput => write!(f, "Transaction contains duplicated inputs"),
             Self::MissingRevocationInput => {
                 write!(f, "Missing P2WSH input for revocation transaction")
             }
