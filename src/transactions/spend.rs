@@ -242,6 +242,15 @@ impl SpendTransaction {
 
         let mut max_sat_weight = 0;
         for input in psbt.inputs.iter() {
+            // We must only have Unvault inputs
+            let txo = input
+                .witness_utxo
+                .as_ref()
+                .expect("Checked by the common parsing checks");
+            if !txo.script_pubkey.is_v0_p2wsh() {
+                return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
+            }
+
             if input.final_script_witness.is_some() {
                 continue;
             }
@@ -250,10 +259,9 @@ impl SpendTransaction {
                 return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
             }
 
-            // The revocation input must contain a valid witness script
+            // The Unvault input must contain a valid witness script
             if let Some(ref ws) = input.witness_script {
-                if Some(&ws.to_v0_p2wsh()) != input.witness_utxo.as_ref().map(|w| &w.script_pubkey)
-                {
+                if ws.to_v0_p2wsh() != txo.script_pubkey {
                     return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()).into());
                 }
             } else {
