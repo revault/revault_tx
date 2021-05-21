@@ -61,7 +61,8 @@ pub const INSANE_FEES: u64 = 20_000_000;
 pub const TX_VERSION: i32 = 2;
 
 /// Maximum weight of a transaction to be relayed.
-/// https://github.com/bitcoin/bitcoin/blob/590e49ccf2af27c6c1f1e0eb8be3a4bf4d92ce8b/src/policy/policy.h#L23-L24
+///
+/// <https://github.com/bitcoin/bitcoin/blob/590e49ccf2af27c6c1f1e0eb8be3a4bf4d92ce8b/src/policy/policy.h#L23-L24>
 pub const MAX_STANDARD_TX_WEIGHT: u32 = 400_000;
 
 /// A Revault transaction.
