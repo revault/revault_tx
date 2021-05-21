@@ -125,7 +125,7 @@ impl fmt::Display for InputSatisfactionError {
         match self {
             Self::OutOfBounds => write!(f, "Index out of bounds of inputs list"),
             Self::UnexpectedSighashType => {
-                write!(f, "Signature's sighash byte differ from PSBT input's type")
+                write!(f, "Signature's sighash byte differs from PSBT input's type")
             }
             Self::AlreadyFinalized => write!(f, "Input was already finalized"),
             Self::MissingWitnessScript => write!(
