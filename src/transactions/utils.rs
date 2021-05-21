@@ -126,10 +126,6 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
         if input.witness_utxo.is_none() {
             return Err(PsbtValidationError::MissingWitnessUtxo(input.clone()));
         }
-        let spk = &input.witness_utxo.as_ref().unwrap().script_pubkey;
-        if !(spk.is_v0_p2wsh() || spk.is_v0_p2wpkh()) {
-            return Err(PsbtValidationError::InvalidInputField(input.clone()));
-        }
 
         if input.non_witness_utxo.is_some() {
             return Err(PsbtValidationError::InvalidInputField(input.clone()));
@@ -170,6 +166,26 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
                     .value,
             )
             .ok_or(PsbtValidationError::InsaneAmounts)?;
+
+        // The previous output must either be P2WSH, in which case the witness script must
+        // correspond to the ScriptPubKey, or P2WPKH.
+        let spk = &input.witness_utxo.as_ref().unwrap().script_pubkey;
+        if spk.is_v0_p2wsh() {
+            // It's blanked when finalized
+            if is_final == Some(true) {
+                continue;
+            }
+
+            let ws = match &input.witness_script {
+                Some(ws) => ws,
+                None => return Err(PsbtValidationError::MissingInWitnessScript(input.clone())),
+            };
+            if &ws.to_v0_p2wsh() != spk {
+                return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()));
+            }
+        } else if !spk.is_v0_p2wpkh() {
+            return Err(PsbtValidationError::InvalidInputField(input.clone()));
+        }
     }
 
     let mut value_out: u64 = 0;
@@ -208,6 +224,13 @@ pub fn find_feebumping_input(inputs: &[PsbtIn]) -> Option<&PsbtIn> {
 
 /// Sanity check an "internal" PSBT input of a revocation transaction
 pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
+    assert!(input
+        .witness_utxo
+        .as_ref()
+        .expect("Checked in the common checks")
+        .script_pubkey
+        .is_v0_p2wsh());
+
     if input.final_script_witness.is_some() {
         // Already final, sighash type and witness script are wiped
         return Ok(());
@@ -216,15 +239,6 @@ pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationErro
     // The revocation input must indicate that it wants to be signed with ACP
     if input.sighash_type != Some(SigHashType::AllPlusAnyoneCanPay) {
         return Err(PsbtValidationError::InvalidSighashType(input.clone()));
-    }
-
-    // The revocation input must contain a valid witness script
-    if let Some(ref ws) = input.witness_script {
-        if Some(&ws.to_v0_p2wsh()) != input.witness_utxo.as_ref().map(|w| &w.script_pubkey) {
-            return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()));
-        }
-    } else {
-        return Err(PsbtValidationError::MissingInWitnessScript(input.clone()));
     }
 
     Ok(())
