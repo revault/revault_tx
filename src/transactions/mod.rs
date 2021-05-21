@@ -247,6 +247,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Check if the transaction was already finalized.
     fn is_finalized(&self) -> bool {
         for i in self.psbt().inputs.iter() {
+            // We never mix finalized and non-finalized inputs.
             if i.final_script_witness.is_some() {
                 return true;
             }
