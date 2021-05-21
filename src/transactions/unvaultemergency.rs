@@ -121,7 +121,7 @@ impl UnvaultEmergencyTransaction {
         let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
         UnvaultEmergencyTransaction(UnvaultEmergencyTransaction::create_psbt(
-            unvault_input.clone(),
+            unvault_input,
             feebump_input,
             emer_txo,
             lock_time,

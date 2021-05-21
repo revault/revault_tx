@@ -114,11 +114,11 @@ impl EmergencyTransaction {
         let deposit_value = deposit_input.txout().txout().value;
         let emer_value = deposit_value
             .checked_sub(fees)
-            .ok_or_else(|| TransactionCreationError::Dust)?;
+            .ok_or(TransactionCreationError::Dust)?;
         let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
         Ok(EmergencyTransaction(EmergencyTransaction::create_psbt(
-            deposit_input.clone(),
+            deposit_input,
             feebump_input,
             emer_txo,
             lock_time,

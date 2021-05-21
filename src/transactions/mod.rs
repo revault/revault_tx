@@ -401,6 +401,7 @@ pub struct FeeBumpTransaction(pub Transaction);
 
 /// Get the chain of pre-signed transaction out of a deposit available for a manager.
 /// No feebump input.
+#[allow(clippy::too_many_arguments)]
 pub fn transaction_chain_manager<C: secp256k1::Verification>(
     deposit_outpoint: OutPoint,
     deposit_amount: Amount,
@@ -439,6 +440,7 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
 }
 
 /// Get the entire chain of pre-signed transaction for this derivation index out of a deposit. No feebump input.
+#[allow(clippy::too_many_arguments)]
 pub fn transaction_chain<C: secp256k1::Verification>(
     deposit_outpoint: OutPoint,
     deposit_amount: Amount,
@@ -487,6 +489,7 @@ pub fn transaction_chain<C: secp256k1::Verification>(
 
 /// Get a spend transaction out of a list of deposits and derivation indexes.
 /// The derivation index used for the Spend CPFP is the highest of the deposits one.
+#[allow(clippy::too_many_arguments)]
 pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
     deposit_txins: Vec<(OutPoint, Amount, ChildNumber)>,
     spend_txos: Vec<SpendTxOut>,
