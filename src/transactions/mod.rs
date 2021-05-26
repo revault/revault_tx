@@ -65,6 +65,27 @@ pub const TX_VERSION: i32 = 2;
 /// <https://github.com/bitcoin/bitcoin/blob/590e49ccf2af27c6c1f1e0eb8be3a4bf4d92ce8b/src/policy/policy.h#L23-L24>
 pub const MAX_STANDARD_TX_WEIGHT: u32 = 400_000;
 
+/// This private module is used to make mutable references to the PSBT inside transaction newtypes
+/// available to functions inside the transaction module, but not beyond that. This is needed to
+/// guarantee invariants that could not be guaranteed if users had arbitrary mutable access to the
+/// inner PSBT.
+pub(super) mod inner_mut {
+    use super::{Psbt, TransactionSerialisationError};
+
+    pub trait PrivateInnerMut: Sized {
+        /// Get a mutable reference to the inner transaction, this is only used internally
+        fn psbt_mut(&mut self) -> &mut Psbt;
+
+        /// Get a reference to the inner transaction, this is only used internally
+        fn psbt(&self) -> &Psbt;
+
+        /// Move inner transaction out
+        fn into_psbt(self) -> Psbt;
+
+        fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError>;
+    }
+}
+
 /// A Revault transaction.
 ///
 /// Wraps a rust-bitcoin PSBT and defines some BIP174 roles as methods.
@@ -74,16 +95,8 @@ pub const MAX_STANDARD_TX_WEIGHT: u32 = 400_000;
 /// - Finalizer
 /// - Extractor and serializer
 pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
-    /// Get the inner PSBT
+    /// Get a reference to the inner PSBT
     fn psbt(&self) -> &Psbt;
-
-    // FIXME: how can we not expose this? This in theory breaks our internal assumptions as the
-    // caller could just put the inner PSBT in an insane state..
-    /// Get the inner PSBT
-    fn psbt_mut(&mut self) -> &mut Psbt;
-
-    /// Move inner PSBT out
-    fn into_psbt(self) -> Psbt;
 
     /// Get the sighash for an input of a Revault transaction. Will deduce the scriptCode from
     /// the previous scriptPubKey type, assuming either P2WSH or P2WPKH.
@@ -94,12 +107,100 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         &self,
         input_index: usize,
         sighash_type: SigHashType,
+    ) -> Result<SigHash, InputSatisfactionError>;
+
+    /// Cached version of [RevaultTransaction::signature_hash]
+    fn signature_hash_cached(
+        &self,
+        input_index: usize,
+        sighash_type: SigHashType,
+        cache: &mut SigHashCache<&Transaction>,
+    ) -> Result<SigHash, InputSatisfactionError>;
+
+    /// Add a signature in order to eventually satisfy this input.
+    ///
+    /// Checks the signature according to the specified expected sighash type in the PSBT input.
+    ///
+    /// The BIP174 Signer role.
+    fn add_signature<C: secp256k1::Verification>(
+        &mut self,
+        input_index: usize,
+        pubkey: BitcoinPubKey,
+        signature: BitcoinSig,
+        secp: &secp256k1::Secp256k1<C>,
+    ) -> Result<Option<Vec<u8>>, InputSatisfactionError>;
+
+    /// Check and satisfy the scripts, create the witnesses.
+    ///
+    /// The BIP174 Input Finalizer role.
+    fn finalize(
+        &mut self,
+        ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>,
+    ) -> Result<(), Error>;
+
+    /// Check the transaction is valid (fully-signed) and can be finalized.
+    /// Slighty more efficient than calling [RevaultTransaction::finalize] on a clone as it gets
+    /// rid of the belt-and-suspenders checks.
+    fn is_finalizable(&self, ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>) -> bool;
+
+    /// Check if the transaction was already finalized.
+    fn is_finalized(&self) -> bool;
+
+    /// Check the transaction is valid
+    fn is_valid(&self, ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>) -> bool;
+
+    /// Verify all PSBT inputs against libbitcoinconsensus
+    fn verify_inputs(&self) -> Result<(), Error>;
+
+    /// Get the network-serialized (inner) transaction. You likely want to be sure
+    /// the transaction [RevaultTransaction.is_finalized] before serializing it.
+    ///
+    /// The BIP174 Transaction Extractor (without any check, which are done in
+    /// [RevaultTransaction.finalize]).
+    fn into_bitcoin_serialized(self) -> Vec<u8>;
+
+    /// Get the BIP174-serialized (inner) transaction.
+    fn as_psbt_serialized(&self) -> Vec<u8>;
+
+    /// Get the BIP174-serialized (inner) transaction encoded in base64.
+    fn as_psbt_string(&self) -> String;
+
+    /// Create a RevaultTransaction from a base64-encoded BIP174-serialized transaction.
+    fn from_psbt_str(psbt_str: &str) -> Result<Self, TransactionSerialisationError>;
+
+    fn fees(&self) -> u64;
+
+    /// Get the inner unsigned transaction id
+    fn txid(&self) -> Txid;
+
+    /// Get the inner unsigned transaction hash with witness data
+    fn wtxid(&self) -> Wtxid;
+
+    /// Get a reference to the inner transaction
+    fn tx(&self) -> &Transaction;
+
+    /// Extract the inner transaction of the inner PSBT. You likely want to be sure
+    /// the transaction [RevaultTransaction.is_finalized] before serializing it.
+    ///
+    /// The BIP174 Transaction Extractor (without any check, which are done in
+    /// [RevaultTransaction.finalize]).
+    fn into_tx(self) -> Transaction;
+}
+
+impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTransaction for T {
+    fn psbt(&self) -> &Psbt {
+        inner_mut::PrivateInnerMut::psbt(self)
+    }
+
+    fn signature_hash(
+        &self,
+        input_index: usize,
+        sighash_type: SigHashType,
     ) -> Result<SigHash, InputSatisfactionError> {
         let mut cache = SigHashCache::new(self.tx());
         self.signature_hash_cached(input_index, sighash_type, &mut cache)
     }
 
-    /// Cached version of [RevaultTransaction::signature_hash]
     fn signature_hash_cached(
         &self,
         input_index: usize,
@@ -134,11 +235,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         }
     }
 
-    /// Add a signature in order to eventually satisfy this input.
-    ///
-    /// Checks the signature according to the specified expected sighash type in the PSBT input.
-    ///
-    /// The BIP174 Signer role.
     fn add_signature<C: secp256k1::Verification>(
         &mut self,
         input_index: usize,
@@ -216,9 +312,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
         Ok(psbtin.partial_sigs.insert(pubkey, rawsig))
     }
 
-    /// Check and satisfy the scripts, create the witnesses.
-    ///
-    /// The BIP174 Input Finalizer role.
     fn finalize(
         &mut self,
         ctx: &secp256k1::Secp256k1<impl secp256k1::Verification>,
@@ -312,9 +405,6 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             .expect("We only create valid PSBT, serialization cannot fail");
         buff
     }
-
-    /// Create a RevaultTransaction from a BIP174-serialized transaction.
-    fn from_psbt_serialized(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError>;
 
     /// Get the BIP174-serialized (inner) transaction encoded in base64.
     fn as_psbt_string(&self) -> String {

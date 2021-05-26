@@ -11,13 +11,14 @@ use std::collections::HashSet;
 /// RevaultTransaction for it.
 macro_rules! impl_revault_transaction {
     ( $transaction_name:ident, $doc_comment:meta ) => {
+        use crate::transactions::inner_mut;
         use std::{fmt, str};
 
         #[$doc_comment]
         #[derive(Debug, Clone, PartialEq)]
         pub struct $transaction_name(Psbt);
 
-        impl RevaultTransaction for $transaction_name {
+        impl inner_mut::PrivateInnerMut for $transaction_name {
             fn psbt(&self) -> &Psbt {
                 &self.0
             }
