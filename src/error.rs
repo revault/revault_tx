@@ -106,8 +106,6 @@ impl error::Error for TransactionCreationError {}
 pub enum InputSatisfactionError {
     /// Index is out of bounds of the inputs list
     OutOfBounds,
-    /// Provided signature's sighash byte is different from PSBT input's type
-    UnexpectedSighashType,
     /// This input was already finalized and its witness map wiped
     AlreadyFinalized,
     /// The PSBT input does not comport a witness_script field
@@ -124,9 +122,6 @@ impl fmt::Display for InputSatisfactionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::OutOfBounds => write!(f, "Index out of bounds of inputs list"),
-            Self::UnexpectedSighashType => {
-                write!(f, "Signature's sighash byte differs from PSBT input's type")
-            }
             Self::AlreadyFinalized => write!(f, "Input was already finalized"),
             Self::MissingWitnessScript => write!(
                 f,

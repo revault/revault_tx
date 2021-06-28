@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use revault_tx::{
     miniscript::bitcoin::{
         secp256k1::{Signature, SECP256K1},
-        PublicKey, SigHashType,
+        SigHashType,
     },
     transactions::{RevaultTransaction, SpendTransaction},
 };
@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
         // We can compute its size and fees without crashing
         tx.max_feerate();
 
-        let dummykey = PublicKey::from_str(
+        let dummykey = secp256k1::PublicKey::from_str(
             "02ca06be8e497d578314c77ca735aa5fcca76d8a5b04019b7a80ff0baaf4a6cf46",
         )
         .unwrap();
@@ -36,7 +36,7 @@ fuzz_target!(|data: &[u8]| {
                 tx.signature_hash(i, SigHashType::All)
                     .expect("Must be in bound as it was parsed!");
                 assert!(tx
-                    .add_signature(i, dummykey, (dummy_sig, SigHashType::All), &SECP256K1)
+                    .add_signature(i, dummykey, dummy_sig, &SECP256K1)
                     .unwrap_err()
                     .to_string()
                     .contains("Invalid signature"));
@@ -48,7 +48,7 @@ fuzz_target!(|data: &[u8]| {
                     .to_string()
                     .contains("Missing witness_script"));
                 assert!(tx
-                    .add_signature(i, dummykey, (dummy_sig, SigHashType::All), &SECP256K1)
+                    .add_signature(i, dummykey, dummy_sig, &SECP256K1)
                     .unwrap_err()
                     .to_string()
                     .contains("already finalized"));

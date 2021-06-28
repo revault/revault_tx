@@ -6,19 +6,14 @@
 //! for data structure as well as roles distribution.
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
-use miniscript::{
-    bitcoin::{
-        consensus::encode::Encodable,
-        hash_types,
-        hashes::Hash,
-        secp256k1,
-        util::{
-            bip143::SigHashCache, bip32::ChildNumber, psbt::PartiallySignedTransaction as Psbt,
-        },
-        Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash,
-        SigHashType, Transaction, Txid, Wtxid,
-    },
-    BitcoinSig,
+use miniscript::bitcoin::{
+    consensus::encode::Encodable,
+    hash_types,
+    hashes::Hash,
+    secp256k1,
+    util::{bip143::SigHashCache, bip32::ChildNumber, psbt::PartiallySignedTransaction as Psbt},
+    Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
+    Transaction, Txid, Wtxid,
 };
 
 use std::fmt;
@@ -142,8 +137,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     fn add_signature<C: secp256k1::Verification>(
         &mut self,
         input_index: usize,
-        pubkey: BitcoinPubKey,
-        signature: BitcoinSig,
+        pubkey: secp256k1::PublicKey,
+        signature: secp256k1::Signature,
         secp: &secp256k1::Secp256k1<C>,
     ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
         let psbtin = self
@@ -190,23 +185,20 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
             "We never create Psbt input with legacy txos."
         );
 
-        // -- If a sighash type is provided, the signer must check that the sighash is acceptable.
-        // If unacceptable, they must fail.
-        let (sig, sighash_type) = signature;
         let expected_sighash_type = psbtin
             .sighash_type
             .expect("We always set the SigHashType in the constructor.");
-        if sighash_type != expected_sighash_type {
-            return Err(InputSatisfactionError::UnexpectedSighashType);
-        }
-
         let sighash = self.signature_hash(input_index, expected_sighash_type)?;
         let sighash = secp256k1::Message::from_slice(&sighash).expect("sighash is 32 a bytes hash");
-        secp.verify(&sighash, &sig, &pubkey.key)
-            .map_err(|_| InputSatisfactionError::InvalidSignature(sig, pubkey.key, sighash))?;
+        secp.verify(&sighash, &signature, &pubkey)
+            .map_err(|_| InputSatisfactionError::InvalidSignature(signature, pubkey, sighash))?;
 
-        let mut rawsig = sig.serialize_der().to_vec();
-        rawsig.push(sighash_type.as_u32() as u8);
+        let pubkey = BitcoinPubKey {
+            compressed: true,
+            key: pubkey,
+        };
+        let mut rawsig = signature.serialize_der().to_vec();
+        rawsig.push(expected_sighash_type.as_u32() as u8);
 
         let psbtin = self
             .psbt_mut()
@@ -630,7 +622,6 @@ mod tests {
         tx_sighash: &SigHash,
         xprivs: &Vec<bip32::ExtendedPrivKey>,
         child_number: Option<bip32::ChildNumber>,
-        sighash_type: SigHashType,
     ) -> Result<(), Error> {
         // Can we agree that rustfmt does some nasty formatting now ??
         let derivation_path = bip32::DerivationPath::from(if let Some(cn) = child_number {
@@ -640,16 +631,13 @@ mod tests {
         });
 
         for xpriv in xprivs {
-            let sig = (
-                secp.sign(
-                    &secp256k1::Message::from_slice(&tx_sighash).unwrap(),
-                    &xpriv
-                        .derive_priv(&secp, &derivation_path)
-                        .unwrap()
-                        .private_key
-                        .key,
-                ),
-                sighash_type,
+            let sig = secp.sign(
+                &secp256k1::Message::from_slice(&tx_sighash).unwrap(),
+                &xpriv
+                    .derive_priv(&secp, &derivation_path)
+                    .unwrap()
+                    .private_key
+                    .key,
             );
 
             let xpub = DescriptorPublicKey::XPub(DescriptorXKey {
@@ -670,7 +658,7 @@ mod tests {
             .derive_public_key(secp)
             .unwrap();
 
-            tx.add_signature(input_index, key, sig, secp)?;
+            tx.add_signature(input_index, key.key, sig, secp)?;
         }
 
         Ok(())
@@ -862,19 +850,18 @@ mod tests {
             .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
             .expect("Input exists");
         // We can't force it to accept a SIGHASH_ALL signature:
+        let emer_sighash_all = emergency_tx_no_feebump
+            .signature_hash(0, SigHashType::All)
+            .unwrap();
         let err = satisfy_transaction_input(
             &secp,
             &mut emergency_tx_no_feebump,
             0,
-            &emergency_tx_sighash_vault,
+            &emer_sighash_all,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::All,
         );
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            Error::InputSatisfaction(InputSatisfactionError::UnexpectedSighashType).to_string()
-        );
+        assert!(err.unwrap_err().to_string().contains("Invalid signature"),);
         // Now, that's the right SIGHASH
         satisfy_transaction_input(
             &secp,
@@ -883,7 +870,6 @@ mod tests {
             &emergency_tx_sighash_vault,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::AllPlusAnyoneCanPay,
         )?;
         // Without feebump it finalizes just fine
         emergency_tx_no_feebump.finalize(&secp)?;
@@ -913,7 +899,6 @@ mod tests {
             &emergency_tx_sighash_vault,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::AllPlusAnyoneCanPay,
         )?;
         satisfy_transaction_input(
             &secp,
@@ -922,7 +907,6 @@ mod tests {
             &emergency_tx_sighash_feebump,
             &vec![feebump_xpriv],
             None,
-            SigHashType::All,
         )?;
         emergency_tx.finalize(&secp)?;
 
@@ -966,7 +950,6 @@ mod tests {
             &cancel_tx_without_feebump_sighash,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::AllPlusAnyoneCanPay,
         )?;
         cancel_tx_without_feebump.finalize(&secp).unwrap();
         // We can reuse the ANYONE_ALL sighash for the one with the feebump input
@@ -999,7 +982,6 @@ mod tests {
             &cancel_tx_without_feebump_sighash,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::AllPlusAnyoneCanPay,
         )?;
         satisfy_transaction_input(
             &secp,
@@ -1008,7 +990,6 @@ mod tests {
             &cancel_tx_sighash_feebump,
             &vec![feebump_xpriv],
             None, // No derivation path for the feebump key
-            SigHashType::All,
         )?;
         cancel_tx.finalize(&secp)?;
 
@@ -1035,7 +1016,6 @@ mod tests {
             &unemergency_tx_sighash,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::AllPlusAnyoneCanPay,
         )?;
         unemergency_tx_no_feebump.finalize(&secp)?;
 
@@ -1059,7 +1039,6 @@ mod tests {
             &unemergency_tx_sighash,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::AllPlusAnyoneCanPay,
         )?;
         // We don't have satisfied the feebump input yet!
         // Note that we clone because Miniscript's finalize() will wipe the PSBT input..
@@ -1083,7 +1062,6 @@ mod tests {
             &unemer_tx_sighash_feebump,
             &vec![feebump_xpriv],
             None,
-            SigHashType::All,
         )?;
         unemergency_tx.finalize(&secp)?;
 
@@ -1098,7 +1076,6 @@ mod tests {
             &unvault_tx_sighash,
             &stakeholders_priv,
             Some(child_number),
-            SigHashType::All,
         )?;
 
         unvault_tx.finalize(&secp)?;
@@ -1145,7 +1122,6 @@ mod tests {
                 .copied()
                 .collect::<Vec<bip32::ExtendedPrivKey>>(),
             Some(child_number),
-            SigHashType::All,
         )?;
         spend_tx.finalize(&secp)?;
 
@@ -1237,7 +1213,6 @@ mod tests {
                     .copied()
                     .collect::<Vec<bip32::ExtendedPrivKey>>(),
                 Some(child_number),
-                SigHashType::All,
             )?
         }
         spend_tx.finalize(&secp)?;

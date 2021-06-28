@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use revault_tx::{
     miniscript::bitcoin::{
         secp256k1::{Signature, SECP256K1},
-        PublicKey, SigHashType,
+        SigHashType,
     },
     transactions::{EmergencyTransaction, RevaultTransaction},
 };
@@ -19,7 +19,7 @@ fuzz_target!(|data: &[u8]| {
         // We can network serialize it (without witness data)
         tx.clone().into_bitcoin_serialized();
 
-        let dummykey = PublicKey::from_str(
+        let dummykey = secp256k1::PublicKey::from_str(
             "02ca06be8e497d578314c77ca735aa5fcca76d8a5b04019b7a80ff0baaf4a6cf46",
         )
         .unwrap();
@@ -38,12 +38,7 @@ fuzz_target!(|data: &[u8]| {
                 .expect("Must be in bound as it was parsed!");
             // We can add a signature
             assert!(tx
-                .add_signature(
-                    0,
-                    dummykey,
-                    (dummy_sig, SigHashType::AllPlusAnyoneCanPay),
-                    &SECP256K1
-                )
+                .add_signature(0, dummykey, dummy_sig, &SECP256K1)
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid signature"));
@@ -55,12 +50,7 @@ fuzz_target!(|data: &[u8]| {
                 .to_string()
                 .contains("Missing witness_script"));
             assert!(tx
-                .add_signature(
-                    unvault_in_index,
-                    dummykey,
-                    (dummy_sig, SigHashType::AllPlusAnyoneCanPay),
-                    &SECP256K1
-                )
+                .add_signature(unvault_in_index, dummykey, dummy_sig, &SECP256K1)
                 .unwrap_err()
                 .to_string()
                 .contains("already finalized"));
@@ -80,39 +70,24 @@ fuzz_target!(|data: &[u8]| {
                 })
                 .unwrap();
 
-            tx.add_signature(
-                fb_in_index,
-                dummykey,
-                (dummy_sig, SigHashType::AllPlusAnyoneCanPay),
-                &SECP256K1,
-            )
-            .expect_err("Invalid sighash");
+            tx.add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1)
+                .expect_err("Invalid signature"); // Invalid sighash
             if !tx.is_finalized() {
                 assert!(tx
-                    .add_signature(
-                        fb_in_index,
-                        dummykey,
-                        (dummy_sig, SigHashType::All),
-                        &SECP256K1
-                    )
+                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1)
                     .unwrap_err()
                     .to_string()
                     .contains("Invalid signature"));
             } else {
                 assert!(tx
-                    .add_signature(
-                        fb_in_index,
-                        dummykey,
-                        (dummy_sig, SigHashType::All),
-                        &SECP256K1
-                    )
+                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1)
                     .unwrap_err()
                     .to_string()
                     .contains("already finalized"));
             }
         } else {
             assert!(tx
-                .add_signature(1, dummykey, (dummy_sig, SigHashType::All), &SECP256K1)
+                .add_signature(1, dummykey, dummy_sig, &SECP256K1)
                 .unwrap_err()
                 .to_string()
                 .contains("out of bounds"));
