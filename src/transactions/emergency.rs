@@ -11,6 +11,7 @@ use crate::{
 
 use miniscript::bitcoin::{
     consensus::encode::Decodable,
+    secp256k1,
     util::psbt::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
@@ -150,5 +151,17 @@ impl EmergencyTransaction {
         utils::check_revocationtx_input(&input)?;
 
         Ok(EmergencyTransaction(psbt))
+    }
+
+    /// Add a signature for the input spending the Deposit transaction
+    pub fn add_emer_sig<C: secp256k1::Verification>(
+        &mut self,
+        pubkey: secp256k1::PublicKey,
+        signature: secp256k1::Signature,
+        secp: &secp256k1::Secp256k1<C>,
+    ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
+        let input_index = utils::p2wsh_input_index(&self.0)
+            .expect("We are always created with a (single) P2WSH input");
+        RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
     }
 }

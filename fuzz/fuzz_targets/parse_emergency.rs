@@ -36,9 +36,9 @@ fuzz_target!(|data: &[u8]| {
             // We can compute the sighash for the unvault input
             tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .expect("Must be in bound as it was parsed!");
-            // We can add a signature
+            // We can add a signature, it just is invalid
             assert!(tx
-                .add_signature(0, dummykey, dummy_sig, &SECP256K1)
+                .add_emer_sig(dummykey, dummy_sig, &SECP256K1)
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid signature"));
@@ -50,7 +50,7 @@ fuzz_target!(|data: &[u8]| {
                 .to_string()
                 .contains("Missing witness_script"));
             assert!(tx
-                .add_signature(unvault_in_index, dummykey, dummy_sig, &SECP256K1)
+                .add_emer_sig(dummykey, dummy_sig, &SECP256K1)
                 .unwrap_err()
                 .to_string()
                 .contains("already finalized"));

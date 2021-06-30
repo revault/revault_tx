@@ -38,8 +38,7 @@ fuzz_target!(|data: &[u8]| {
                 .expect("Must be in bound as it was parsed!");
             // We can add a signature
             assert!(tx
-                .add_signature(
-                    unvault_in_index,
+                .add_cancel_sig(
                     dummykey,
                     dummy_sig,
                     &SECP256K1
@@ -55,8 +54,7 @@ fuzz_target!(|data: &[u8]| {
                 .to_string()
                 .contains("Missing witness_script"));
             assert!(tx
-                .add_signature(
-                    unvault_in_index,
+                .add_cancel_sig(
                     dummykey,
                     dummy_sig,
                     &SECP256K1,

@@ -273,3 +273,13 @@ pub fn check_feebump_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
 
     Ok(())
 }
+
+/// Return the position of the first P2WSH input of a Psbt
+pub fn p2wsh_input_index(psbt: &Psbt) -> Option<usize> {
+    psbt.inputs.iter().position(|i| {
+        i.witness_utxo
+            .as_ref()
+            .map(|o| o.script_pubkey.is_v0_p2wsh())
+            == Some(true)
+    })
+}
