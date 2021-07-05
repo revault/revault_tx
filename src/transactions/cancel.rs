@@ -16,7 +16,7 @@ use miniscript::bitcoin::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    Amount, SigHashType, Transaction,
+    Amount, OutPoint, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -172,5 +172,20 @@ impl CancelTransaction {
         let input_index = utils::p2wsh_input_index(&self.0)
             .expect("We are always created with a (single) P2WSH input");
         RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
+    }
+
+    /// Get the Deposit txo to be referenced by the Unvault / Emergency txs
+    pub fn deposit_txin(&self, deposit_descriptor: &DerivedDepositDescriptor) -> DepositTxIn {
+        // We only have a single output, the deposit output.
+        let txo = &self.tx().output[0];
+        let prev_txout = DepositTxOut::new(Amount::from_sat(txo.value), deposit_descriptor);
+
+        DepositTxIn::new(
+            OutPoint {
+                txid: self.txid(),
+                vout: 0,
+            },
+            prev_txout,
+        )
     }
 }

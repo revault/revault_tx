@@ -16,7 +16,7 @@ use miniscript::bitcoin::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    Amount, SigHashType, Transaction,
+    Amount, OutPoint, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -163,5 +163,14 @@ impl EmergencyTransaction {
         let input_index = utils::p2wsh_input_index(&self.0)
             .expect("We are always created with a (single) P2WSH input");
         RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
+    }
+
+    /// Get the reference to the Emergency UTXO
+    pub fn emergency_outpoint(&self) -> OutPoint {
+        // We only ever have a single output, the emergency one.
+        OutPoint {
+            txid: self.txid(),
+            vout: 0,
+        }
     }
 }

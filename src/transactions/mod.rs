@@ -834,6 +834,13 @@ mod tests {
             EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)
                 .unwrap();
         assert_eq!(h_emer, emergency_tx_no_feebump);
+        assert_eq!(
+            emergency_tx_no_feebump.emergency_outpoint(),
+            OutPoint {
+                txid: emergency_tx_no_feebump.txid(),
+                vout: 0
+            }
+        );
 
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
@@ -888,6 +895,14 @@ mod tests {
             0,
         )
         .unwrap();
+        assert_eq!(
+            emergency_tx.emergency_outpoint(),
+            OutPoint {
+                txid: emergency_tx.txid(),
+                vout: 0
+            }
+        );
+
         let emergency_tx_sighash_feebump = emergency_tx
             .signature_hash(1, SigHashType::All)
             .expect("Input exists");
@@ -933,6 +948,15 @@ mod tests {
         let mut cancel_tx_without_feebump =
             CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0);
         assert_eq!(h_cancel, cancel_tx_without_feebump);
+        assert_eq!(
+            cancel_tx_without_feebump
+                .deposit_txin(&der_deposit_descriptor)
+                .outpoint(),
+            OutPoint {
+                txid: cancel_tx_without_feebump.txid(),
+                vout: 0
+            }
+        );
         // Keep track of the fees we computed..
         let value_no_feebump = cancel_tx_without_feebump.psbt().global.unsigned_tx.output[0].value;
         // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
@@ -966,6 +990,14 @@ mod tests {
             &der_deposit_descriptor,
             0,
         );
+        assert_eq!(
+            cancel_tx.deposit_txin(&der_deposit_descriptor).outpoint(),
+            OutPoint {
+                txid: cancel_tx.txid(),
+                vout: 0
+            }
+        );
+
         // It really is a belt-and-suspenders check as the sighash would differ too.
         assert_eq!(
             cancel_tx_without_feebump.psbt().global.unsigned_tx.output[0].value,
@@ -1001,6 +1033,14 @@ mod tests {
             0,
         );
         assert_eq!(h_unemer, unemergency_tx_no_feebump);
+        assert_eq!(
+            unemergency_tx_no_feebump.emergency_outpoint(),
+            OutPoint {
+                txid: unemergency_tx_no_feebump.txid(),
+                vout: 0
+            }
+        );
+
         // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
         assert_eq!(
             unemergency_tx_no_feebump.fees(),
@@ -1032,6 +1072,14 @@ mod tests {
             emergency_address,
             0,
         );
+        assert_eq!(
+            unemergency_tx.emergency_outpoint(),
+            OutPoint {
+                txid: unemergency_tx.txid(),
+                vout: 0
+            }
+        );
+
         satisfy_transaction_input(
             &secp,
             &mut unemergency_tx,
