@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use revault_tx::{
     miniscript::bitcoin::{
         secp256k1::{Signature, SECP256K1},
-        PublicKey, SigHashType,
+        SigHashType,
     },
     transactions::{RevaultTransaction, SpendTransaction},
 };
@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
         // We can compute its size and fees without crashing
         tx.max_feerate();
 
-        let dummykey = PublicKey::from_str(
+        let dummykey = secp256k1::PublicKey::from_str(
             "02ca06be8e497d578314c77ca735aa5fcca76d8a5b04019b7a80ff0baaf4a6cf46",
         )
         .unwrap();
@@ -30,27 +30,34 @@ fuzz_target!(|data: &[u8]| {
 
         // We can compute the sighash for all the unvault inputs and
         // add a signature if the tx is final
-        let input_count = tx.inner_tx().inputs.len();
+        let input_count = tx.psbt().inputs.len();
         for i in 0..input_count {
             if !tx.is_finalized() {
-                tx.signature_hash_internal_input(i, SigHashType::All)
+                tx.signature_hash(i, SigHashType::All)
                     .expect("Must be in bound as it was parsed!");
-                tx.add_signature(i, dummykey, (dummy_sig, SigHashType::All))
-                    .expect("This does not check the signature");
+                assert!(tx
+                    .add_signature(i, dummykey, dummy_sig, &SECP256K1)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid signature"));
             } else {
                 // But not if it's final
-                tx.signature_hash_internal_input(i, SigHashType::All)
-                    .expect_err("Already final");
-                tx.add_signature(i, dummykey, (dummy_sig, SigHashType::All))
-                    .expect_err("Already final");
+                assert!(tx
+                    .signature_hash(i, SigHashType::All)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Missing witness_script"));
+                assert!(tx
+                    .add_signature(i, dummykey, dummy_sig, &SECP256K1)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("already finalized"));
             }
             // And verify the input without crashing (will likely fail though)
-            #[allow(unused_must_use)]
-            tx.verify_input(i);
+            tx.verify_inputs().unwrap_or_else(|_| ());
         }
 
         // Same for the finalization
-        #[allow(unused_must_use)]
-        tx.finalize(&SECP256K1);
+        tx.finalize(&SECP256K1).unwrap_or_else(|_| ());
     }
 });

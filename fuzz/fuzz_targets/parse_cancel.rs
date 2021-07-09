@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use revault_tx::{
     miniscript::bitcoin::{
         secp256k1::{Signature, SECP256K1},
-        PublicKey, SigHashType,
+        SigHashType,
     },
     transactions::{CancelTransaction, RevaultTransaction},
 };
@@ -19,14 +19,14 @@ fuzz_target!(|data: &[u8]| {
         // We can network serialize it (without witness data)
         tx.clone().into_bitcoin_serialized();
 
-        let dummykey = PublicKey::from_str(
+        let dummykey = secp256k1::PublicKey::from_str(
             "02ca06be8e497d578314c77ca735aa5fcca76d8a5b04019b7a80ff0baaf4a6cf46",
         )
         .unwrap();
         let dummy_sig = Signature::from_str("3045022100e6ffa6cc76339944fa428bcd058a27d0e660d0554a418a79620d7e14cda4cbde022045ba1bcec9fbbdcb4b70328dc7efae7ee59ff496aa8139c81a10b898911b8b52").unwrap();
 
         let unvault_in_index = tx
-            .inner_tx()
+            .psbt()
             .inputs
             .iter()
             .position(|i| i.witness_utxo.as_ref().unwrap().script_pubkey.is_v0_p2wsh())
@@ -34,30 +34,39 @@ fuzz_target!(|data: &[u8]| {
 
         if !tx.is_finalized() {
             // We can compute the sighash for the unvault input
-            tx.signature_hash_internal_input(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
+            tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .expect("Must be in bound as it was parsed!");
             // We can add a signature
-            tx.add_signature(
-                unvault_in_index,
-                dummykey,
-                (dummy_sig, SigHashType::AllPlusAnyoneCanPay),
-            )
-            .expect("This does not check the signature");
+            assert!(tx
+                .add_cancel_sig(
+                    dummykey,
+                    dummy_sig,
+                    &SECP256K1
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid signature"));
         } else {
             // But not if it's final
-            tx.signature_hash_internal_input(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
-                .expect_err("Already final");
-            tx.add_signature(
-                unvault_in_index,
-                dummykey,
-                (dummy_sig, SigHashType::AllPlusAnyoneCanPay),
-            )
-            .expect_err("Already final");
+            assert!(tx
+                .signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
+                .unwrap_err()
+                .to_string()
+                .contains("Missing witness_script"));
+            assert!(tx
+                .add_cancel_sig(
+                    dummykey,
+                    dummy_sig,
+                    &SECP256K1,
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("already finalized"));
         }
 
-        if tx.inner_tx().global.unsigned_tx.input.len() > 1 {
+        if tx.tx().input.len() > 1 {
             let fb_in_index = tx
-                .inner_tx()
+                .psbt()
                 .inputs
                 .iter()
                 .position(|i| {
@@ -72,27 +81,45 @@ fuzz_target!(|data: &[u8]| {
             tx.add_signature(
                 fb_in_index,
                 dummykey,
-                (dummy_sig, SigHashType::AllPlusAnyoneCanPay),
+                dummy_sig,
+                &SECP256K1,
             )
-            .expect_err("Invalid sighash");
+            .expect_err("Invalid signature"); // Invalid sighash
             if !tx.is_finalized() {
-                tx.add_signature(fb_in_index, dummykey, (dummy_sig, SigHashType::All))
-                    .expect("This does not check the signature");
+                assert!(tx
+                    .add_signature(
+                        fb_in_index,
+                        dummykey,
+                        dummy_sig,
+                        &SECP256K1,
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid signature"));
             } else {
-                tx.add_signature(fb_in_index, dummykey, (dummy_sig, SigHashType::All))
-                    .expect_err("Already final");
+                assert!(tx
+                    .add_signature(
+                        fb_in_index,
+                        dummykey,
+                        dummy_sig,
+                        &SECP256K1,
+                    )
+                    .unwrap_err()
+                    .to_string()
+                    .contains("already finalized"));
             }
         } else {
-            tx.add_signature(1, dummykey, (dummy_sig, SigHashType::All))
-                .expect_err("Out of bounds");
+            assert!(tx
+                .add_signature(1, dummykey, dummy_sig, &SECP256K1)
+                .unwrap_err()
+                .to_string()
+                .contains("out of bounds"));
         }
 
         // And verify the input without crashing (will likely fail though)
-        #[allow(unused_must_use)]
-        tx.verify_input(0);
+        tx.verify_inputs().unwrap_or_else(|_| ());
 
         // Same for the finalization
-        #[allow(unused_must_use)]
-        tx.finalize(&SECP256K1);
+        tx.finalize(&SECP256K1).unwrap_or_else(|_| ());
     }
 });

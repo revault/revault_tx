@@ -6,6 +6,7 @@ use bitcoinconsensus::Error as LibConsensusError;
 use miniscript::{
     bitcoin::{
         consensus::encode::Error as EncodeError,
+        secp256k1,
         util::psbt::{Input as PsbtInput, Output as PsbtOutput},
     },
     policy::compiler::CompilerError,
@@ -105,25 +106,31 @@ impl error::Error for TransactionCreationError {}
 pub enum InputSatisfactionError {
     /// Index is out of bounds of the inputs list
     OutOfBounds,
-    /// Provided signature's sighash byte is different from PSBT input's type
-    UnexpectedSighashType,
     /// This input was already finalized and its witness map wiped
     AlreadyFinalized,
     /// The PSBT input does not comport a witness_script field
     MissingWitnessScript,
+    /// Trying to add an invalid signature
+    InvalidSignature(
+        secp256k1::Signature,
+        secp256k1::PublicKey,
+        secp256k1::Message,
+    ),
 }
 
 impl fmt::Display for InputSatisfactionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::OutOfBounds => write!(f, "Index out of bounds of inputs list"),
-            Self::UnexpectedSighashType => {
-                write!(f, "Signature's sighash byte differ from PSBT input's type")
-            }
             Self::AlreadyFinalized => write!(f, "Input was already finalized"),
             Self::MissingWitnessScript => write!(
                 f,
                 "Missing witness_script field in PSBT input. Wrong sighash function used?"
+            ),
+            Self::InvalidSignature(sig, pk, hash) => write!(
+                f,
+                "Invalid signature '{:x?}' for key '{:x?}' and sighash '{:x?}'",
+                &sig, &pk, &hash
             ),
         }
     }
@@ -139,6 +146,7 @@ pub enum PsbtValidationError {
     OutputCountMismatch(usize, usize),
     InvalidInputCount(usize),
     InvalidOutputCount(usize),
+    DuplicatedInput,
     MissingRevocationInput,
     MissingFeeBumpingInput,
     MissingWitnessUtxo(PsbtInput),
@@ -171,6 +179,7 @@ impl fmt::Display for PsbtValidationError {
             ),
             Self::InvalidInputCount(c) => write!(f, "Invalid input count: '{}'", c),
             Self::InvalidOutputCount(c) => write!(f, "Invalid output count: '{}'", c),
+            Self::DuplicatedInput => write!(f, "Transaction contains duplicated inputs"),
             Self::MissingRevocationInput => {
                 write!(f, "Missing P2WSH input for revocation transaction")
             }
