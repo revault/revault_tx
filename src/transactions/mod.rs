@@ -1129,7 +1129,7 @@ mod tests {
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor); // Off-by-one csv
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor);
         let dummy_txo = TxOut::default();
         let cpfp_value = SpendTransaction::cpfp_txout(
             vec![spend_unvault_txin.clone()],
@@ -1145,9 +1145,6 @@ mod tests {
             value: spend_unvault_txin.txout().txout().value - cpfp_value - fees,
             ..TxOut::default()
         };
-
-        // "This time for sure !"
-        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor); // Right csv
         let mut spend_tx = SpendTransaction::new(
             vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(spend_txo.clone())],
