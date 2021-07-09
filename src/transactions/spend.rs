@@ -8,12 +8,13 @@ use crate::{
 
 use miniscript::{
     bitcoin::{
+        blockdata::constants::max_money,
         consensus::encode::Decodable,
         util::psbt::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        Amount, SigHashType, Transaction,
+        Amount, Network, SigHashType, Transaction,
     },
     DescriptorTrait,
 };
@@ -61,8 +62,9 @@ impl SpendTransaction {
             .map(|txin| txin.txout().max_sat_weight())
             .sum::<usize>();
 
-        // Record the value spent
+        // Record the value spent and sent
         let mut value_in: u64 = 0;
+        let mut value_out: u64 = 0;
 
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
         txos.push(cpfp_txo.txout().clone());
@@ -71,9 +73,12 @@ impl SpendTransaction {
                 SpendTxOut::Destination(ref txo) => txo.clone(),
                 SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
             };
+
             if txo.value < txo.script_pubkey.dust_value() {
                 return Err(TransactionCreationError::Dust);
             }
+
+            value_out += txo.value;
             txos.push(txo);
         }
         let psbtouts = txos.iter().map(|_| PsbtOut::default()).collect();
@@ -120,7 +125,9 @@ impl SpendTransaction {
             return Err(TransactionCreationError::TooLarge);
         }
 
-        let value_out: u64 = unsigned_tx.output.iter().map(|o| o.value).sum();
+        if value_out > max_money(Network::Bitcoin) {
+            return Err(TransactionCreationError::InsaneAmounts);
+        }
         let fees = value_in
             .checked_sub(value_out)
             .ok_or(TransactionCreationError::NegativeFees)?;

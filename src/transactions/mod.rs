@@ -534,6 +534,7 @@ mod tests {
 
     use miniscript::{
         bitcoin::{
+            blockdata::constants::COIN_VALUE,
             secp256k1,
             util::{bip143::SigHashCache, bip32},
             Address, Amount, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
@@ -687,17 +688,17 @@ mod tests {
             csv
         ));
         // 1 BTC
-        derive_transactions(8, 3, csv, 100_000_000, &secp).expect(&format!(
+        derive_transactions(8, 3, csv, COIN_VALUE, &secp).expect(&format!(
             "Tx chain with 8 stakeholders, 3 managers, {} csv, 1_000_000 deposit",
             csv
         ));
         // 100 000 BTC
-        derive_transactions(8, 3, csv, 100_000_000_000_000, &secp).expect(&format!(
+        derive_transactions(8, 3, csv, 100_000 * COIN_VALUE, &secp).expect(&format!(
             "Tx chain with 8 stakeholders, 3 managers, {} csv, 100_000_000_000_000 deposit",
             csv
         ));
         // 100 BTC
-        derive_transactions(38, 5, csv, 100_000_000_000, &secp).expect(&format!(
+        derive_transactions(38, 5, csv, 100 * COIN_VALUE, &secp).expect(&format!(
             "Tx chain with 38 stakeholders, 5 manager, {} csv, 100_000_000_000 deposit",
             csv
         ));
@@ -1171,14 +1172,18 @@ mod tests {
         spend_tx.finalize(&secp)?;
 
         // We can't create a dust output with the Spend
-        let dust_txo = TxOut { value: 470, ..TxOut::default() };
+        let dust_txo = TxOut {
+            value: 470,
+            ..TxOut::default()
+        };
         SpendTransaction::new(
             vec![spend_unvault_txin],
             vec![SpendTxOut::Destination(dust_txo.clone())],
             &der_cpfp_descriptor,
             0,
             true,
-        ).expect_err("Creating a dust output");
+        )
+        .expect_err("Creating a dust output");
 
         // The spend transaction can also batch multiple unvault txos
         let spend_unvault_txins = vec![
