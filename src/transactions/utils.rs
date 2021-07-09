@@ -1,8 +1,9 @@
 use crate::{error::*, transactions::TX_VERSION};
 
 use miniscript::bitcoin::{
+    blockdata::constants::max_money,
     util::psbt::{Input as PsbtIn, PartiallySignedTransaction as Psbt},
-    OutPoint, SigHashType,
+    Network, OutPoint, SigHashType,
 };
 
 use std::collections::HashSet;
@@ -157,14 +158,16 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
         }
 
         // We'll then check it doesn't create more than it spends
+        let spent_utxo_value = input
+            .witness_utxo
+            .as_ref()
+            .expect("None checked above")
+            .value;
+        if spent_utxo_value > max_money(Network::Bitcoin) {
+            return Err(PsbtValidationError::InsaneAmounts);
+        }
         value_in = value_in
-            .checked_add(
-                input
-                    .witness_utxo
-                    .as_ref()
-                    .expect("None checked above")
-                    .value,
-            )
+            .checked_add(spent_utxo_value)
             .ok_or(PsbtValidationError::InsaneAmounts)?;
 
         // The previous output must either be P2WSH, in which case the witness script must
@@ -190,12 +193,19 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
 
     let mut value_out: u64 = 0;
     for o in inner_tx.output.iter() {
+        if o.value > max_money(Network::Bitcoin) {
+            return Err(PsbtValidationError::InsaneAmounts);
+        }
+
         value_out = value_out
             .checked_add(o.value)
             .ok_or(PsbtValidationError::InsaneAmounts)?;
     }
 
     if value_out > value_in {
+        return Err(PsbtValidationError::InsaneAmounts);
+    }
+    if value_in - value_out > max_money(Network::Bitcoin) {
         return Err(PsbtValidationError::InsaneAmounts);
     }
 
