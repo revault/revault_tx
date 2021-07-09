@@ -193,7 +193,7 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
 
     let mut value_out: u64 = 0;
     for o in inner_tx.output.iter() {
-        if o.value > max_money(Network::Bitcoin) {
+        if o.value > max_money(Network::Bitcoin) || o.value < o.script_pubkey.dust_value() {
             return Err(PsbtValidationError::InsaneAmounts);
         }
 

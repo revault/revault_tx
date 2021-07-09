@@ -1146,7 +1146,7 @@ mod tests {
             ..TxOut::default()
         };
         let mut spend_tx = SpendTransaction::new(
-            vec![spend_unvault_txin],
+            vec![spend_unvault_txin.clone()],
             vec![SpendTxOut::Destination(spend_txo.clone())],
             &der_cpfp_descriptor,
             0,
@@ -1169,6 +1169,16 @@ mod tests {
             Some(child_number),
         )?;
         spend_tx.finalize(&secp)?;
+
+        // We can't create a dust output with the Spend
+        let dust_txo = TxOut { value: 470, ..TxOut::default() };
+        SpendTransaction::new(
+            vec![spend_unvault_txin],
+            vec![SpendTxOut::Destination(dust_txo.clone())],
+            &der_cpfp_descriptor,
+            0,
+            true,
+        ).expect_err("Creating a dust output");
 
         // The spend transaction can also batch multiple unvault txos
         let spend_unvault_txins = vec![

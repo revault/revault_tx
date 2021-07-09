@@ -66,10 +66,16 @@ impl SpendTransaction {
 
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
         txos.push(cpfp_txo.txout().clone());
-        txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
-            SpendTxOut::Destination(ref txo) => txo.clone(),
-            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
-        }));
+        for spend_txout in spend_txouts {
+            let txo = match spend_txout {
+                SpendTxOut::Destination(ref txo) => txo.clone(),
+                SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
+            };
+            if txo.value < txo.script_pubkey.dust_value() {
+                return Err(TransactionCreationError::Dust);
+            }
+            txos.push(txo);
+        }
         let psbtouts = txos.iter().map(|_| PsbtOut::default()).collect();
 
         let psbt = Psbt {
