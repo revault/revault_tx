@@ -72,6 +72,8 @@ impl error::Error for TxoutCreationError {}
 /// Error when creating a Revault Bitcoin transaction
 #[derive(PartialEq, Eq, Debug)]
 pub enum TransactionCreationError {
+    /// Would send more than MAX_MONEY
+    InsaneAmounts,
     /// Fees would be higher than [INSANE_FEES] (not checked for revocation transactions)
     InsaneFees,
     /// Would spend or create a dust output
@@ -85,6 +87,9 @@ pub enum TransactionCreationError {
 impl fmt::Display for TransactionCreationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::InsaneAmounts => {
+                write!(f, "Sum of the outputs value amounts to more than MAX_MONEY")
+            }
             Self::InsaneFees => write!(f, "Fees larger than {} sats", INSANE_FEES),
             Self::Dust => write!(f, "Spending or creating a dust output"),
             Self::NegativeFees => write!(

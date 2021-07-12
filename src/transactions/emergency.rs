@@ -10,13 +10,14 @@ use crate::{
 };
 
 use miniscript::bitcoin::{
+    blockdata::constants::max_money,
     consensus::encode::Decodable,
     secp256k1,
     util::psbt::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    Amount, OutPoint, SigHashType, Transaction,
+    Amount, Network, OutPoint, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -116,6 +117,10 @@ impl EmergencyTransaction {
         let emer_value = deposit_value
             .checked_sub(fees)
             .ok_or(TransactionCreationError::Dust)?;
+        // The emer output is the single one
+        if emer_value > max_money(Network::Bitcoin) {
+            return Err(TransactionCreationError::InsaneAmounts);
+        }
         let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
         Ok(EmergencyTransaction(EmergencyTransaction::create_psbt(

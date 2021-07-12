@@ -10,13 +10,14 @@ use crate::{
 };
 
 use miniscript::bitcoin::{
+    blockdata::constants::max_money,
     consensus::encode::Decodable,
     secp256k1,
     util::psbt::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    Amount, OutPoint, SigHashType, Transaction,
+    Amount, Network, OutPoint, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -119,6 +120,10 @@ impl UnvaultEmergencyTransaction {
         let emer_value = deposit_value
             .checked_sub(fees)
             .expect("We would never create a dust unvault txo");
+        assert!(
+            emer_value < max_money(Network::Bitcoin),
+            "Checked in UnvaultTransaction constructor already"
+        );
         let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
         UnvaultEmergencyTransaction(UnvaultEmergencyTransaction::create_psbt(

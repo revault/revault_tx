@@ -10,13 +10,14 @@ use crate::{
 };
 
 use miniscript::bitcoin::{
+    blockdata::constants::max_money,
     consensus::encode::Decodable,
     secp256k1,
     util::psbt::{
         Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
         PartiallySignedTransaction as Psbt,
     },
-    Amount, OutPoint, SigHashType, Transaction,
+    Amount, Network, OutPoint, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -119,6 +120,10 @@ impl CancelTransaction {
         let revault_value = unvault_value
             .checked_sub(fees)
             .expect("We would not create a dust unvault txo");
+        assert!(
+            revault_value < max_money(Network::Bitcoin),
+            "Checked in UnvaultTransaction constructor already"
+        );
         let deposit_txo = DepositTxOut::new(Amount::from_sat(revault_value), deposit_descriptor);
 
         CancelTransaction(CancelTransaction::create_psbt(

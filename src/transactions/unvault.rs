@@ -11,13 +11,14 @@ use crate::{
 
 use miniscript::{
     bitcoin::{
+        blockdata::constants::max_money,
         consensus::encode::Decodable,
         secp256k1,
         util::psbt::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        Amount, OutPoint, SigHashType, Transaction,
+        Amount, Network, OutPoint, SigHashType, Transaction,
     },
     DescriptorTrait,
 };
@@ -115,6 +116,9 @@ impl UnvaultTransaction {
             return Err(TransactionCreationError::Dust);
         }
         let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE; // Arithmetic checked above
+        if unvault_value > max_money(Network::Bitcoin) {
+            return Err(TransactionCreationError::InsaneAmounts);
+        }
 
         let unvault_txout = UnvaultTxOut::new(Amount::from_sat(unvault_value), unvault_descriptor);
         let cpfp_txout = CpfpTxOut::new(Amount::from_sat(UNVAULT_CPFP_VALUE), cpfp_descriptor);
