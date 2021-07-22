@@ -1018,7 +1018,7 @@ mod tests {
             ]
         );
 
-        let cpfp_desc = DepositDescriptor::new(vec![first_manager.clone(), second_manager.clone()])
+        let cpfp_desc = CpfpDescriptor::new(vec![first_manager.clone(), second_manager.clone()])
             .expect("Valid wildcard xpubs");
         assert_eq!(
             cpfp_desc.xpubs(),
