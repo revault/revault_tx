@@ -26,6 +26,7 @@ use miniscript::{
 };
 
 use std::{
+    collections::BTreeMap,
     fmt::{self, Display},
     str::FromStr,
 };
@@ -57,6 +58,25 @@ macro_rules! impl_descriptor_newtype {
 
             pub fn into_inner(self) -> Descriptor<DescriptorPublicKey> {
                 self.0
+            }
+
+            pub fn derive_keys<C: secp256k1::Verification>(
+                &self,
+                child_number: bip32::ChildNumber,
+                secp: &secp256k1::Secp256k1<C>,
+            ) -> BTreeMap<PublicKey, bip32::KeySource> {
+                let xpubs = self.xpubs();
+                let mut source = BTreeMap::new();
+                for xpub in xpubs {
+                    let xpub = xpub.derive(child_number.into());
+                    let keysource = (xpub.master_fingerprint(), xpub.full_derivation_path());
+                    source.insert(
+                        xpub.derive_public_key(secp)
+                            .expect("All pubkeys are derived, no wildcard."),
+                        keysource,
+                    );
+                }
+                source
             }
 
             /// Derives all wildcard keys in the descriptor using the supplied `child_number`

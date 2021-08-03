@@ -5,9 +5,9 @@
 
 use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, UnvaultTxOut};
 
-use miniscript::bitcoin::{OutPoint, TxIn};
+use miniscript::bitcoin::{util::bip32::KeySource, OutPoint, PublicKey, TxIn};
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 /// The default sequence used by bitcoind to signal for RBF: 0xff_ff_ff_fd
 pub const RBF_SEQUENCE: u32 = u32::MAX - 2;
@@ -22,6 +22,8 @@ pub trait RevaultTxIn<T>: fmt::Debug + Clone + PartialEq {
     fn into_txout(self) -> T;
     /// Get an actual Bitcoin TxIn out of the OutPoint and the nSequence
     fn unsigned_txin(&self) -> TxIn;
+    /// Get keys derivation info
+    fn keys_derivation(&self) -> BTreeMap<PublicKey, KeySource>;
 }
 
 macro_rules! implem_revault_txin {
@@ -32,11 +34,16 @@ macro_rules! implem_revault_txin {
             outpoint: OutPoint,
             prev_txout: $txout_struct_name,
             sequence: u32,
+            keys_derivation: BTreeMap<PublicKey, KeySource>,
         }
 
         impl RevaultTxIn<$txout_struct_name> for $struct_name {
             fn outpoint(&self) -> OutPoint {
                 self.outpoint
+            }
+
+            fn keys_derivation(&self) -> BTreeMap<PublicKey, KeySource> {
+                self.keys_derivation.clone()
             }
 
             fn txout(&self) -> &$txout_struct_name {
@@ -66,11 +73,16 @@ implem_revault_txin!(
 );
 impl DepositTxIn {
     /// Instanciate a TxIn referencing a deposit txout which signals for RBF.
-    pub fn new(outpoint: OutPoint, prev_txout: DepositTxOut) -> DepositTxIn {
+    pub fn new(
+        outpoint: OutPoint,
+        prev_txout: DepositTxOut,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> DepositTxIn {
         DepositTxIn {
             outpoint,
             prev_txout,
             sequence: RBF_SEQUENCE,
+            keys_derivation,
         }
     }
 }
@@ -86,11 +98,17 @@ implem_revault_txin!(
 impl UnvaultTxIn {
     /// Instanciate a TxIn referencing an unvault txout. We need the sequence to be explicitly
     /// specified for this one, as it may spend a CSV-encumbered path.
-    pub fn new(outpoint: OutPoint, prev_txout: UnvaultTxOut, sequence: u32) -> UnvaultTxIn {
+    pub fn new(
+        outpoint: OutPoint,
+        prev_txout: UnvaultTxOut,
+        sequence: u32,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> UnvaultTxIn {
         UnvaultTxIn {
             outpoint,
             prev_txout,
             sequence,
+            keys_derivation,
         }
     }
 }
@@ -105,11 +123,16 @@ implem_revault_txin!(
 );
 impl FeeBumpTxIn {
     /// Instanciate a txin referencing a feebump txout which signals for RBF.
-    pub fn new(outpoint: OutPoint, prev_txout: FeeBumpTxOut) -> FeeBumpTxIn {
+    pub fn new(
+        outpoint: OutPoint,
+        prev_txout: FeeBumpTxOut,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> FeeBumpTxIn {
         FeeBumpTxIn {
             outpoint,
             prev_txout,
             sequence: RBF_SEQUENCE,
+            keys_derivation,
         }
     }
 }
@@ -122,11 +145,16 @@ implem_revault_txin!(
 );
 impl CpfpTxIn {
     /// Instanciate a TxIn referencing a CPFP txout which signals for RBF.
-    pub fn new(outpoint: OutPoint, prev_txout: CpfpTxOut) -> CpfpTxIn {
+    pub fn new(
+        outpoint: OutPoint,
+        prev_txout: CpfpTxOut,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> CpfpTxIn {
         CpfpTxIn {
             outpoint,
             prev_txout,
             sequence: RBF_SEQUENCE,
+            keys_derivation,
         }
     }
 }

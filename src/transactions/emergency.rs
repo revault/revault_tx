@@ -51,6 +51,7 @@ impl EmergencyTransaction {
             txins.push(feebump_txin.unsigned_txin());
             psbtins.push(PsbtIn {
                 sighash_type: Some(SigHashType::All),
+                bip32_derivation: feebump_txin.keys_derivation(),
                 witness_utxo: Some(feebump_txin.into_txout().into_txout()),
                 ..PsbtIn::default()
             });

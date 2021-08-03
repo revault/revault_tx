@@ -13,11 +13,14 @@ use miniscript::bitcoin::{
     blockdata::constants::max_money,
     consensus::encode::Decodable,
     secp256k1,
-    util::psbt::{
-        Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
-        PartiallySignedTransaction as Psbt,
+    util::{
+        bip32::KeySource,
+        psbt::{
+            Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
+            PartiallySignedTransaction as Psbt,
+        },
     },
-    Amount, Network, OutPoint, SigHashType, Transaction,
+    Amount, Network, OutPoint, PublicKey, SigHashType, Transaction,
 };
 
 #[cfg(feature = "use-serde")]
@@ -44,6 +47,7 @@ impl CancelTransaction {
         let mut psbtins = vec![PsbtIn {
             witness_script: Some(unvault_txin.txout().witness_script().clone()),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
+            bip32_derivation: unvault_txin.keys_derivation(),
             witness_utxo: Some(unvault_txin.into_txout().into_txout()),
             ..PsbtIn::default()
         }];
@@ -180,7 +184,11 @@ impl CancelTransaction {
     }
 
     /// Get the Deposit txo to be referenced by the Unvault / Emergency txs
-    pub fn deposit_txin(&self, deposit_descriptor: &DerivedDepositDescriptor) -> DepositTxIn {
+    pub fn deposit_txin(
+        &self,
+        deposit_descriptor: &DerivedDepositDescriptor,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> DepositTxIn {
         // We only have a single output, the deposit output.
         let txo = &self.tx().output[0];
         let prev_txout = DepositTxOut::new(Amount::from_sat(txo.value), deposit_descriptor);
@@ -191,6 +199,7 @@ impl CancelTransaction {
                 vout: 0,
             },
             prev_txout,
+            keys_derivation,
         )
     }
 }

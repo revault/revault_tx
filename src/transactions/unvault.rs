@@ -14,11 +14,14 @@ use miniscript::{
         blockdata::constants::max_money,
         consensus::encode::Decodable,
         secp256k1,
-        util::psbt::{
-            Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
-            PartiallySignedTransaction as Psbt,
+        util::{
+            bip32::KeySource,
+            psbt::{
+                Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
+                PartiallySignedTransaction as Psbt,
+            },
         },
-        Amount, Network, OutPoint, SigHashType, Transaction,
+        Amount, Network, OutPoint, PublicKey, SigHashType, Transaction,
     },
     DescriptorTrait,
 };
@@ -59,6 +62,7 @@ impl UnvaultTransaction {
             inputs: vec![PsbtIn {
                 witness_script: Some(deposit_txin.txout().witness_script().clone()),
                 sighash_type: Some(SigHashType::All),
+                bip32_derivation: deposit_txin.keys_derivation(),
                 witness_utxo: Some(deposit_txin.into_txout().into_txout()),
                 ..PsbtIn::default()
             }],
@@ -134,6 +138,7 @@ impl UnvaultTransaction {
         &self,
         unvault_descriptor: &DerivedUnvaultDescriptor,
         sequence: u32,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
     ) -> UnvaultTxIn {
         let spk = unvault_descriptor.inner().script_pubkey();
         let index = self
@@ -155,24 +160,38 @@ impl UnvaultTransaction {
             },
             prev_txout,
             sequence,
+            keys_derivation,
         )
     }
 
     /// Get the Unvault txo to be referenced in a spending transaction
-    pub fn spend_unvault_txin(&self, unvault_descriptor: &DerivedUnvaultDescriptor) -> UnvaultTxIn {
-        self.unvault_txin(unvault_descriptor, unvault_descriptor.csv_value())
+    pub fn spend_unvault_txin(
+        &self,
+        unvault_descriptor: &DerivedUnvaultDescriptor,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> UnvaultTxIn {
+        self.unvault_txin(
+            unvault_descriptor,
+            unvault_descriptor.csv_value(),
+            keys_derivation,
+        )
     }
 
     /// Get the Unvault txo to be referenced in a revocation transaction
     pub fn revault_unvault_txin(
         &self,
         unvault_descriptor: &DerivedUnvaultDescriptor,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
     ) -> UnvaultTxIn {
-        self.unvault_txin(unvault_descriptor, RBF_SEQUENCE)
+        self.unvault_txin(unvault_descriptor, RBF_SEQUENCE, keys_derivation)
     }
 
     /// Get the CPFP txo to be referenced in a spending transaction
-    pub fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> CpfpTxIn {
+    pub fn cpfp_txin(
+        &self,
+        cpfp_descriptor: &DerivedCpfpDescriptor,
+        keys_derivation: BTreeMap<PublicKey, KeySource>,
+    ) -> CpfpTxIn {
         let spk = cpfp_descriptor.inner().script_pubkey();
         let index = self
             .psbt()
@@ -192,6 +211,7 @@ impl UnvaultTransaction {
                 vout: index.try_into().expect("There are two outputs"),
             },
             prev_txout,
+            keys_derivation,
         )
     }
 

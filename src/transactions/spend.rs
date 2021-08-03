@@ -102,11 +102,13 @@ impl SpendTransaction {
             inputs: unvault_inputs
                 .into_iter()
                 .map(|input| {
+                    let bip32_derivation = input.keys_derivation();
                     let prev_txout = input.into_txout();
                     value_in += prev_txout.txout().value;
                     PsbtIn {
                         witness_script: Some(prev_txout.witness_script().clone()),
                         sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
+                        bip32_derivation,
                         witness_utxo: Some(prev_txout.into_txout()),
                         ..PsbtIn::default()
                     }

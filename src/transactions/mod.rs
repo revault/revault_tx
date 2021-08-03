@@ -11,12 +11,16 @@ use miniscript::bitcoin::{
     hash_types,
     hashes::Hash,
     secp256k1,
-    util::{bip143::SigHashCache, bip32::ChildNumber, psbt::PartiallySignedTransaction as Psbt},
+    util::{
+        bip143::SigHashCache,
+        bip32::{ChildNumber, KeySource},
+        psbt::PartiallySignedTransaction as Psbt,
+    },
     Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
     Transaction, Txid, Wtxid,
 };
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 #[macro_use]
 mod utils;
@@ -377,6 +381,7 @@ impl DepositTransaction {
         &self,
         outpoint: OutPoint,
         deposit_descriptor: &DerivedDepositDescriptor,
+        keys_derivation: BTreeMap<BitcoinPubKey, KeySource>,
     ) -> DepositTxIn {
         assert!(outpoint.txid == self.0.txid());
         let txo = self.0.output[outpoint.vout as usize].clone();
@@ -384,6 +389,7 @@ impl DepositTransaction {
         DepositTxIn::new(
             outpoint,
             DepositTxOut::new(Amount::from_sat(txo.value), deposit_descriptor),
+            keys_derivation,
         )
     }
 }
@@ -414,6 +420,7 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
     let deposit_txin = DepositTxIn::new(
         deposit_outpoint,
         DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
+        deposit_descriptor.derive_keys(derivation_index, secp),
     );
     let unvault_tx = UnvaultTransaction::new(
         deposit_txin,
@@ -423,7 +430,10 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
     )?;
 
     let cancel_tx = CancelTransaction::new(
-        unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
+        unvault_tx.revault_unvault_txin(
+            &der_unvault_descriptor,
+            unvault_descriptor.derive_keys(derivation_index, secp),
+        ),
         None,
         &der_deposit_descriptor,
         lock_time,
@@ -468,12 +478,16 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     let deposit_txin = DepositTxIn::new(
         deposit_outpoint,
         DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
+        deposit_descriptor.derive_keys(derivation_index, secp),
     );
     let emergency_tx =
         EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
 
     let der_unvault_descriptor = unvault_descriptor.derive(derivation_index, secp);
-    let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
+    let unvault_txin = unvault_tx.revault_unvault_txin(
+        &der_unvault_descriptor,
+        unvault_descriptor.derive_keys(derivation_index, secp),
+    );
     let unvault_emergency_tx =
         UnvaultEmergencyTransaction::new(unvault_txin, None, emer_address, lock_time);
 
@@ -501,13 +515,23 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
             let der_unvault_desc = unvault_descriptor.derive(deriv_index, secp);
             let der_cpfp_desc = cpfp_descriptor.derive(deriv_index, secp);
 
-            let txin = DepositTxIn::new(outpoint, DepositTxOut::new(amount, &der_deposit_desc));
+            let txin = DepositTxIn::new(
+                outpoint,
+                DepositTxOut::new(amount, &der_deposit_desc),
+                deposit_descriptor.derive_keys(deriv_index, secp),
+            );
             if deriv_index > max_deriv_index {
                 max_deriv_index = deriv_index;
             }
 
-            UnvaultTransaction::new(txin, &der_unvault_desc, &der_cpfp_desc, lock_time)
-                .map(|unvault_tx| unvault_tx.spend_unvault_txin(&der_unvault_desc))
+            UnvaultTransaction::new(txin, &der_unvault_desc, &der_cpfp_desc, lock_time).map(
+                |unvault_tx| {
+                    unvault_tx.spend_unvault_txin(
+                        &der_unvault_desc,
+                        unvault_descriptor.derive_keys(deriv_index, secp),
+                    )
+                },
+            )
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;
 
@@ -779,7 +803,11 @@ mod tests {
             txid: deposit_tx.0.txid(),
             vout: 0,
         };
-        let deposit_txin = DepositTxIn::new(deposit_outpoint, deposit_txo.clone());
+        let deposit_txin = DepositTxIn::new(
+            deposit_outpoint,
+            deposit_txo.clone(),
+            deposit_descriptor.derive_keys(child_number, secp),
+        );
 
         // Test that the transaction helper(s) derive the same transactions as we do
         let (h_unvault, h_cancel, h_emer, h_unemer) = transaction_chain(
@@ -888,6 +916,7 @@ mod tests {
                 vout: 0,
             },
             feebump_txo.clone(),
+            std::collections::BTreeMap::new(),
         );
         let mut emergency_tx = EmergencyTransaction::new(
             deposit_txin.clone(),
@@ -943,7 +972,10 @@ mod tests {
         assert_eq!(unvault_tx.fees(), (548 + deposit_txin_sat_cost as u64) * 6);
 
         // Create and sign the cancel transaction
-        let rev_unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
+        let rev_unvault_txin = unvault_tx.revault_unvault_txin(
+            &der_unvault_descriptor,
+            unvault_descriptor.derive_keys(child_number, secp),
+        );
         assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
         // We can create it entirely without the feebump input
         let mut cancel_tx_without_feebump =
@@ -951,7 +983,10 @@ mod tests {
         assert_eq!(h_cancel, cancel_tx_without_feebump);
         assert_eq!(
             cancel_tx_without_feebump
-                .deposit_txin(&der_deposit_descriptor)
+                .deposit_txin(
+                    &der_deposit_descriptor,
+                    deposit_descriptor.derive_keys(child_number, secp)
+                )
                 .outpoint(),
             OutPoint {
                 txid: cancel_tx_without_feebump.txid(),
@@ -984,6 +1019,7 @@ mod tests {
                 vout: 0,
             },
             feebump_txo.clone(),
+            std::collections::BTreeMap::new(),
         );
         let mut cancel_tx = CancelTransaction::new(
             rev_unvault_txin.clone(),
@@ -992,7 +1028,12 @@ mod tests {
             0,
         );
         assert_eq!(
-            cancel_tx.deposit_txin(&der_deposit_descriptor).outpoint(),
+            cancel_tx
+                .deposit_txin(
+                    &der_deposit_descriptor,
+                    deposit_descriptor.derive_keys(child_number, secp)
+                )
+                .outpoint(),
             OutPoint {
                 txid: cancel_tx.txid(),
                 vout: 0
@@ -1066,6 +1107,7 @@ mod tests {
                 vout: 0,
             },
             feebump_txo.clone(),
+            std::collections::BTreeMap::new(),
         );
         let mut unemergency_tx = UnvaultEmergencyTransaction::new(
             rev_unvault_txin.clone(),
@@ -1130,7 +1172,10 @@ mod tests {
         unvault_tx.finalize(&secp)?;
 
         // Create and sign a spend transaction
-        let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor);
+        let spend_unvault_txin = unvault_tx.spend_unvault_txin(
+            &der_unvault_descriptor,
+            unvault_descriptor.derive_keys(child_number, secp),
+        );
         let dummy_txo = TxOut::default();
         let cpfp_value = SpendTransaction::cpfp_txout(
             vec![spend_unvault_txin.clone()],
@@ -1194,6 +1239,7 @@ mod tests {
                 .unwrap(),
                 UnvaultTxOut::new(Amount::from_sat(deposit_value), &der_unvault_descriptor),
                 csv,
+                std::collections::BTreeMap::new(),
             ),
             UnvaultTxIn::new(
                 OutPoint::from_str(
@@ -1202,6 +1248,7 @@ mod tests {
                 .unwrap(),
                 UnvaultTxOut::new(Amount::from_sat(deposit_value * 4), &der_unvault_descriptor),
                 csv,
+                std::collections::BTreeMap::new(),
             ),
             UnvaultTxIn::new(
                 OutPoint::from_str(
@@ -1210,6 +1257,7 @@ mod tests {
                 .unwrap(),
                 UnvaultTxOut::new(Amount::from_sat(deposit_value / 2), &der_unvault_descriptor),
                 csv,
+                std::collections::BTreeMap::new(),
             ),
             UnvaultTxIn::new(
                 OutPoint::from_str(
@@ -1221,6 +1269,7 @@ mod tests {
                     &der_unvault_descriptor,
                 ),
                 csv,
+                std::collections::BTreeMap::new(),
             ),
         ];
         let n_txins = spend_unvault_txins.len();
