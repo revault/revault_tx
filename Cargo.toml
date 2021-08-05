@@ -15,7 +15,7 @@ use-serde = ["serde"]
 
 [dependencies]
 bitcoinconsensus = "0.19.0-2"
-miniscript = { version = "5.1.0", features = ["compiler"] }
+miniscript = { version = "6.0.0", features = ["compiler"] }
 base64 = { version = "0.13" }
 
 serde = { version = "1.0", optional = true }
