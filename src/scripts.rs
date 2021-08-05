@@ -21,7 +21,7 @@ use miniscript::{
         iter::PkPkh,
         limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     },
-    policy::concrete::Policy,
+    policy::{concrete::Policy, semantic::Policy as SemanticPolicy, Liftable},
     Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, TranslatePk2,
 };
 
@@ -361,6 +361,59 @@ fn unvault_descriptor_csv<Pk: MiniscriptKey>(desc: &Descriptor<Pk>) -> u32 {
     }
 }
 
+fn unvault_descriptor_managers_threshold<Pk: MiniscriptKey>(
+    desc: &Descriptor<Pk>,
+    manager_keys: Vec<Pk>,
+) -> usize {
+    let ms = match &desc {
+        Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+            WshInner::Ms(ms) => ms,
+            WshInner::SortedMulti(_) => unreachable!("Unvault descriptor is not a sorted multi"),
+        },
+        _ => unreachable!("Unvault descriptor is always a P2WSH"),
+    };
+
+    let policy = ms.lift().unwrap();
+
+    rec_unvault_descriptor_managers_threshold(
+        &policy,
+        &manager_keys
+            .into_iter()
+            .map(|k| k.to_pubkeyhash())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn rec_unvault_descriptor_managers_threshold<Pk: MiniscriptKey>(
+    policy: &SemanticPolicy<Pk>,
+    manager_keys: &[Pk::Hash],
+) -> usize {
+    // Looks for the manager threshold: we recursively explore the policy tree, returning the threshold
+    // if we find it, 0 otherwise. We sum our results at each step and tada!
+    // Note that we would return the wrong result if, for some reason, we had two different
+    // branches with all the manager keys. But we know the structure of the unvault_descriptor
+    // and we know for sure we would find the managers in only one branch, so all good!
+    match policy {
+        // Alright, a threshold. Is this the manager branch?
+        SemanticPolicy::Threshold(n, v) => {
+            if v.iter().all(|p| match p {
+                SemanticPolicy::KeyHash(k) => manager_keys.contains(k),
+                _ => false,
+            }) {
+                // We found the managers! Returning their threshold
+                return *n;
+            }
+
+            // Alright, not all of our policies are KeyHash, we have to dig deeper...
+            v.iter()
+                .map(|p| rec_unvault_descriptor_managers_threshold(p, manager_keys))
+                .sum()
+        }
+        // Not a Threshold here, we'll just return 0
+        _ => 0,
+    }
+}
+
 impl UnvaultDescriptor {
     /// Get the miniscript descriptors for Unvault outputs.
     ///
@@ -463,6 +516,10 @@ impl UnvaultDescriptor {
             })
             .collect()
     }
+
+    pub fn managers_threshold(&self, stakeholder_keys: Vec<DescriptorPublicKey>) -> usize {
+        unvault_descriptor_managers_threshold(&self.0, stakeholder_keys)
+    }
 }
 
 impl Display for UnvaultDescriptor {
@@ -558,6 +615,10 @@ impl DerivedUnvaultDescriptor {
     /// Get the relative locktime in blocks contained in the Unvault descriptor
     pub fn csv_value(&self) -> u32 {
         unvault_descriptor_csv(&self.0)
+    }
+
+    pub fn managers_threshold(&self, stakeholder_keys: Vec<PublicKey>) -> usize {
+        unvault_descriptor_managers_threshold(&self.0, stakeholder_keys)
     }
 }
 
@@ -1259,5 +1320,35 @@ mod tests {
             "\"bc1qnz0msqjqaw59zex2aw00rm565yg0rlpc5h3dvtps38w60ggw0seqwgjaa6\"",
         )
         .expect("P2WSH (mainnet)");
+    }
+
+    #[test]
+    fn test_unvault_descriptor_managers_threshold() {
+        let secp = secp256k1::Secp256k1::signing_only();
+        let mut rng = fastrand::Rng::new();
+
+        let stakes = vec![
+            get_random_pubkey(&mut rng, &secp),
+            get_random_pubkey(&mut rng, &secp),
+        ];
+        let mans = vec![
+            get_random_pubkey(&mut rng, &secp),
+            get_random_pubkey(&mut rng, &secp),
+            get_random_pubkey(&mut rng, &secp),
+            get_random_pubkey(&mut rng, &secp),
+        ];
+        let cpfp = vec![
+            get_random_pubkey(&mut rng, &secp),
+            get_random_pubkey(&mut rng, &secp),
+        ];
+
+        for i in 1..mans.len() {
+            assert_eq!(
+                UnvaultDescriptor::new(stakes.clone(), mans.clone(), i, cpfp.clone(), 6)
+                    .unwrap()
+                    .managers_threshold(mans.clone()),
+                i
+            );
+        }
     }
 }
