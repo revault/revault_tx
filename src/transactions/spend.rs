@@ -74,7 +74,7 @@ impl SpendTransaction {
                 SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
             };
 
-            if txo.value < txo.script_pubkey.dust_value() {
+            if txo.value < txo.script_pubkey.dust_value().as_sat() {
                 return Err(TransactionCreationError::Dust);
             }
 

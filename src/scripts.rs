@@ -21,7 +21,7 @@ use miniscript::{
         iter::PkPkh,
         limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     },
-    policy::concrete::Policy,
+    policy::{concrete::Policy, semantic::Policy as SemanticPolicy, Liftable},
     Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, TranslatePk2,
 };
 
@@ -361,6 +361,61 @@ fn unvault_descriptor_csv<Pk: MiniscriptKey>(desc: &Descriptor<Pk>) -> u32 {
     }
 }
 
+fn unvault_descriptor_managers_threshold<Pk: MiniscriptKey>(
+    desc: &Descriptor<Pk>,
+) -> Option<usize> {
+    let ms = match &desc {
+        Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+            WshInner::Ms(ms) => ms,
+            WshInner::SortedMulti(_) => unreachable!("Unvault descriptor is not a sorted multi"),
+        },
+        _ => unreachable!("Unvault descriptor is always a P2WSH"),
+    };
+
+    let policy = ms
+        .lift()
+        .expect("Lifting can't fail on a Miniscript")
+        .normalized();
+
+    // The Unvault descriptor is always of the form 'or(mans_branch, stks_branch)'
+    match policy {
+        SemanticPolicy::Threshold(1, ref subs) => {
+            assert_eq!(subs.len(), 2);
+
+            // The 'mans_branch' can be identified as the one containing the CSV. It is always an
+            // 'and()' of CSV + Cosigning Servers + Managers (the latter being potentially a thresh)
+            for sub in subs {
+                match sub {
+                    SemanticPolicy::Threshold(k, ref subs)
+                        if k == &subs.len()
+                            && subs
+                                .iter()
+                                .find(|sub| matches!(sub, SemanticPolicy::Older(..)))
+                                .is_some() =>
+                    {
+                        // Now, the mans are either a Threshold or directly pks (in the case the
+                        // thresh is an 'and()', pks are flattened in the upper 'and()').
+                        if let Some(thresh) = subs.iter().find_map(|sub| match sub {
+                            SemanticPolicy::Threshold(k, _) => Some(*k),
+                            _ => None,
+                        }) {
+                            return Some(thresh);
+                        }
+                        return None;
+                    }
+                    _ => continue,
+                }
+            }
+
+            unreachable!(
+                "Given an Unvault descriptor which doesn't contain a second-to-top \
+                         branch with a CSV"
+            );
+        }
+        _ => unreachable!("Given an Unvault descriptor that doesn't contain a 'or()' at the root"),
+    }
+}
+
 impl UnvaultDescriptor {
     /// Get the miniscript descriptors for Unvault outputs.
     ///
@@ -463,6 +518,12 @@ impl UnvaultDescriptor {
             })
             .collect()
     }
+
+    /// Get the minimum number of managers required to sign along with the timelock
+    /// and the (optional) Cosigning Servers
+    pub fn managers_threshold(&self) -> Option<usize> {
+        unvault_descriptor_managers_threshold(&self.0)
+    }
 }
 
 impl Display for UnvaultDescriptor {
@@ -558,6 +619,12 @@ impl DerivedUnvaultDescriptor {
     /// Get the relative locktime in blocks contained in the Unvault descriptor
     pub fn csv_value(&self) -> u32 {
         unvault_descriptor_csv(&self.0)
+    }
+
+    /// Get the minimum number of managers required to sign along with the timelock
+    /// and the (optional) Cosigning Servers
+    pub fn managers_threshold(&self) -> Option<usize> {
+        unvault_descriptor_managers_threshold(&self.0)
     }
 }
 
@@ -1100,7 +1167,7 @@ mod tests {
             )
             .expect(&format!(
                 "Unvault descriptors creation error with ({}, {})",
-                n_managers, n_stakeholders
+                n_managers, n_stakeholders,
             ));
             DepositDescriptor::new(
                 managers
@@ -1259,5 +1326,118 @@ mod tests {
             "\"bc1qnz0msqjqaw59zex2aw00rm565yg0rlpc5h3dvtps38w60ggw0seqwgjaa6\"",
         )
         .expect("P2WSH (mainnet)");
+    }
+
+    #[test]
+    fn unvault_desc_managers_threshold() {
+        let secp = secp256k1::Secp256k1::new();
+        let mut rng = fastrand::Rng::new();
+
+        // Small setups, with derived descriptors
+        let n_stks = 4;
+        let stakes: Vec<DescriptorPublicKey> = (0..n_stks)
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect();
+        let cosigs: Vec<DescriptorPublicKey> = (0..n_stks)
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect();
+
+        for n_mans in 1..10 {
+            let mans: Vec<DescriptorPublicKey> = (0..n_mans)
+                .map(|_| get_random_pubkey(&mut rng, &secp))
+                .collect();
+
+            for t in 1..n_mans - 1 {
+                assert_eq!(
+                    UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
+                        .unwrap()
+                        .derive(bip32::ChildNumber::from(345678), &secp)
+                        .managers_threshold()
+                        .unwrap(),
+                    t
+                );
+            }
+            assert!(UnvaultDescriptor::new(
+                stakes.clone(),
+                mans.clone(),
+                n_mans,
+                cosigs.clone(),
+                6
+            )
+            .unwrap()
+            .derive(bip32::ChildNumber::from(345678), &secp)
+            .managers_threshold()
+            .is_none(),);
+        }
+
+        // Large setups
+        let n_stks = 10;
+        let stakes: Vec<DescriptorPublicKey> = (0..n_stks)
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect();
+        let cosigs: Vec<DescriptorPublicKey> = (0..n_stks)
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect();
+
+        for n_mans in (1..20).step_by(2) {
+            let mans: Vec<DescriptorPublicKey> = (0..n_mans)
+                .map(|_| get_random_pubkey(&mut rng, &secp))
+                .collect();
+
+            for t in (1..n_mans - 1).step_by(2) {
+                assert_eq!(
+                    UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
+                        .unwrap()
+                        .managers_threshold()
+                        .unwrap(),
+                    t
+                );
+            }
+            assert!(UnvaultDescriptor::new(
+                stakes.clone(),
+                mans.clone(),
+                n_mans,
+                cosigs.clone(),
+                6
+            )
+            .unwrap()
+            .managers_threshold()
+            .is_none(),);
+        }
+
+        // Awkward setups
+        let n_stks = 22;
+        let stakes: Vec<DescriptorPublicKey> = (0..n_stks)
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect();
+        let cosigs: Vec<DescriptorPublicKey> = (0..n_stks)
+            .map(|_| get_random_pubkey(&mut rng, &secp))
+            .collect();
+
+        for n_mans in 1..10 {
+            let mans: Vec<DescriptorPublicKey> = (0..n_mans)
+                .map(|_| get_random_pubkey(&mut rng, &secp))
+                .collect();
+
+            for t in 1..n_mans - 1 {
+                assert_eq!(
+                    UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
+                        .unwrap()
+                        .managers_threshold()
+                        .unwrap(),
+                    t
+                );
+            }
+            assert!(UnvaultDescriptor::new(
+                stakes.clone(),
+                mans.clone(),
+                n_mans,
+                cosigs.clone(),
+                6
+            )
+            .unwrap()
+            .managers_threshold()
+            .is_none(),);
+        }
     }
 }
