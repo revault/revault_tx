@@ -33,12 +33,6 @@ fuzz_target!(|data: &[u8]| {
             .unwrap();
 
         if !tx.is_finalized() {
-            assert!(tx
-                .add_emer_sig(dummykey, dummy_sig, &SECP256K1,)
-                .unwrap_err()
-                .to_string()
-                .contains("sighash byte differs"));
-
             // We can compute the sighash for the unvault input
             tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .expect("Must be in bound as it was parsed!");
@@ -77,11 +71,6 @@ fuzz_target!(|data: &[u8]| {
                 .unwrap();
 
             if !tx.is_finalized() {
-                assert!(tx
-                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("sighash byte differs"));
                 assert!(tx
                     .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
                     .unwrap_err()
