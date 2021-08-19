@@ -1367,20 +1367,20 @@ mod tests {
             2018,
         )
         .expect("Valid, with xpubs");
-        assert_eq!(
-            unvault_desc.xpubs().sort(),
-            vec![
-                first_stakeholder.clone(),
-                second_stakeholder.clone(),
-                third_stakeholder.clone(),
-                first_manager.clone(),
-                second_manager.clone(),
-                first_cosig.clone(),
-                second_cosig.clone(),
-                third_cosig.clone(),
-            ]
-            .sort()
-        );
+        let mut xpubs = unvault_desc.xpubs();
+        xpubs.sort();
+        let mut expected_xpubs = vec![
+            first_stakeholder.clone(),
+            second_stakeholder.clone(),
+            third_stakeholder.clone(),
+            first_manager.clone(),
+            second_manager.clone(),
+            first_cosig.clone(),
+            second_cosig.clone(),
+            third_cosig.clone(),
+        ];
+        expected_xpubs.sort();
+        assert_eq!(xpubs, expected_xpubs);
 
         // Now do the same with derived descriptors
         let deriv_index: bip32::ChildNumber = 420121.into();
