@@ -1347,7 +1347,7 @@ mod tests {
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect();
 
-            for t in 1..n_mans - 1 {
+            for t in (1..n_mans - 1).step_by(2) {
                 assert_eq!(
                     UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
                         .unwrap()
@@ -1379,12 +1379,12 @@ mod tests {
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect();
 
-        for n_mans in (1..20).step_by(2) {
+        for n_mans in (1..20).step_by(3) {
             let mans: Vec<DescriptorPublicKey> = (0..n_mans)
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect();
 
-            for t in (1..n_mans - 1).step_by(2) {
+            for t in (1..n_mans - 1).step_by(4) {
                 assert_eq!(
                     UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
                         .unwrap()
@@ -1414,12 +1414,12 @@ mod tests {
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect();
 
-        for n_mans in 1..10 {
+        for n_mans in (1..10).step_by(2) {
             let mans: Vec<DescriptorPublicKey> = (0..n_mans)
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect();
 
-            for t in 1..n_mans - 1 {
+            for t in (1..n_mans - 1).step_by(3) {
                 assert_eq!(
                     UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
                         .unwrap()
