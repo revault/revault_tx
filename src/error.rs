@@ -21,6 +21,10 @@ pub enum ScriptCreationError {
     BadParameters,
     /// At least one of the keys was not derivable
     NonWildcardKeys,
+    /// No xpub were present in a generalist descriptor
+    NoXpub,
+    /// Invalid derived public key, must always be of the form '[fingerprint/index]<66 hex chars>'
+    DerivedKeyParsing,
     /// Miniscript policy compilation error
     PolicyCompilation(CompilerError),
     /// Miniscript general error, currently only for sanity checks in descriptor
@@ -35,6 +39,8 @@ impl fmt::Display for ScriptCreationError {
             Self::PolicyCompilation(e) => write!(f, "Policy compilation error: '{}'", e),
             Self::MiniscriptError(e) => write!(f, "Miniscript error: '{}'", e),
             Self::NonWildcardKeys => write!(f, "Not all xpubs were wildcard"),
+            Self::NoXpub => write!(f, "No xpub present in generalist descriptor"),
+            Self::DerivedKeyParsing => write!(f, "Invalid derived public key, must always be of the form '[fingerprint/index]<66 hex chars>'"),
         }
     }
 }
