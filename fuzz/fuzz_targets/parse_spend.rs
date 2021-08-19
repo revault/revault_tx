@@ -33,6 +33,7 @@ fuzz_target!(|data: &[u8]| {
         let input_count = tx.psbt().inputs.len();
         for i in 0..input_count {
             if !tx.is_finalized() {
+                assert!(!tx.psbt().inputs[i].bip32_derivation.is_empty());
                 tx.signature_hash(i, SigHashType::All)
                     .expect("Must be in bound as it was parsed!");
                 assert!(tx

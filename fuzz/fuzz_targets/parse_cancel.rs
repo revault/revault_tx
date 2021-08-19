@@ -33,16 +33,18 @@ fuzz_target!(|data: &[u8]| {
             .unwrap();
 
         if !tx.is_finalized() {
+            // Derivation paths must always be set
+            assert!(!tx.psbt().inputs[unvault_in_index]
+                .bip32_derivation
+                .is_empty());
+
             // We can compute the sighash for the unvault input
             tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .expect("Must be in bound as it was parsed!");
+
             // We can add a signature
             assert!(tx
-                .add_cancel_sig(
-                    dummykey,
-                    dummy_sig,
-                    &SECP256K1
-                )
+                .add_cancel_sig(dummykey, dummy_sig, &SECP256K1)
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid signature"));
@@ -54,11 +56,7 @@ fuzz_target!(|data: &[u8]| {
                 .to_string()
                 .contains("Missing witness_script"));
             assert!(tx
-                .add_cancel_sig(
-                    dummykey,
-                    dummy_sig,
-                    &SECP256K1,
-                )
+                .add_cancel_sig(dummykey, dummy_sig, &SECP256K1,)
                 .unwrap_err()
                 .to_string()
                 .contains("already finalized"));
@@ -78,32 +76,17 @@ fuzz_target!(|data: &[u8]| {
                 })
                 .unwrap();
 
-            tx.add_signature(
-                fb_in_index,
-                dummykey,
-                dummy_sig,
-                &SECP256K1,
-            )
-            .expect_err("Invalid signature"); // Invalid sighash
+            tx.add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1)
+                .expect_err("Invalid signature"); // Invalid sighash
             if !tx.is_finalized() {
                 assert!(tx
-                    .add_signature(
-                        fb_in_index,
-                        dummykey,
-                        dummy_sig,
-                        &SECP256K1,
-                    )
+                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
                     .unwrap_err()
                     .to_string()
                     .contains("Invalid signature"));
             } else {
                 assert!(tx
-                    .add_signature(
-                        fb_in_index,
-                        dummykey,
-                        dummy_sig,
-                        &SECP256K1,
-                    )
+                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
                     .unwrap_err()
                     .to_string()
                     .contains("already finalized"));

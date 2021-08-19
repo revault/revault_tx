@@ -26,9 +26,13 @@ fuzz_target!(|data: &[u8]| {
         let dummy_sig = Signature::from_str("3045022100e6ffa6cc76339944fa428bcd058a27d0e660d0554a418a79620d7e14cda4cbde022045ba1bcec9fbbdcb4b70328dc7efae7ee59ff496aa8139c81a10b898911b8b52").unwrap();
 
         if !tx.is_finalized() {
+            // Derivation paths must always be set
+            assert!(!tx.psbt().inputs[0].bip32_derivation.is_empty());
+
             // We can compute the sighash for the first unvault input
             tx.signature_hash(0, SigHashType::All)
                 .expect("Must be in bound as it was parsed!");
+
             // And add a signature
             assert!(tx
                 .add_sig(dummykey, dummy_sig, &SECP256K1)

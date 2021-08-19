@@ -33,9 +33,15 @@ fuzz_target!(|data: &[u8]| {
             .unwrap();
 
         if !tx.is_finalized() {
+            // Derivation paths must always be set
+            assert!(!tx.psbt().inputs[unvault_in_index]
+                .bip32_derivation
+                .is_empty());
+
             // We can compute the sighash for the unvault input
             tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .expect("Must be in bound as it was parsed!");
+
             // We can add a signature
             assert!(tx
                 .add_emer_sig(dummykey, dummy_sig, &SECP256K1,)

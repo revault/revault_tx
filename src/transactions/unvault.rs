@@ -217,6 +217,11 @@ impl UnvaultTransaction {
             if input.sighash_type != Some(SigHashType::All) {
                 return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
             }
+
+            if input.bip32_derivation.is_empty() {
+                return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
+            }
+
             if let Some(ref ws) = input.witness_script {
                 if ws.to_v0_p2wsh()
                     != input

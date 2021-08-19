@@ -25,7 +25,7 @@ fuzz_target!(|data: &[u8]| {
         .unwrap();
         let dummy_sig = Signature::from_str("3045022100e6ffa6cc76339944fa428bcd058a27d0e660d0554a418a79620d7e14cda4cbde022045ba1bcec9fbbdcb4b70328dc7efae7ee59ff496aa8139c81a10b898911b8b52").unwrap();
 
-        let unvault_in_index = tx
+        let deposit_in_index = tx
             .psbt()
             .inputs
             .iter()
@@ -33,9 +33,15 @@ fuzz_target!(|data: &[u8]| {
             .unwrap();
 
         if !tx.is_finalized() {
+            // Derivation paths must always be set
+            assert!(!tx.psbt().inputs[deposit_in_index]
+                .bip32_derivation
+                .is_empty());
+
             // We can compute the sighash for the unvault input
-            tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
+            tx.signature_hash(deposit_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .expect("Must be in bound as it was parsed!");
+
             // We can add a signature, it just is invalid
             assert!(tx
                 .add_emer_sig(dummykey, dummy_sig, &SECP256K1)
@@ -45,7 +51,7 @@ fuzz_target!(|data: &[u8]| {
         } else {
             // But not if it's final
             assert!(tx
-                .signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)
+                .signature_hash(deposit_in_index, SigHashType::AllPlusAnyoneCanPay)
                 .unwrap_err()
                 .to_string()
                 .contains("Missing witness_script"));
