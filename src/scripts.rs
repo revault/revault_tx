@@ -441,6 +441,27 @@ impl DerivedDepositDescriptor {
 
         Ok(DerivedDepositDescriptor(deposit_desc!(stakeholders)))
     }
+
+    /// Get all the keys and key source used in this derived Deposit descriptor
+    pub fn keys(&self) -> Vec<DerivedPublicKey> {
+        let ms = match self.0 {
+            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                WshInner::Ms(ms) => ms,
+                WshInner::SortedMulti(_) => {
+                    unreachable!("Deposit descriptor is not a sorted multi")
+                }
+            },
+            _ => unreachable!("Deposit descriptor is always a P2WSH"),
+        };
+
+        // For DerivedPublicKey, Pk::Hash == Self.
+        ms.iter_pk_pkh()
+            .map(|pkpkh| match pkpkh {
+                PkPkh::PlainPubkey(pk) => pk,
+                PkPkh::HashedPubkey(pkh) => pkh,
+            })
+            .collect()
+    }
 }
 
 impl Display for DerivedDepositDescriptor {
@@ -745,6 +766,27 @@ impl DerivedUnvaultDescriptor {
     pub fn managers_threshold(&self) -> Option<usize> {
         unvault_descriptor_managers_threshold(&self.0)
     }
+
+    /// Get all the keys and key source used in this derived Unvault descriptor
+    pub fn keys(&self) -> Vec<DerivedPublicKey> {
+        let ms = match self.0 {
+            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                WshInner::Ms(ms) => ms,
+                WshInner::SortedMulti(_) => {
+                    unreachable!("Unvault descriptor is not a sorted multi")
+                }
+            },
+            _ => unreachable!("Unvault descriptor is always a P2WSH"),
+        };
+
+        // For DerivedPublicKey, Pk::Hash == Self.
+        ms.iter_pk_pkh()
+            .map(|pkpkh| match pkpkh {
+                PkPkh::PlainPubkey(pk) => pk,
+                PkPkh::HashedPubkey(pkh) => pkh,
+            })
+            .collect()
+    }
 }
 
 impl Display for DerivedUnvaultDescriptor {
@@ -882,6 +924,27 @@ impl DerivedCpfpDescriptor {
         managers: Vec<DerivedPublicKey>,
     ) -> Result<DerivedCpfpDescriptor, ScriptCreationError> {
         Ok(DerivedCpfpDescriptor(cpfp_descriptor!(managers)))
+    }
+
+    /// Get all the keys and key source used in this derived CPFP descriptor
+    pub fn keys(&self) -> Vec<DerivedPublicKey> {
+        let ms = match self.0 {
+            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                WshInner::Ms(ms) => ms,
+                WshInner::SortedMulti(_) => {
+                    unreachable!("CPFP descriptor is not a sorted multi")
+                }
+            },
+            _ => unreachable!("CPFP descriptor is always a P2WSH"),
+        };
+
+        // For DerivedPublicKey, Pk::Hash == Self.
+        ms.iter_pk_pkh()
+            .map(|pkpkh| match pkpkh {
+                PkPkh::PlainPubkey(pk) => pk,
+                PkPkh::HashedPubkey(pkh) => pkh,
+            })
+            .collect()
     }
 }
 
@@ -1245,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xpubs_from_descriptor() {
+    fn test_keys_from_descriptor() {
         let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
         let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
         let third_stakeholder = DescriptorPublicKey::from_str("xpub6Br1DUfrzxTVGo1sanuKDCUmSxDfLRrxLQBqpMqygkQLkQWodoyvvGtUV8Rp3r6d6BNYvedBSU8c7whhn2U8haRVxsWwuQiZ9LoFp7jXPQA/*").unwrap();
@@ -1307,17 +1370,82 @@ mod tests {
         assert_eq!(
             unvault_desc.xpubs().sort(),
             vec![
-                first_stakeholder,
-                second_stakeholder,
-                third_stakeholder,
-                first_manager,
-                second_manager,
-                first_cosig,
-                second_cosig,
-                third_cosig
+                first_stakeholder.clone(),
+                second_stakeholder.clone(),
+                third_stakeholder.clone(),
+                first_manager.clone(),
+                second_manager.clone(),
+                first_cosig.clone(),
+                second_cosig.clone(),
+                third_cosig.clone(),
             ]
             .sort()
         );
+
+        // Now do the same with derived descriptors
+        let deriv_index: bip32::ChildNumber = 420121.into();
+        let secp = secp256k1::Secp256k1::verification_only();
+
+        fn xpub_to_key<C: secp256k1::Verification>(
+            secp: &secp256k1::Secp256k1<C>,
+            xpub: DescriptorPublicKey,
+            index: bip32::ChildNumber,
+        ) -> DerivedPublicKey {
+            let xpub = match xpub {
+                DescriptorPublicKey::XPub(xpub) => xpub.xkey,
+                _ => unreachable!(),
+            };
+            DerivedPublicKey {
+                key: xpub.derive_pub(secp, &[index]).unwrap().public_key,
+                origin: (xpub.fingerprint(), index),
+            }
+        }
+
+        let der_deposit_desc = deposit_desc.derive(deriv_index, &secp);
+        assert_eq!(
+            der_deposit_desc.keys(),
+            vec![
+                xpub_to_key(&secp, first_stakeholder.clone(), deriv_index),
+                xpub_to_key(&secp, second_stakeholder.clone(), deriv_index),
+                xpub_to_key(&secp, third_stakeholder.clone(), deriv_index),
+            ]
+        );
+
+        let der_cpfp_desc = cpfp_desc.derive(deriv_index, &secp);
+        assert_eq!(
+            der_cpfp_desc.keys(),
+            vec![
+                xpub_to_key(&secp, first_manager.clone(), deriv_index),
+                xpub_to_key(&secp, second_manager.clone(), deriv_index),
+            ]
+        );
+
+        let der_unvault_desc = unvault_desc.derive(deriv_index, &secp);
+        let mut keys = der_unvault_desc.keys();
+        keys.sort();
+
+        let mut expected_keys = vec![
+            xpub_to_key(&secp, first_stakeholder, deriv_index),
+            xpub_to_key(&secp, second_stakeholder, deriv_index),
+            xpub_to_key(&secp, third_stakeholder, deriv_index),
+            xpub_to_key(&secp, first_manager.clone(), deriv_index),
+            xpub_to_key(&secp, second_manager.clone(), deriv_index),
+            DerivedPublicKey::from_str(
+                "[00000000/0]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+            )
+            .unwrap(),
+            DerivedPublicKey::from_str(
+                "[00000000/0]02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c",
+            )
+            .unwrap(),
+            DerivedPublicKey::from_str(
+                "[00000000/0]0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf",
+            )
+            .unwrap(),
+        ];
+        expected_keys.sort();
+
+        assert_eq!(keys, expected_keys);
     }
 
     #[test]
