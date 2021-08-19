@@ -11,11 +11,14 @@ use crate::{
 };
 
 use miniscript::{
-    bitcoin::{Amount, Script, TxOut},
+    bitcoin::{util::bip32, Amount, PublicKey, Script, TxOut},
     DescriptorTrait,
 };
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
+
+/// Map of a raw public key to the xpub used to derive it and its derivation path
+pub type Bip32Deriv = BTreeMap<PublicKey, (bip32::Fingerprint, bip32::DerivationPath)>;
 
 /// Any output of a Revault transaction.
 pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
@@ -34,6 +37,12 @@ pub trait RevaultInternalTxOut: fmt::Debug + Clone + PartialEq + RevaultTxOut {
 
     /// Get the actual inner witness script ("redeem Script of the witness program")
     fn into_witness_script(self) -> Script;
+
+    /// Get a reference to the map of public key to xpub source and derivation index
+    fn bip32_derivation(&self) -> &Bip32Deriv;
+
+    /// Get the actual map of public key to xpub source and derivation index
+    fn into_bip32_derivation(self) -> Bip32Deriv;
 
     /// Get the maximum size, in weight units, a satisfaction for this scriptPubKey would cost.
     fn max_sat_weight(&self) -> usize {
@@ -54,6 +63,7 @@ macro_rules! implem_revault_txout {
         pub struct $struct_name {
             txout: TxOut,
             witness_script: Script,
+            bip32_derivation: Bip32Deriv,
         }
 
         impl RevaultTxOut for $struct_name {
@@ -74,6 +84,14 @@ macro_rules! implem_revault_txout {
             fn into_witness_script(self) -> Script {
                 self.witness_script
             }
+
+            fn bip32_derivation(&self) -> &Bip32Deriv {
+                &self.bip32_derivation
+            }
+
+            fn into_bip32_derivation(self) -> Bip32Deriv {
+                self.bip32_derivation
+            }
         }
     };
 }
@@ -93,6 +111,16 @@ impl DepositTxOut {
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
             witness_script: script_descriptor.inner().explicit_script(),
+            bip32_derivation: script_descriptor
+                .keys()
+                .into_iter()
+                .map(|k| {
+                    (
+                        k.key,
+                        (k.origin.0, bip32::DerivationPath::from(&[k.origin.1][..])),
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -107,6 +135,16 @@ impl UnvaultTxOut {
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
             witness_script: script_descriptor.inner().explicit_script(),
+            bip32_derivation: script_descriptor
+                .keys()
+                .into_iter()
+                .map(|k| {
+                    (
+                        k.key,
+                        (k.origin.0, bip32::DerivationPath::from(&[k.origin.1][..])),
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -148,6 +186,16 @@ impl CpfpTxOut {
                 script_pubkey: script_descriptor.inner().script_pubkey(),
             },
             witness_script: script_descriptor.inner().explicit_script(),
+            bip32_derivation: script_descriptor
+                .keys()
+                .into_iter()
+                .map(|k| {
+                    (
+                        k.key,
+                        (k.origin.0, bip32::DerivationPath::from(&[k.origin.1][..])),
+                    )
+                })
+                .collect(),
         }
     }
 }

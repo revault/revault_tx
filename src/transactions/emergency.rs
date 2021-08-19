@@ -43,6 +43,7 @@ impl EmergencyTransaction {
         let mut txins = vec![deposit_txin.unsigned_txin()];
         let mut psbtins = vec![PsbtIn {
             witness_script: Some(deposit_txin.txout().witness_script().clone()),
+            bip32_derivation: deposit_txin.txout().bip32_derivation().clone(),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
             witness_utxo: Some(deposit_txin.into_txout().into_txout()),
             ..PsbtIn::default()

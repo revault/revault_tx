@@ -252,6 +252,11 @@ pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationErro
         return Err(PsbtValidationError::InvalidSighashType(input.clone()));
     }
 
+    // It must have derivation paths set since it must have a witscript
+    if input.bip32_derivation.is_empty() {
+        return Err(PsbtValidationError::InvalidInputField(input.clone()));
+    }
+
     Ok(())
 }
 
