@@ -106,6 +106,7 @@ impl SpendTransaction {
                     value_in += prev_txout.txout().value;
                     PsbtIn {
                         witness_script: Some(prev_txout.witness_script().clone()),
+                        bip32_derivation: prev_txout.bip32_derivation().clone(),
                         sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
                         witness_utxo: Some(prev_txout.into_txout()),
                         ..PsbtIn::default()
@@ -279,6 +280,11 @@ impl SpendTransaction {
                 }
             } else {
                 return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
+            }
+
+            // And since it has a witscript it must have derivation paths for it set
+            if input.bip32_derivation.is_empty() {
+                return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
             }
 
             max_sat_weight += miniscript::descriptor::Wsh::new(

@@ -15,18 +15,24 @@
 use crate::error::*;
 
 use miniscript::{
-    bitcoin::{secp256k1, util::bip32, Address, PublicKey},
+    bitcoin::{
+        hashes::{hash160, Hash},
+        secp256k1,
+        util::bip32,
+        Address, PublicKey,
+    },
     descriptor::{DescriptorPublicKey, Wildcard, WshInner},
     miniscript::{
         iter::PkPkh,
         limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     },
     policy::{concrete::Policy, semantic::Policy as SemanticPolicy, Liftable},
-    Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, TranslatePk2,
+    Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, ToPublicKey, TranslatePk2,
 };
 
 use std::{
     fmt::{self, Display},
+    io::Write,
     str::FromStr,
 };
 
@@ -38,6 +44,104 @@ use serde::de;
 /// <https://github.com/bitcoin/bitcoin/blob/4a540683ec40393d6369da1a9e02e45614db936d/src/primitives/transaction.h#L87-L89>
 pub const SEQUENCE_LOCKTIME_MASK: u32 = 0x00_00_ff_ff;
 
+/// A public key used in derived descriptors
+#[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash)]
+pub struct DerivedPublicKey {
+    /// Fingerprint of the master xpub and the derivation index used. We don't use a path
+    /// since we never derive at more than one depth.
+    pub origin: (bip32::Fingerprint, bip32::ChildNumber),
+    /// The actual key
+    pub key: PublicKey,
+}
+
+impl fmt::Display for DerivedPublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (fingerprint, deriv_index) = &self.origin;
+
+        write!(f, "[")?;
+        for byte in fingerprint.as_bytes().iter() {
+            write!(f, "{:02x}", byte)?;
+        }
+        write!(f, "/{}", deriv_index)?;
+        write!(f, "]{}", self.key)
+    }
+}
+
+impl FromStr for DerivedPublicKey {
+    type Err = ScriptCreationError;
+
+    fn from_str(s: &str) -> Result<DerivedPublicKey, Self::Err> {
+        // The key is always of the form:
+        // [ fingerprint / index ]<key>
+
+        // 1 + 8 + 1 + 1 + 1 + 66 minimum
+        if s.len() < 78 {
+            return Err(ScriptCreationError::DerivedKeyParsing);
+        }
+
+        // Non-ASCII?
+        for ch in s.as_bytes() {
+            if *ch < 20 || *ch > 127 {
+                return Err(ScriptCreationError::DerivedKeyParsing);
+            }
+        }
+
+        if s.chars().next().expect("Size checked above") != '[' {
+            return Err(ScriptCreationError::DerivedKeyParsing);
+        }
+
+        let mut parts = s[1..].split(']');
+        let fg_deriv = parts.next().ok_or(ScriptCreationError::DerivedKeyParsing)?;
+        let key_str = parts.next().ok_or(ScriptCreationError::DerivedKeyParsing)?;
+
+        if fg_deriv.len() < 10 {
+            return Err(ScriptCreationError::DerivedKeyParsing);
+        }
+        let fingerprint = bip32::Fingerprint::from_str(&fg_deriv[..8])
+            .map_err(|_| ScriptCreationError::DerivedKeyParsing)?;
+        let deriv_index = bip32::ChildNumber::from_str(&fg_deriv[9..])
+            .map_err(|_| ScriptCreationError::DerivedKeyParsing)?;
+        if deriv_index.is_hardened() {
+            return Err(ScriptCreationError::DerivedKeyParsing);
+        }
+
+        let key =
+            PublicKey::from_str(&key_str).map_err(|_| ScriptCreationError::DerivedKeyParsing)?;
+
+        Ok(DerivedPublicKey {
+            key,
+            origin: (fingerprint, deriv_index),
+        })
+    }
+}
+
+impl MiniscriptKey for DerivedPublicKey {
+    // This allows us to be able to derive keys and key source even for PkH s
+    type Hash = Self;
+
+    fn is_uncompressed(&self) -> bool {
+        self.key.is_uncompressed()
+    }
+
+    fn to_pubkeyhash(&self) -> Self::Hash {
+        self.clone()
+    }
+}
+
+impl ToPublicKey for DerivedPublicKey {
+    fn to_public_key(&self) -> PublicKey {
+        self.key
+    }
+
+    fn hash_to_hash160(derived_key: &Self) -> hash160::Hash {
+        let mut engine = hash160::Hash::engine();
+        engine
+            .write_all(&derived_key.key.key.serialize())
+            .expect("engines don't error");
+        hash160::Hash::from_engine(engine)
+    }
+}
+
 // These are useful to create TxOuts out of the right Script descriptor
 
 macro_rules! impl_descriptor_newtype {
@@ -48,7 +152,7 @@ macro_rules! impl_descriptor_newtype {
 
         #[$der_doc_comment]
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-        pub struct $derived_struct_name(Descriptor<PublicKey>);
+        pub struct $derived_struct_name(Descriptor<DerivedPublicKey>);
 
         impl $struct_name {
             pub fn inner(&self) -> &Descriptor<DescriptorPublicKey> {
@@ -68,19 +172,74 @@ macro_rules! impl_descriptor_newtype {
                 $derived_struct_name(
                     self.0
                         .derive(child_number.into())
-                        .translate_pk2(|xpk| xpk.derive_public_key(secp))
+                        .translate_pk2(|xpk| {
+                            xpk.derive_public_key(secp).map(|key| {
+                                // FIXME: rust-miniscript will panic if we call
+                                // xpk.master_fingerprint() on a key without origin
+                                let origin = match xpk {
+                                    DescriptorPublicKey::XPub(..) => {
+                                        (xpk.master_fingerprint(), child_number)
+                                    }
+                                    _ => (bip32::Fingerprint::from(&[0, 0, 0, 0][..]), 0.into()),
+                                };
+
+                                DerivedPublicKey { key, origin }
+                            })
+                        })
                         .expect("All pubkeys are derived, no wildcard."),
                 )
+            }
+
+            /// Get all the xpubs used in this descriptor.
+            pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
+                let ms = match self.0 {
+                    Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                        WshInner::Ms(ms) => ms,
+                        WshInner::SortedMulti(_) => {
+                            unreachable!("None of the descriptors is a sorted multi")
+                        }
+                    },
+                    _ => unreachable!("All our descriptors are always P2WSH"),
+                };
+
+                // For DescriptorPublicKey, Pk::Hash == Self.
+                ms.iter_pk_pkh()
+                    .map(|pkpkh| match pkpkh {
+                        PkPkh::PlainPubkey(xpub) => xpub,
+                        PkPkh::HashedPubkey(xpub) => xpub,
+                    })
+                    .collect()
             }
         }
 
         impl $derived_struct_name {
-            pub fn inner(&self) -> &Descriptor<PublicKey> {
+            pub fn inner(&self) -> &Descriptor<DerivedPublicKey> {
                 &self.0
             }
 
-            pub fn into_inner(self) -> Descriptor<PublicKey> {
+            pub fn into_inner(self) -> Descriptor<DerivedPublicKey> {
                 self.0
+            }
+
+            /// Get all the keys and key source used in this derived descriptor
+            pub fn keys(&self) -> Vec<DerivedPublicKey> {
+                let ms = match self.0 {
+                    Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                        WshInner::Ms(ms) => ms,
+                        WshInner::SortedMulti(_) => {
+                            unreachable!("None of our descriptors is a sorted multi")
+                        }
+                    },
+                    _ => unreachable!("All our descriptors are always P2WSH"),
+                };
+
+                // For DerivedPublicKey, Pk::Hash == Self.
+                ms.iter_pk_pkh()
+                    .map(|pkpkh| match pkpkh {
+                        PkPkh::PlainPubkey(pk) => pk,
+                        PkPkh::HashedPubkey(pkh) => pkh,
+                    })
+                    .collect()
             }
         }
     };
@@ -249,27 +408,6 @@ impl DepositDescriptor {
 
         Ok(DepositDescriptor(deposit_desc!(stakeholders)))
     }
-
-    /// Get the stakeholders xpubs used in this deposit descriptor.
-    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Deposit descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Deposit descriptor is always a P2WSH"),
-        };
-
-        // For DescriptorPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(xpub) => xpub,
-                PkPkh::HashedPubkey(xpub) => xpub,
-            })
-            .collect()
-    }
 }
 
 impl Display for DepositDescriptor {
@@ -299,11 +437,11 @@ impl DerivedDepositDescriptor {
     ///
     /// # Examples
     /// ```rust
-    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32, PublicKey}, DescriptorTrait}};
+    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorTrait}};
     /// use std::str::FromStr;
     ///
-    /// let first_stakeholder = PublicKey::from_str("02a17786aca5ea2118e9209702454ab432d5b2c656f8ae19447d4ff3e7317d3b41").unwrap();
-    /// let second_stakeholder = PublicKey::from_str("036edaec85bb1eee1a19ca9f9fd5620134ec98bc21cc14c4e8e3d0f8f121e1b6d1").unwrap();
+    /// let first_stakeholder = scripts::DerivedPublicKey::from_str("[0f0f0f0f/21]02a17786aca5ea2118e9209702454ab432d5b2c656f8ae19447d4ff3e7317d3b41").unwrap();
+    /// let second_stakeholder = scripts::DerivedPublicKey::from_str("[0f0f0f0f/21]036edaec85bb1eee1a19ca9f9fd5620134ec98bc21cc14c4e8e3d0f8f121e1b6d1").unwrap();
     ///
     /// let deposit_descriptor =
     ///     scripts::DerivedDepositDescriptor::new(vec![first_stakeholder, second_stakeholder]).expect("Compiling descriptor");
@@ -318,7 +456,7 @@ impl DerivedDepositDescriptor {
     /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
     /// bug.
     pub fn new(
-        stakeholders: Vec<PublicKey>,
+        stakeholders: Vec<DerivedPublicKey>,
     ) -> Result<DerivedDepositDescriptor, ScriptCreationError> {
         deposit_desc_checks!(stakeholders);
 
@@ -336,7 +474,7 @@ impl FromStr for DerivedDepositDescriptor {
     type Err = ScriptCreationError;
 
     fn from_str(s: &str) -> Result<DerivedDepositDescriptor, Self::Err> {
-        let desc: Descriptor<PublicKey> = FromStr::from_str(s)?;
+        let desc: Descriptor<DerivedPublicKey> = FromStr::from_str(s)?;
 
         Ok(DerivedDepositDescriptor(desc))
     }
@@ -498,27 +636,6 @@ impl UnvaultDescriptor {
         unvault_descriptor_csv(&self.0)
     }
 
-    /// Get all the xpubs used in this Unvault descriptor.
-    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Unvault descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Unvault descriptor is always a P2WSH"),
-        };
-
-        // For DescriptorPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(xpub) => xpub,
-                PkPkh::HashedPubkey(xpub) => xpub,
-            })
-            .collect()
-    }
-
     /// Get the minimum number of managers required to sign along with the timelock
     /// and the (optional) Cosigning Servers
     pub fn managers_threshold(&self) -> Option<usize> {
@@ -545,6 +662,10 @@ impl FromStr for UnvaultDescriptor {
             return Err(ScriptCreationError::NonWildcardKeys);
         }
 
+        if !desc.for_any_key(|k| matches!(k.as_key(), DescriptorPublicKey::XPub(..))) {
+            return Err(ScriptCreationError::NoXpub);
+        }
+
         Ok(UnvaultDescriptor(desc))
     }
 }
@@ -557,19 +678,17 @@ impl DerivedUnvaultDescriptor {
     ///
     /// # Examples
     /// ```rust
-    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32, PublicKey}, DescriptorTrait}};
+    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorTrait}};
     /// use std::str::FromStr;
+    /// let first_stakeholder = scripts::DerivedPublicKey::from_str("[21212121/21]0372f4bb19ecf98d7849148b4f40375d2fcef624a1b56fef94489ad012bc11b4df").unwrap();
+    /// let second_stakeholder = scripts::DerivedPublicKey::from_str("[10000000/1]036e7ac7a096270f676b53e9917942cf42c6fb9607e3bc09775b5209c908525e80").unwrap();
+    /// let third_stakeholder = scripts::DerivedPublicKey::from_str("[ffffffff/4]03a02e93cf8c47b250075b0af61f96ebd10376c0aaa7635148e889cb2b51c96927").unwrap();
     ///
-    /// let first_stakeholder = PublicKey::from_str("0372f4bb19ecf98d7849148b4f40375d2fcef624a1b56fef94489ad012bc11b4df").unwrap();
-    /// let second_stakeholder = PublicKey::from_str("036e7ac7a096270f676b53e9917942cf42c6fb9607e3bc09775b5209c908525e80").unwrap();
-    /// let third_stakeholder = PublicKey::from_str("03a02e93cf8c47b250075b0af61f96ebd10376c0aaa7635148e889cb2b51c96927").unwrap();
-    ///
-    /// let first_cosig = PublicKey::from_str("02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35").unwrap();
-    /// let second_cosig = PublicKey::from_str("02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c").unwrap();
-    /// let third_cosig = PublicKey::from_str("0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf").unwrap();
-    ///
-    /// let first_manager = PublicKey::from_str("03d33a510c0376a3d19ffa0e1ba71d5ee0cbfebbce2df0996b51262142e943c6f0").unwrap();
-    /// let second_manager = PublicKey::from_str("030e7d7e1d8014dc17d63057ffc3ef26590bf237ce50054fb4f612be8e0a0dbe2a").unwrap();
+    /// let first_cosig = scripts::DerivedPublicKey::from_str("[fafafafa/21]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35").unwrap();
+    /// let second_cosig = scripts::DerivedPublicKey::from_str("[fafafafa/21]02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c").unwrap();
+    /// let third_cosig = scripts::DerivedPublicKey::from_str("[fafafafa/21]0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf").unwrap();
+    /// let first_manager = scripts::DerivedPublicKey::from_str("[fafafafa/21]03d33a510c0376a3d19ffa0e1ba71d5ee0cbfebbce2df0996b51262142e943c6f0").unwrap();
+    /// let second_manager = scripts::DerivedPublicKey::from_str("[fafafafa/21]030e7d7e1d8014dc17d63057ffc3ef26590bf237ce50054fb4f612be8e0a0dbe2a").unwrap();
     ///
     ///
     /// let unvault_descriptor = scripts::DerivedUnvaultDescriptor::new(
@@ -593,10 +712,10 @@ impl DerivedUnvaultDescriptor {
     /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
     /// bug.
     pub fn new(
-        stakeholders: Vec<PublicKey>,
-        managers: Vec<PublicKey>,
+        stakeholders: Vec<DerivedPublicKey>,
+        managers: Vec<DerivedPublicKey>,
         managers_threshold: usize,
-        cosigners: Vec<PublicKey>,
+        cosigners: Vec<DerivedPublicKey>,
         csv_value: u32,
     ) -> Result<DerivedUnvaultDescriptor, ScriptCreationError> {
         unvault_desc_checks!(
@@ -638,7 +757,7 @@ impl FromStr for DerivedUnvaultDescriptor {
     type Err = ScriptCreationError;
 
     fn from_str(s: &str) -> Result<DerivedUnvaultDescriptor, Self::Err> {
-        let desc: Descriptor<PublicKey> = FromStr::from_str(s)?;
+        let desc: Descriptor<DerivedPublicKey> = FromStr::from_str(s)?;
 
         Ok(DerivedUnvaultDescriptor(desc))
     }
@@ -692,27 +811,6 @@ impl CpfpDescriptor {
 
         Ok(CpfpDescriptor(cpfp_descriptor!(managers)))
     }
-
-    /// Get all the xpubs used in this Cpfp descriptor.
-    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Cpfp descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Cpfp descriptor is always a P2WSH"),
-        };
-
-        // For DescriptorPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(xpub) => xpub,
-                PkPkh::HashedPubkey(xpub) => xpub,
-            })
-            .collect()
-    }
 }
 
 impl Display for CpfpDescriptor {
@@ -742,11 +840,11 @@ impl DerivedCpfpDescriptor {
     ///
     /// # Examples
     /// ```rust
-    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32, PublicKey}, DescriptorTrait}};
+    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorTrait}};
     /// use std::str::FromStr;
     ///
-    /// let first_manager = PublicKey::from_str("02a17786aca5ea2118e9209702454ab432d5b2c656f8ae19447d4ff3e7317d3b41").unwrap();
-    /// let second_manager = PublicKey::from_str("036edaec85bb1eee1a19ca9f9fd5620134ec98bc21cc14c4e8e3d0f8f121e1b6d1").unwrap();
+    /// let first_manager = scripts::DerivedPublicKey::from_str("[0f0f0f0f/21]02a17786aca5ea2118e9209702454ab432d5b2c656f8ae19447d4ff3e7317d3b41").unwrap();
+    /// let second_manager = scripts::DerivedPublicKey::from_str("[0f0f0f0f/21]036edaec85bb1eee1a19ca9f9fd5620134ec98bc21cc14c4e8e3d0f8f121e1b6d1").unwrap();
     ///
     /// let cpfp_descriptor =
     ///     scripts::DerivedCpfpDescriptor::new(vec![first_manager, second_manager]).expect("Compiling descriptor");
@@ -759,7 +857,9 @@ impl DerivedCpfpDescriptor {
     /// # Errors
     /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
     /// bug.
-    pub fn new(managers: Vec<PublicKey>) -> Result<DerivedCpfpDescriptor, ScriptCreationError> {
+    pub fn new(
+        managers: Vec<DerivedPublicKey>,
+    ) -> Result<DerivedCpfpDescriptor, ScriptCreationError> {
         Ok(DerivedCpfpDescriptor(cpfp_descriptor!(managers)))
     }
 }
@@ -774,7 +874,7 @@ impl FromStr for DerivedCpfpDescriptor {
     type Err = ScriptCreationError;
 
     fn from_str(s: &str) -> Result<DerivedCpfpDescriptor, Self::Err> {
-        let desc: Descriptor<PublicKey> = FromStr::from_str(s)?;
+        let desc: Descriptor<DerivedPublicKey> = FromStr::from_str(s)?;
 
         Ok(DerivedCpfpDescriptor(desc))
     }
@@ -830,7 +930,7 @@ mod tests {
 
     use super::{
         CpfpDescriptor, DepositDescriptor, DerivedCpfpDescriptor, DerivedDepositDescriptor,
-        DerivedUnvaultDescriptor, PublicKey, ScriptCreationError, UnvaultDescriptor,
+        DerivedPublicKey, DerivedUnvaultDescriptor, ScriptCreationError, UnvaultDescriptor,
     };
 
     use miniscript::{
@@ -860,6 +960,81 @@ mod tests {
             derivation_path: bip32::DerivationPath::from(vec![]),
             wildcard: Wildcard::Unhardened,
         })
+    }
+
+    #[test]
+    fn derived_pubkey_parsing() {
+        DerivedPublicKey::from_str(
+            "02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[/]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[aaa/]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[bbbbbbbb/]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[/1]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[/bc]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[aabb/1]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[aabbccddaabb11/1]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[12345678/ffff]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+        DerivedPublicKey::from_str(
+            "[aabbccdd/2147483648]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap_err();
+
+        DerivedPublicKey::from_str(
+            "[aabbccdd/0]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap();
+        DerivedPublicKey::from_str(
+            "[aabbccdd/10000000]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap();
+        DerivedPublicKey::from_str(
+            "[12345678/99999999]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        )
+        .unwrap();
+
+        let secp = secp256k1::Secp256k1::verification_only();
+        let xpub = bip32::ExtendedPubKey::from_str("xpub6EWL35hY9uZZs5Ljt6J3G2ZK1Tu4GPVkFdeGvMknG3VmwVRHhtadCaw5hdRDBgrmx1nPVHWjGBb5xeuC1BfbJzjjcic2gNm1aA7ywWjj7G8").unwrap();
+        let derived_xpub = xpub
+            .derive_pub(&secp, &bip32::DerivationPath::from(vec![42.into()]))
+            .unwrap();
+        let derived_key = DerivedPublicKey {
+            key: derived_xpub.public_key,
+            origin: (derived_xpub.parent_fingerprint, 42.into()),
+        };
+        assert_eq!(
+            derived_key.to_string(),
+            format!("[{}/42]{}", xpub.fingerprint(), derived_xpub.public_key)
+        );
     }
 
     // Sanity check we error on creating derived descriptors. Non-error cases are in doc comments.
@@ -974,28 +1149,28 @@ mod tests {
 
         // You can't mess up by from_str a wildcard descriptor from a derived one, and the other
         // way around.
-        let raw_pk_a = PublicKey::from_str(
-            "02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+        let raw_pk_a = DerivedPublicKey::from_str(
+            "[aabbccdd/13]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
         )
         .unwrap();
-        let raw_pk_b = PublicKey::from_str(
-            "02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c",
+        let raw_pk_b = DerivedPublicKey::from_str(
+            "[aabbccdd/13]02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c",
         )
         .unwrap();
-        let raw_pk_c = PublicKey::from_str(
-            "0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf",
+        let raw_pk_c = DerivedPublicKey::from_str(
+            "[aabbccdd/13]0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf",
         )
         .unwrap();
-        let raw_pk_d = PublicKey::from_str(
-            "03b330723c5ebc2b6f2b29b5a8429e020c0806eed0bcbbddfe5fcad2bb2d02e946",
+        let raw_pk_d = DerivedPublicKey::from_str(
+            "[aabbccdd/13]03b330723c5ebc2b6f2b29b5a8429e020c0806eed0bcbbddfe5fcad2bb2d02e946",
         )
         .unwrap();
-        let raw_pk_e = PublicKey::from_str(
-            "02c8bd230d2a5cdd0c5716f0ebe774d5a7341e9cbcc87f4f43e39acc43a73d72a9",
+        let raw_pk_e = DerivedPublicKey::from_str(
+            "[aabbccdd/13]02c8bd230d2a5cdd0c5716f0ebe774d5a7341e9cbcc87f4f43e39acc43a73d72a9",
         )
         .unwrap();
-        let raw_pk_f = PublicKey::from_str(
-            "02d07b4b45f93d161b0846a5dd1691720069d8a27baab2f85022fe78b5f896ba07",
+        let raw_pk_f = DerivedPublicKey::from_str(
+            "[aabbccdd/13]02d07b4b45f93d161b0846a5dd1691720069d8a27baab2f85022fe78b5f896ba07",
         )
         .unwrap();
 
@@ -1049,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xpubs_from_descriptor() {
+    fn test_keys_from_descriptor() {
         let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
         let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
         let third_stakeholder = DescriptorPublicKey::from_str("xpub6Br1DUfrzxTVGo1sanuKDCUmSxDfLRrxLQBqpMqygkQLkQWodoyvvGtUV8Rp3r6d6BNYvedBSU8c7whhn2U8haRVxsWwuQiZ9LoFp7jXPQA/*").unwrap();
@@ -1108,20 +1283,85 @@ mod tests {
             2018,
         )
         .expect("Valid, with xpubs");
+        let mut xpubs = unvault_desc.xpubs();
+        xpubs.sort();
+        let mut expected_xpubs = vec![
+            first_stakeholder.clone(),
+            second_stakeholder.clone(),
+            third_stakeholder.clone(),
+            first_manager.clone(),
+            second_manager.clone(),
+            first_cosig.clone(),
+            second_cosig.clone(),
+            third_cosig.clone(),
+        ];
+        expected_xpubs.sort();
+        assert_eq!(xpubs, expected_xpubs);
+
+        // Now do the same with derived descriptors
+        let deriv_index: bip32::ChildNumber = 420121.into();
+        let secp = secp256k1::Secp256k1::verification_only();
+
+        fn xpub_to_key<C: secp256k1::Verification>(
+            secp: &secp256k1::Secp256k1<C>,
+            xpub: DescriptorPublicKey,
+            index: bip32::ChildNumber,
+        ) -> DerivedPublicKey {
+            let xpub = match xpub {
+                DescriptorPublicKey::XPub(xpub) => xpub.xkey,
+                _ => unreachable!(),
+            };
+            DerivedPublicKey {
+                key: xpub.derive_pub(secp, &[index]).unwrap().public_key,
+                origin: (xpub.fingerprint(), index),
+            }
+        }
+
+        let der_deposit_desc = deposit_desc.derive(deriv_index, &secp);
         assert_eq!(
-            unvault_desc.xpubs().sort(),
+            der_deposit_desc.keys(),
             vec![
-                first_stakeholder,
-                second_stakeholder,
-                third_stakeholder,
-                first_manager,
-                second_manager,
-                first_cosig,
-                second_cosig,
-                third_cosig
+                xpub_to_key(&secp, first_stakeholder.clone(), deriv_index),
+                xpub_to_key(&secp, second_stakeholder.clone(), deriv_index),
+                xpub_to_key(&secp, third_stakeholder.clone(), deriv_index),
             ]
-            .sort()
         );
+
+        let der_cpfp_desc = cpfp_desc.derive(deriv_index, &secp);
+        assert_eq!(
+            der_cpfp_desc.keys(),
+            vec![
+                xpub_to_key(&secp, first_manager.clone(), deriv_index),
+                xpub_to_key(&secp, second_manager.clone(), deriv_index),
+            ]
+        );
+
+        let der_unvault_desc = unvault_desc.derive(deriv_index, &secp);
+        let mut keys = der_unvault_desc.keys();
+        keys.sort();
+
+        let mut expected_keys = vec![
+            xpub_to_key(&secp, first_stakeholder, deriv_index),
+            xpub_to_key(&secp, second_stakeholder, deriv_index),
+            xpub_to_key(&secp, third_stakeholder, deriv_index),
+            xpub_to_key(&secp, first_manager.clone(), deriv_index),
+            xpub_to_key(&secp, second_manager.clone(), deriv_index),
+            DerivedPublicKey::from_str(
+                "[00000000/0]02a489e0ea42b56148d212d325b7c67c6460483ff931c303ea311edfef667c8f35",
+            )
+            .unwrap(),
+            DerivedPublicKey::from_str(
+                "[00000000/0]02767e6dde4877dcbf64de8a45fe1a0575dfc6b0ed06648f1022412c172ebd875c",
+            )
+            .unwrap(),
+            DerivedPublicKey::from_str(
+                "[00000000/0]0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf",
+            )
+            .unwrap(),
+        ];
+        expected_keys.sort();
+
+        assert_eq!(keys, expected_keys);
     }
 
     #[test]
@@ -1347,7 +1587,7 @@ mod tests {
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect();
 
-            for t in 1..n_mans - 1 {
+            for t in (1..n_mans - 1).step_by(2) {
                 assert_eq!(
                     UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
                         .unwrap()
@@ -1379,12 +1619,12 @@ mod tests {
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect();
 
-        for n_mans in (1..20).step_by(2) {
+        for n_mans in (1..20).step_by(3) {
             let mans: Vec<DescriptorPublicKey> = (0..n_mans)
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect();
 
-            for t in (1..n_mans - 1).step_by(2) {
+            for t in (1..n_mans - 1).step_by(4) {
                 assert_eq!(
                     UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
                         .unwrap()
@@ -1414,12 +1654,12 @@ mod tests {
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect();
 
-        for n_mans in 1..10 {
+        for n_mans in (1..10).step_by(2) {
             let mans: Vec<DescriptorPublicKey> = (0..n_mans)
                 .map(|_| get_random_pubkey(&mut rng, &secp))
                 .collect();
 
-            for t in 1..n_mans - 1 {
+            for t in (1..n_mans - 1).step_by(3) {
                 assert_eq!(
                     UnvaultDescriptor::new(stakes.clone(), mans.clone(), t, cosigs.clone(), 6)
                         .unwrap()

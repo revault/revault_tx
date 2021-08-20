@@ -58,6 +58,7 @@ impl UnvaultTransaction {
             },
             inputs: vec![PsbtIn {
                 witness_script: Some(deposit_txin.txout().witness_script().clone()),
+                bip32_derivation: deposit_txin.txout().bip32_derivation().clone(),
                 sighash_type: Some(SigHashType::All),
                 witness_utxo: Some(deposit_txin.into_txout().into_txout()),
                 ..PsbtIn::default()
@@ -216,6 +217,11 @@ impl UnvaultTransaction {
             if input.sighash_type != Some(SigHashType::All) {
                 return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
             }
+
+            if input.bip32_derivation.is_empty() {
+                return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
+            }
+
             if let Some(ref ws) = input.witness_script {
                 if ws.to_v0_p2wsh()
                     != input
