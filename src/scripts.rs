@@ -189,6 +189,27 @@ macro_rules! impl_descriptor_newtype {
                         .expect("All pubkeys are derived, no wildcard."),
                 )
             }
+
+            /// Get all the xpubs used in this descriptor.
+            pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
+                let ms = match self.0 {
+                    Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                        WshInner::Ms(ms) => ms,
+                        WshInner::SortedMulti(_) => {
+                            unreachable!("None of the descriptors is a sorted multi")
+                        }
+                    },
+                    _ => unreachable!("All our descriptors are always P2WSH"),
+                };
+
+                // For DescriptorPublicKey, Pk::Hash == Self.
+                ms.iter_pk_pkh()
+                    .map(|pkpkh| match pkpkh {
+                        PkPkh::PlainPubkey(xpub) => xpub,
+                        PkPkh::HashedPubkey(xpub) => xpub,
+                    })
+                    .collect()
+            }
         }
 
         impl $derived_struct_name {
@@ -198,6 +219,27 @@ macro_rules! impl_descriptor_newtype {
 
             pub fn into_inner(self) -> Descriptor<DerivedPublicKey> {
                 self.0
+            }
+
+            /// Get all the keys and key source used in this derived descriptor
+            pub fn keys(&self) -> Vec<DerivedPublicKey> {
+                let ms = match self.0 {
+                    Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
+                        WshInner::Ms(ms) => ms,
+                        WshInner::SortedMulti(_) => {
+                            unreachable!("None of our descriptors is a sorted multi")
+                        }
+                    },
+                    _ => unreachable!("All our descriptors are always P2WSH"),
+                };
+
+                // For DerivedPublicKey, Pk::Hash == Self.
+                ms.iter_pk_pkh()
+                    .map(|pkpkh| match pkpkh {
+                        PkPkh::PlainPubkey(pk) => pk,
+                        PkPkh::HashedPubkey(pkh) => pkh,
+                    })
+                    .collect()
             }
         }
     };
@@ -366,27 +408,6 @@ impl DepositDescriptor {
 
         Ok(DepositDescriptor(deposit_desc!(stakeholders)))
     }
-
-    /// Get the stakeholders xpubs used in this deposit descriptor.
-    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Deposit descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Deposit descriptor is always a P2WSH"),
-        };
-
-        // For DescriptorPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(xpub) => xpub,
-                PkPkh::HashedPubkey(xpub) => xpub,
-            })
-            .collect()
-    }
 }
 
 impl Display for DepositDescriptor {
@@ -440,27 +461,6 @@ impl DerivedDepositDescriptor {
         deposit_desc_checks!(stakeholders);
 
         Ok(DerivedDepositDescriptor(deposit_desc!(stakeholders)))
-    }
-
-    /// Get all the keys and key source used in this derived Deposit descriptor
-    pub fn keys(&self) -> Vec<DerivedPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Deposit descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Deposit descriptor is always a P2WSH"),
-        };
-
-        // For DerivedPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(pk) => pk,
-                PkPkh::HashedPubkey(pkh) => pkh,
-            })
-            .collect()
     }
 }
 
@@ -636,27 +636,6 @@ impl UnvaultDescriptor {
         unvault_descriptor_csv(&self.0)
     }
 
-    /// Get all the xpubs used in this Unvault descriptor.
-    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Unvault descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Unvault descriptor is always a P2WSH"),
-        };
-
-        // For DescriptorPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(xpub) => xpub,
-                PkPkh::HashedPubkey(xpub) => xpub,
-            })
-            .collect()
-    }
-
     /// Get the minimum number of managers required to sign along with the timelock
     /// and the (optional) Cosigning Servers
     pub fn managers_threshold(&self) -> Option<usize> {
@@ -766,27 +745,6 @@ impl DerivedUnvaultDescriptor {
     pub fn managers_threshold(&self) -> Option<usize> {
         unvault_descriptor_managers_threshold(&self.0)
     }
-
-    /// Get all the keys and key source used in this derived Unvault descriptor
-    pub fn keys(&self) -> Vec<DerivedPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Unvault descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Unvault descriptor is always a P2WSH"),
-        };
-
-        // For DerivedPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(pk) => pk,
-                PkPkh::HashedPubkey(pkh) => pkh,
-            })
-            .collect()
-    }
 }
 
 impl Display for DerivedUnvaultDescriptor {
@@ -853,27 +811,6 @@ impl CpfpDescriptor {
 
         Ok(CpfpDescriptor(cpfp_descriptor!(managers)))
     }
-
-    /// Get all the xpubs used in this Cpfp descriptor.
-    pub fn xpubs(&self) -> Vec<DescriptorPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("Cpfp descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("Cpfp descriptor is always a P2WSH"),
-        };
-
-        // For DescriptorPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(xpub) => xpub,
-                PkPkh::HashedPubkey(xpub) => xpub,
-            })
-            .collect()
-    }
 }
 
 impl Display for CpfpDescriptor {
@@ -924,27 +861,6 @@ impl DerivedCpfpDescriptor {
         managers: Vec<DerivedPublicKey>,
     ) -> Result<DerivedCpfpDescriptor, ScriptCreationError> {
         Ok(DerivedCpfpDescriptor(cpfp_descriptor!(managers)))
-    }
-
-    /// Get all the keys and key source used in this derived CPFP descriptor
-    pub fn keys(&self) -> Vec<DerivedPublicKey> {
-        let ms = match self.0 {
-            Descriptor::Wsh(ref wsh) => match wsh.as_inner() {
-                WshInner::Ms(ms) => ms,
-                WshInner::SortedMulti(_) => {
-                    unreachable!("CPFP descriptor is not a sorted multi")
-                }
-            },
-            _ => unreachable!("CPFP descriptor is always a P2WSH"),
-        };
-
-        // For DerivedPublicKey, Pk::Hash == Self.
-        ms.iter_pk_pkh()
-            .map(|pkpkh| match pkpkh {
-                PkPkh::PlainPubkey(pk) => pk,
-                PkPkh::HashedPubkey(pkh) => pkh,
-            })
-            .collect()
     }
 }
 
