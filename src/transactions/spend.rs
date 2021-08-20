@@ -76,8 +76,13 @@ impl SpendTransaction {
         let mut value_out: u64 = 0;
 
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
+        let mut psbtouts = Vec::with_capacity(txos.len());
         txos.push(cpfp_txo.txout().clone());
-        for spend_txout in spend_txouts {
+        psbtouts.push(PsbtOut {
+            bip32_derivation: cpfp_txo.bip32_derivation().clone(),
+            ..PsbtOut::default()
+        });
+        for spend_txout in spend_txouts.iter() {
             let txo = match spend_txout {
                 SpendTxOut::Destination(ref txo) => txo.clone(),
                 SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
@@ -88,9 +93,18 @@ impl SpendTransaction {
             }
 
             value_out += txo.value;
+
+            let psbtout = match spend_txout {
+                SpendTxOut::Destination(_) => PsbtOut::default(),
+                SpendTxOut::Change(ref txo) => PsbtOut {
+                    bip32_derivation: txo.bip32_derivation().clone(),
+                    ..PsbtOut::default()
+                },
+            };
+
             txos.push(txo);
+            psbtouts.push(psbtout);
         }
-        let psbtouts = txos.iter().map(|_| PsbtOut::default()).collect();
 
         let psbt = Psbt {
             global: PsbtGlobal {

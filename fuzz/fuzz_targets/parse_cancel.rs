@@ -37,6 +37,7 @@ fuzz_target!(|data: &[u8]| {
             assert!(!tx.psbt().inputs[unvault_in_index]
                 .bip32_derivation
                 .is_empty());
+            assert!(!tx.psbt().outputs[0].bip32_derivation.is_empty());
 
             // We can compute the sighash for the unvault input
             tx.signature_hash(unvault_in_index, SigHashType::AllPlusAnyoneCanPay)

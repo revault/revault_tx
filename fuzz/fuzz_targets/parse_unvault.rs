@@ -28,6 +28,8 @@ fuzz_target!(|data: &[u8]| {
         if !tx.is_finalized() {
             // Derivation paths must always be set
             assert!(!tx.psbt().inputs[0].bip32_derivation.is_empty());
+            assert!(!tx.psbt().outputs[0].bip32_derivation.is_empty());
+            assert!(!tx.psbt().outputs[1].bip32_derivation.is_empty());
 
             // We can compute the sighash for the first unvault input
             tx.signature_hash(0, SigHashType::All)
