@@ -87,6 +87,12 @@ impl EmergencyTransaction {
         emer_address: EmergencyAddress,
         lock_time: u32,
     ) -> Result<EmergencyTransaction, TransactionCreationError> {
+        if let Some(ref txin) = feebump_input {
+            if txin.txout().txout().value > max_money(Network::Bitcoin) {
+                return Err(TransactionCreationError::InsaneAmounts);
+            }
+        }
+
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It has to pay for itself.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), Amount::from_sat(u64::MAX));

@@ -402,7 +402,7 @@ pub fn derive_transactions(
     assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
     // We can create it entirely without the feebump input
     let mut cancel_tx_without_feebump =
-        CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0);
+        CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0)?;
     assert_eq!(h_cancel, cancel_tx_without_feebump);
     assert_eq!(
         cancel_tx_without_feebump
@@ -445,7 +445,7 @@ pub fn derive_transactions(
         Some(feebump_txin),
         &der_deposit_descriptor,
         0,
-    );
+    )?;
     assert_eq!(
         cancel_tx.deposit_txin(&der_deposit_descriptor).outpoint(),
         OutPoint {
@@ -487,7 +487,7 @@ pub fn derive_transactions(
         None,
         emergency_address.clone(),
         0,
-    );
+    )?;
     assert_eq!(h_unemer, unemergency_tx_no_feebump);
     assert_eq!(
         unemergency_tx_no_feebump.emergency_outpoint(),
@@ -527,7 +527,7 @@ pub fn derive_transactions(
         Some(feebump_txin),
         emergency_address,
         0,
-    );
+    )?;
     assert_eq!(
         unemergency_tx.emergency_outpoint(),
         OutPoint {

@@ -85,7 +85,13 @@ impl CancelTransaction {
         feebump_input: Option<FeeBumpTxIn>,
         deposit_descriptor: &DerivedDepositDescriptor,
         lock_time: u32,
-    ) -> CancelTransaction {
+    ) -> Result<CancelTransaction, TransactionCreationError> {
+        if let Some(ref txin) = feebump_input {
+            if txin.txout().txout().value > max_money(Network::Bitcoin) {
+                return Err(TransactionCreationError::InsaneAmounts);
+            }
+        }
+
         // First, create a dummy transaction to get its weight without Witness. Note that we always
         // account for the weight *without* feebump input. It pays for itself.
         let dummy_deposit_txo = DepositTxOut::new(Amount::from_sat(u64::MAX), deposit_descriptor);
@@ -127,12 +133,12 @@ impl CancelTransaction {
         );
         let deposit_txo = DepositTxOut::new(Amount::from_sat(revault_value), deposit_descriptor);
 
-        CancelTransaction(CancelTransaction::create_psbt(
+        Ok(CancelTransaction(CancelTransaction::create_psbt(
             unvault_input,
             feebump_input,
             deposit_txo,
             lock_time,
-        ))
+        )))
     }
 
     /// Parse a Cancel transaction from a PSBT

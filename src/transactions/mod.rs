@@ -427,7 +427,7 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
         None,
         &der_deposit_descriptor,
         lock_time,
-    );
+    )?;
 
     Ok((unvault_tx, cancel_tx))
 }
@@ -475,7 +475,7 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     let der_unvault_descriptor = unvault_descriptor.derive(derivation_index, secp);
     let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
     let unvault_emergency_tx =
-        UnvaultEmergencyTransaction::new(unvault_txin, None, emer_address, lock_time);
+        UnvaultEmergencyTransaction::new(unvault_txin, None, emer_address, lock_time)?;
 
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
