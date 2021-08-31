@@ -667,13 +667,18 @@ pub fn derive_transactions(
     .txout()
     .value;
     let fees = 30_000;
+    let mut in_value: u64 = 0;
+    for txin in spend_unvault_txins.iter() {
+        in_value = in_value
+            .checked_add(txin.txout().txout().value)
+            .ok_or(TransactionCreationError::InsaneAmounts)?;
+    }
     let spend_txo = TxOut {
-        value: spend_unvault_txins
-            .iter()
-            .map(|txin| txin.txout().txout().value)
-            .sum::<u64>()
-            - cpfp_value
-            - fees,
+        value: in_value
+            .checked_sub(cpfp_value)
+            .ok_or(TransactionCreationError::InsaneAmounts)?
+            .checked_sub(fees)
+            .ok_or(TransactionCreationError::InsaneAmounts)?,
         ..TxOut::default()
     };
     let mut spend_tx = SpendTransaction::new(
