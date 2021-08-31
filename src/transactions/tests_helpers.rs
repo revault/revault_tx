@@ -287,8 +287,7 @@ pub fn derive_transactions(
     // Create and sign the first (deposit) emergency transaction
     // We can sign the transaction without the feebump input
     let mut emergency_tx_no_feebump =
-        EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)
-            .unwrap();
+        EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)?;
     assert_eq!(h_emer, emergency_tx_no_feebump);
     assert_eq!(
         emergency_tx_no_feebump.emergency_outpoint(),
@@ -349,8 +348,7 @@ pub fn derive_transactions(
         Some(feebump_txin),
         emergency_address.clone(),
         0,
-    )
-    .unwrap();
+    )?;
     assert_eq!(
         emergency_tx.emergency_outpoint(),
         OutPoint {
@@ -687,8 +685,7 @@ pub fn derive_transactions(
         &der_cpfp_descriptor,
         0,
         true,
-    )
-    .expect("Amounts Ok");
+    )?;
     assert_eq!(spend_tx.fees(), fees);
     let mut hash_cache = SigHashCache::new(spend_tx.tx());
     let sighashes: Vec<SigHash> = (0..n_txins)
