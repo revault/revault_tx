@@ -14,7 +14,7 @@ use miniscript::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        Amount, Network, SigHashType, Transaction,
+        Amount, Network, OutPoint, SigHashType, Transaction,
     },
     DescriptorTrait,
 };
@@ -25,7 +25,10 @@ use {
     serde::ser::{Serialize, Serializer},
 };
 
-use std::{collections::BTreeMap, convert::TryInto};
+use std::{
+    collections::{BTreeMap, HashSet},
+    convert::TryInto,
+};
 
 impl_revault_transaction!(
     SpendTransaction,
@@ -47,6 +50,12 @@ impl SpendTransaction {
         lock_time: u32,
         insane_fee_check: bool,
     ) -> Result<SpendTransaction, TransactionCreationError> {
+        // Check for duplicated inputs
+        let uniq_txins: HashSet<OutPoint> = unvault_inputs.iter().map(|i| i.outpoint()).collect();
+        if uniq_txins.len() != unvault_inputs.len() {
+            return Err(TransactionCreationError::DuplicatedInput);
+        }
+
         // The CPFP is tricky to compute. We could be smart and avoid some allocations here
         // but at the cost of clarity.
         let cpfp_txo = SpendTransaction::cpfp_txout(

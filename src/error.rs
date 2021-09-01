@@ -88,6 +88,8 @@ pub enum TransactionCreationError {
     NegativeFees,
     /// Transaction weight more than 400k weight units.
     TooLarge,
+    /// Trying to create a Spend transaction with the same prevout twice
+    DuplicatedInput,
 }
 
 impl fmt::Display for TransactionCreationError {
@@ -105,6 +107,10 @@ impl fmt::Display for TransactionCreationError {
             Self::TooLarge => write!(
                 f,
                 "Transaction too large: satisfied it could be >400k weight units"
+            ),
+            Self::DuplicatedInput => write!(
+                f,
+                "Trying to create a Spend transaction with the same prevout twice"
             ),
         }
     }
