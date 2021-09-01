@@ -180,10 +180,8 @@ pub fn derive_transactions(
         csv,
     )?;
     assert_eq!(unvault_descriptor.csv_value(), csv);
-    let cpfp_descriptor =
-        CpfpDescriptor::new(mancpfp).expect("Unvault CPFP descriptor generation error");
-    let deposit_descriptor =
-        DepositDescriptor::new(stakeholders).expect("Deposit descriptor generation error");
+    let cpfp_descriptor = CpfpDescriptor::new(mancpfp)?;
+    let deposit_descriptor = DepositDescriptor::new(stakeholders)?;
 
     desc_san_check(
         deposit_descriptor
