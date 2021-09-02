@@ -6,5 +6,5 @@ cd corpus && git clone https://github.com/revault/revault_tx_corpus
 
 cargo install --git https://github.com/darosior/cargo-fuzz --branch no_cfg
 for target in $(ls fuzz/fuzz_targets);do
-    cargo +nightly fuzz run --no-cfg-fuzzing -O -a "${target%.*}" -- -runs=1000 -maxlen=500000
+    cargo +nightly fuzz run --no-cfg-fuzzing -O -a "${target%.*}" -- -runs=1000 -max_len=500000
 done
