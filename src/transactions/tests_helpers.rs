@@ -585,7 +585,8 @@ pub fn derive_transactions(
     let dummy_txo = TxOut::default();
     let cpfp_value = SpendTransaction::cpfp_txout(
         vec![spend_unvault_txin.clone()],
-        vec![SpendTxOut::Destination(dummy_txo.clone())],
+        vec![SpendTxOut::new(dummy_txo.clone())],
+        None,
         &der_cpfp_descriptor,
         0,
     )
@@ -599,7 +600,8 @@ pub fn derive_transactions(
     };
     let mut spend_tx = SpendTransaction::new(
         vec![spend_unvault_txin.clone()],
-        vec![SpendTxOut::Destination(spend_txo.clone())],
+        vec![SpendTxOut::new(spend_txo.clone())],
+        None,
         &der_cpfp_descriptor,
         0,
         true,
@@ -628,8 +630,23 @@ pub fn derive_transactions(
         ..TxOut::default()
     };
     SpendTransaction::new(
+        vec![spend_unvault_txin.clone()],
+        vec![SpendTxOut::new(dust_txo.clone())],
+        None,
+        &der_cpfp_descriptor,
+        0,
+        true,
+    )
+    .expect_err("Creating a dust output");
+
+    // We can't create a dust change output with the Spend
+    SpendTransaction::new(
         vec![spend_unvault_txin],
-        vec![SpendTxOut::Destination(dust_txo.clone())],
+        vec![],
+        Some(DepositTxOut::new(
+            Amount::from_sat(329),
+            &der_deposit_descriptor,
+        )),
         &der_cpfp_descriptor,
         0,
         true,
@@ -656,7 +673,8 @@ pub fn derive_transactions(
     let dummy_txo = TxOut::default();
     let cpfp_value = SpendTransaction::cpfp_txout(
         spend_unvault_txins.clone(),
-        vec![SpendTxOut::Destination(dummy_txo.clone())],
+        vec![SpendTxOut::new(dummy_txo.clone())],
+        None,
         &der_cpfp_descriptor,
         0,
     )
@@ -679,7 +697,8 @@ pub fn derive_transactions(
     };
     let mut spend_tx = SpendTransaction::new(
         spend_unvault_txins,
-        vec![SpendTxOut::Destination(spend_txo.clone())],
+        vec![SpendTxOut::new(spend_txo.clone())],
+        None,
         &der_cpfp_descriptor,
         0,
         true,

@@ -227,11 +227,21 @@ impl RevaultTxOut for FeeBumpTxOut {
 
 /// A [Spend](crate::transactions::SpendTransaction) output can be either a change one (DepositTxOut)
 /// or a payee-controlled one (ExternalTxOut).
-#[derive(Debug, Clone)]
-pub enum SpendTxOut {
-    /// The actual destination of the funds, many such output can be present in a Spend
-    /// transaction
-    Destination(TxOut),
-    /// The change output, usually only one such output is present in a Spend transaction
-    Change(DepositTxOut),
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpendTxOut(TxOut);
+
+impl SpendTxOut {
+    pub fn new(txo: TxOut) -> Self {
+        SpendTxOut(txo)
+    }
+}
+
+impl RevaultTxOut for SpendTxOut {
+    fn txout(&self) -> &TxOut {
+        &self.0
+    }
+
+    fn into_txout(self) -> TxOut {
+        self.0
+    }
 }

@@ -486,6 +486,7 @@ pub fn transaction_chain<C: secp256k1::Verification>(
 pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
     deposit_txins: Vec<(OutPoint, Amount, ChildNumber)>,
     spend_txos: Vec<SpendTxOut>,
+    change_txo: Option<DepositTxOut>,
     deposit_descriptor: &DepositDescriptor,
     unvault_descriptor: &UnvaultDescriptor,
     cpfp_descriptor: &CpfpDescriptor,
@@ -515,6 +516,7 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
     SpendTransaction::new(
         unvault_txins,
         spend_txos,
+        change_txo,
         &der_cpfp_descriptor,
         lock_time,
         check_insane_fees,
@@ -547,6 +549,7 @@ mod tests {
             "4bb4545bb4bc8853cb03e42984d677fbe880c81e7d95609360eed0d8f45b52f8:0",
         )
         .unwrap();
+
         let feebump_value = 56730;
         let unvaults_spent = vec![
             (
@@ -578,7 +581,6 @@ mod tests {
                 234_631,
             ),
         ];
-
         // Test the dust limit
         assert_eq!(
             derive_transactions(
