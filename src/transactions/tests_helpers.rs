@@ -1,7 +1,7 @@
 use super::{
     transaction_chain, CancelTransaction, DepositTransaction, EmergencyAddress,
     EmergencyTransaction, FeeBumpTransaction, RevaultTransaction, SpendTransaction,
-    UnvaultEmergencyTransaction, UnvaultTransaction,
+    UnvaultEmergencyTransaction, UnvaultTransaction, DUST_LIMIT,
 };
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
@@ -615,6 +615,7 @@ pub fn derive_transactions(
 
     // Create and sign a spend transaction
     let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor);
+    let unvault_value = spend_unvault_txin.txout().txout().value;
     let dummy_txo = TxOut::default();
     let cpfp_value = SpendTransaction::cpfp_txout(
         vec![spend_unvault_txin.clone()],
@@ -625,21 +626,47 @@ pub fn derive_transactions(
     )
     .txout()
     .value;
-    let fees = 20_000;
-    let spend_txo = TxOut {
-        // The CPFP output value won't be > 150k sats for our parameters
-        value: spend_unvault_txin.txout().txout().value - cpfp_value - fees,
-        ..TxOut::default()
+    let change_value = unvault_value
+        .checked_sub(cpfp_value)
+        .expect("We would never create such a tx chain (dust)");
+    // The overhead incurred to the value of the CPFP output by the change output
+    // See https://github.com/revault/practical-revault/blob/master/transactions.md#spend_tx
+    const P2WSH_TXO_WEIGHT: u64 = 43 * 4;
+    let cpfp_change_overhead = 16 * P2WSH_TXO_WEIGHT;
+    let fees = 10_000;
+    let (spend_txo, change_txo) = if unvault_value
+        > change_value + cpfp_value + cpfp_change_overhead + fees
+        && change_value > DUST_LIMIT + fees + cpfp_change_overhead
+    {
+        (
+            TxOut {
+                value: unvault_value - cpfp_value - cpfp_change_overhead - change_value - fees,
+                ..TxOut::default()
+            },
+            Some(DepositTxOut::new(
+                Amount::from_sat(change_value - cpfp_value - fees),
+                &der_deposit_descriptor,
+            )),
+        )
+    } else {
+        (
+            TxOut {
+                value: unvault_value - cpfp_value - fees,
+                ..TxOut::default()
+            },
+            None,
+        )
     };
     let mut spend_tx = SpendTransaction::new(
         vec![spend_unvault_txin.clone()],
         vec![SpendTxOut::new(spend_txo.clone())],
-        None,
+        change_txo,
         &der_cpfp_descriptor,
         0,
         true,
     )
     .expect("Amounts ok");
+    roundtrip!(spend_tx, SpendTransaction);
     let spend_tx_sighash = spend_tx
         .signature_hash(0, SigHashType::All)
         .expect("Input exists");
@@ -655,7 +682,9 @@ pub fn derive_transactions(
             .collect::<Vec<bip32::ExtendedPrivKey>>(),
         Some(child_number),
     )?;
+    roundtrip!(spend_tx, SpendTransaction);
     spend_tx.finalize(&secp)?;
+    roundtrip!(spend_tx, SpendTransaction);
 
     // We can't create a dust output with the Spend
     let dust_txo = TxOut {
