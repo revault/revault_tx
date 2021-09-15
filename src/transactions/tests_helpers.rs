@@ -147,6 +147,21 @@ fn desc_san_check<P: MiniscriptKey>(desc: &Descriptor<P>) -> Result<(), ScriptCr
     }
 }
 
+macro_rules! roundtrip {
+    ($tx:ident, $tx_type:ident) => {
+        #[cfg(feature = "use-serde")]
+        {
+            let serialized_tx = serde_json::to_string(&$tx).unwrap();
+            let deserialized_tx = serde_json::from_str(&serialized_tx).unwrap();
+            assert_eq!($tx, deserialized_tx);
+        }
+
+        let serialized_tx = $tx.to_string();
+        let deserialized_tx: $tx_type = FromStr::from_str(&serialized_tx).unwrap();
+        assert_eq!($tx, deserialized_tx);
+    };
+}
+
 /// Derive transactions for a given deployment configuration, asserting some invariants
 pub fn derive_transactions(
     n_stk: usize,
@@ -367,6 +382,7 @@ pub fn derive_transactions(
         &stakeholders_priv,
         Some(child_number),
     )?;
+    roundtrip!(emergency_tx, EmergencyTransaction);
     satisfy_transaction_input(
         &secp,
         &mut emergency_tx,
@@ -375,7 +391,9 @@ pub fn derive_transactions(
         &vec![feebump_xpriv],
         None,
     )?;
+    roundtrip!(emergency_tx, EmergencyTransaction);
     emergency_tx.finalize(&secp)?;
+    roundtrip!(emergency_tx, EmergencyTransaction);
 
     // Create but don't sign the unvaulting transaction until all revaulting transactions
     // are finalized
@@ -386,6 +404,7 @@ pub fn derive_transactions(
         &der_cpfp_descriptor,
         0,
     )?;
+    roundtrip!(unvault_tx, UnvaultTransaction);
 
     assert_eq!(h_unvault, unvault_tx);
     let unvault_value = unvault_tx.psbt().global.unsigned_tx.output[0].value;
@@ -399,6 +418,7 @@ pub fn derive_transactions(
     // We can create it entirely without the feebump input
     let mut cancel_tx_without_feebump =
         CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0)?;
+    roundtrip!(cancel_tx_without_feebump, CancelTransaction);
     assert_eq!(h_cancel, cancel_tx_without_feebump);
     assert_eq!(
         cancel_tx_without_feebump
@@ -427,7 +447,9 @@ pub fn derive_transactions(
         &stakeholders_priv,
         Some(child_number),
     )?;
+    roundtrip!(cancel_tx_without_feebump, CancelTransaction);
     cancel_tx_without_feebump.finalize(&secp).unwrap();
+    roundtrip!(cancel_tx_without_feebump, CancelTransaction);
     // We can reuse the ANYONE_ALL sighash for the one with the feebump input
     let feebump_txin = FeeBumpTxIn::new(
         OutPoint {
@@ -467,6 +489,7 @@ pub fn derive_transactions(
         &stakeholders_priv,
         Some(child_number),
     )?;
+    roundtrip!(cancel_tx, CancelTransaction);
     satisfy_transaction_input(
         &secp,
         &mut cancel_tx,
@@ -475,7 +498,9 @@ pub fn derive_transactions(
         &vec![feebump_xpriv],
         None, // No derivation path for the feebump key
     )?;
+    roundtrip!(cancel_tx, CancelTransaction);
     cancel_tx.finalize(&secp)?;
+    roundtrip!(cancel_tx, CancelTransaction);
 
     // We can create it without the feebump input
     let mut unemergency_tx_no_feebump = UnvaultEmergencyTransaction::new(
@@ -484,6 +509,7 @@ pub fn derive_transactions(
         emergency_address.clone(),
         0,
     )?;
+    roundtrip!(unemergency_tx_no_feebump, UnvaultEmergencyTransaction);
     assert_eq!(h_unemer, unemergency_tx_no_feebump);
     assert_eq!(
         unemergency_tx_no_feebump.emergency_outpoint(),
@@ -509,7 +535,9 @@ pub fn derive_transactions(
         &stakeholders_priv,
         Some(child_number),
     )?;
+    roundtrip!(unemergency_tx_no_feebump, UnvaultEmergencyTransaction);
     unemergency_tx_no_feebump.finalize(&secp)?;
+    roundtrip!(unemergency_tx_no_feebump, UnvaultEmergencyTransaction);
 
     let feebump_txin = FeeBumpTxIn::new(
         OutPoint {
@@ -524,6 +552,7 @@ pub fn derive_transactions(
         emergency_address,
         0,
     )?;
+    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     assert_eq!(
         unemergency_tx.emergency_outpoint(),
         OutPoint {
@@ -540,6 +569,7 @@ pub fn derive_transactions(
         &stakeholders_priv,
         Some(child_number),
     )?;
+    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     // We don't have satisfied the feebump input yet!
     // Note that we clone because Miniscript's finalize() will wipe the PSBT input..
     match unemergency_tx.clone().finalize(&secp) {
@@ -563,7 +593,9 @@ pub fn derive_transactions(
         &vec![feebump_xpriv],
         None,
     )?;
+    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     unemergency_tx.finalize(&secp)?;
+    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
 
     // Now we can sign the unvault
     let unvault_tx_sighash = unvault_tx
@@ -577,8 +609,9 @@ pub fn derive_transactions(
         &stakeholders_priv,
         Some(child_number),
     )?;
-
+    roundtrip!(unvault_tx, UnvaultTransaction);
     unvault_tx.finalize(&secp)?;
+    roundtrip!(unvault_tx, UnvaultTransaction);
 
     // Create and sign a spend transaction
     let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor);
@@ -703,6 +736,7 @@ pub fn derive_transactions(
         0,
         true,
     )?;
+    roundtrip!(spend_tx, SpendTransaction);
     assert_eq!(spend_tx.fees(), fees);
     let mut hash_cache = SigHashCache::new(spend_tx.tx());
     let sighashes: Vec<SigHash> = (0..n_txins)
@@ -727,27 +761,8 @@ pub fn derive_transactions(
             Some(child_number),
         )?
     }
+    roundtrip!(spend_tx, SpendTransaction);
     spend_tx.finalize(&secp)?;
-
-    macro_rules! roundtrip {
-        ($tx:ident, $tx_type:ident) => {
-            #[cfg(feature = "use-serde")]
-            {
-                let serialized_tx = serde_json::to_string(&$tx).unwrap();
-                let deserialized_tx = serde_json::from_str(&serialized_tx).unwrap();
-                assert_eq!($tx, deserialized_tx);
-            }
-
-            let serialized_tx = $tx.to_string();
-            let deserialized_tx: $tx_type = FromStr::from_str(&serialized_tx).unwrap();
-            assert_eq!($tx, deserialized_tx);
-        };
-    }
-
-    roundtrip!(cancel_tx, CancelTransaction);
-    roundtrip!(emergency_tx, EmergencyTransaction);
-    roundtrip!(unvault_tx, UnvaultTransaction);
-    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     roundtrip!(spend_tx, SpendTransaction);
 
     Ok(())
