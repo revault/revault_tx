@@ -44,6 +44,17 @@ impl UnvaultTransaction {
         lock_time: u32,
     ) -> Psbt {
         Psbt {
+            // 1 Unvault, 1 CPFP
+            outputs: vec![
+                PsbtOut {
+                    bip32_derivation: unvault_txout.bip32_derivation().clone(),
+                    ..PsbtOut::default()
+                },
+                PsbtOut {
+                    bip32_derivation: cpfp_txout.bip32_derivation().clone(),
+                    ..PsbtOut::default()
+                },
+            ],
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: TX_VERSION,
@@ -63,8 +74,6 @@ impl UnvaultTransaction {
                 witness_utxo: Some(deposit_txin.into_txout().into_txout()),
                 ..PsbtIn::default()
             }],
-            // 1 Unvault, 1 CPFP
-            outputs: vec![PsbtOut::default(), PsbtOut::default()],
         }
     }
 
@@ -205,6 +214,12 @@ impl UnvaultTransaction {
         let output_count = psbt.global.unsigned_tx.output.len();
         if output_count != 2 {
             return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
+        }
+
+        for output in psbt.outputs.iter() {
+            if output.bip32_derivation.is_empty() {
+                return Err(PsbtValidationError::InvalidOutputField(output.clone()).into());
+            }
         }
 
         let input_count = psbt.global.unsigned_tx.input.len();

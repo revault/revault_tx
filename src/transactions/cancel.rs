@@ -58,6 +58,12 @@ impl CancelTransaction {
         }
 
         Psbt {
+            inputs: psbtins,
+            // Deposit txout
+            outputs: vec![PsbtOut {
+                bip32_derivation: deposit_txo.bip32_derivation().clone(),
+                ..PsbtOut::default()
+            }],
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: TX_VERSION,
@@ -70,9 +76,6 @@ impl CancelTransaction {
                 proprietary: BTreeMap::new(),
                 unknown: BTreeMap::new(),
             },
-            inputs: psbtins,
-            // Deposit txout
-            outputs: vec![PsbtOut::default()],
         }
     }
 
@@ -150,6 +153,12 @@ impl CancelTransaction {
         let output_count = psbt.global.unsigned_tx.output.len();
         if output_count != 1 {
             return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
+        }
+
+        for output in psbt.outputs.iter() {
+            if output.bip32_derivation.is_empty() {
+                return Err(PsbtValidationError::InvalidOutputField(output.clone()).into());
+            }
         }
 
         // Deposit txo is P2WSH

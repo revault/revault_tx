@@ -486,6 +486,7 @@ pub fn transaction_chain<C: secp256k1::Verification>(
 pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
     deposit_txins: Vec<(OutPoint, Amount, ChildNumber)>,
     spend_txos: Vec<SpendTxOut>,
+    change_txo: Option<DepositTxOut>,
     deposit_descriptor: &DepositDescriptor,
     unvault_descriptor: &UnvaultDescriptor,
     cpfp_descriptor: &CpfpDescriptor,
@@ -515,6 +516,7 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
     SpendTransaction::new(
         unvault_txins,
         spend_txos,
+        change_txo,
         &der_cpfp_descriptor,
         lock_time,
         check_insane_fees,
@@ -547,6 +549,7 @@ mod tests {
             "4bb4545bb4bc8853cb03e42984d677fbe880c81e7d95609360eed0d8f45b52f8:0",
         )
         .unwrap();
+
         let feebump_value = 56730;
         let unvaults_spent = vec![
             (
@@ -578,7 +581,6 @@ mod tests {
                 234_631,
             ),
         ];
-
         // Test the dust limit
         assert_eq!(
             derive_transactions(
@@ -690,13 +692,13 @@ mod tests {
         let emergency_tx: EmergencyTransaction = serde_json::from_str(&emergency_psbt_str).unwrap();
         assert_eq!(serialize_hex(emergency_tx.tx()), "0200000002b9718d232d4f5356e373ad53ba5a22a565ffa6f34f0e50e715fb96c184ae3b0c0000000000fdffffff68dac96d3721c2365a462cfd6d96c8431468ff0469e4b40036a03ba931d6b73b0000000000fdffffff011876f5050000000022002000dd4b44d7d1e25b01a207a1118f8eecd5d201670a3af6f8df5c4430d637403600000000");
 
-        let unvault_psbt_str = "\"cHNidP8BAIkCAAAAAV+HumeWIAtm1c9hvTgUme25aogn3EvF1+vV7KYKKKdYAAAAAAD9////AkANAwAAAAAAIgAgXA0s+qynDjinXOmpJ/Qhuj87xEB7YcLEVdz7OX5B+l8wdQAAAAAAACIAIKj/nBsC9abIRvrVxbaHRVSZNtMZjsOSosgybAbmDAtwAAAAAAABASuIlAMAAAAAACIAIKI1Ly2kCXvsF5kWmgyAGmH2th23XwgbIDHRo7sHndheAQMEAQAAAAEFR1IhAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/IQI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezFKuIgYCPk36mDgeQLxi2TtgtzljXqT7QdjF5bZaLycvWjRFHswIeMYQoQoAAAAiBgLZP7Ix2AeYL+51Eq9JNuVJZngp/u87a4pQ+WigWITmfwgbQV1zCgAAAAAAAA==\"";
+        let unvault_psbt_str = "\"cHNidP8BAIkCAAAAAfmN22Yg3hsR6wgkPWJ3tSpO40wY5fgINkSlClxgasy7AAAAAAD9////AkANAwAAAAAAIgAgfPlPYs+3NKdo6gu1ITRhWGaZ77RL/0n3/rfdM0nHDKAwdQAAAAAAACIAIBqfyVGG6ozM3AZyeJhKeLNsjlt7AuXs89eFQSUEgx3xAAAAAAABASuIlAMAAAAAACIAIEpy7LLM5Gsjv384BJqpdhVyxzoC96snQbKN/Pl4yFqSAQjaBABHMEQCIG7ue0n/D+JrDMknOV2Up/NyLh06p2tQTHoEZAAYYoCfAiA0fZxErfzZFgLpSV/f1uvCArcXStNUnhConPYBvEmwcgFHMEQCIALfcLNVtS1zZ/AH/5JGVPlUyNGB4tAWOAvJm5DFCFkPAiAxw8oPariZ4OqNZH/PiSQytLInnsYMmzY8khNtDWS7WQFHUiED2l1MSok0kn+im8fepkDk9JJ4kmz7S7PJbLp2MHUScDshAqg1gjG67ft3qNh1U2hWCYumJvmnWsb96aAQU3BKIwiOUq4AIgICCu8X76xDyD8Eurt1XmKvjamdwezV7UxLGsoa8yfMj2cI/w6LrAoAAAAiAgKoNYIxuu37d6jYdVNoVgmLpib5p1rG/emgEFNwSiMIjgjAoMvqCgAAACICAulOlir/rBPSuqc9Z7mGFUE1ekHvzGRuDA2sjFgPGzZ+CDooLAQKAAAAIgIDncUagEr+XYCSpDykd7a6WrIa1q58GBTGSMVms8Dk/1YI0jxctQoAAAAiAgPaXUxKiTSSf6Kbx96mQOT0kniSbPtLs8lsunYwdRJwOwhMrobwCgAAAAAiAgOdxRqASv5dgJKkPKR3trpashrWrnwYFMZIxWazwOT/VgjSPFy1CgAAAAA=\"";
         let unvault_tx: UnvaultTransaction = serde_json::from_str(&unvault_psbt_str).unwrap();
-        assert_eq!(serialize_hex(unvault_tx.tx()), "02000000015f87ba6796200b66d5cf61bd381499edb96a8827dc4bc5d7ebd5eca60a28a7580000000000fdffffff02400d0300000000002200205c0d2cfaaca70e38a75ce9a927f421ba3f3bc4407b61c2c455dcfb397e41fa5f3075000000000000220020a8ff9c1b02f5a6c846fad5c5b68745549936d3198ec392a2c8326c06e60c0b7000000000");
+        assert_eq!(serialize_hex(unvault_tx.tx()), "0200000001f98ddb6620de1b11eb08243d6277b52a4ee34c18e5f8083644a50a5c606accbb0000000000fdffffff02400d0300000000002200207cf94f62cfb734a768ea0bb5213461586699efb44bff49f7feb7dd3349c70ca030750000000000002200201a9fc95186ea8cccdc067278984a78b36c8e5b7b02e5ecf3d785412504831df100000000");
 
-        let cancel_psbt_str = "\"cHNidP8BAIcCAAAAAveVYT6dSrDTzQekeDseTQmpQChdIx9Fm/7yvPBvdu7HAAAAAAD9////4Mnw2eEzRAQN9WGGOBC1JjSnsKwwMSWyy5W8aSKNSi0AAAAAAP3///8B0soCAAAAAAAiACCiNS8tpAl77BeZFpoMgBph9rYdt18IGyAx0aO7B53YXgAAAAAAAQErQA0DAAAAAAAiACBcDSz6rKcOOKdc6akn9CG6PzvEQHthwsRV3Ps5fkH6XwEDBIEAAAABBashAzdYEJAzGF/LD6dywOpGk2BGFzVLcnkTZ5mTKtqZ//JirFGHZHapFPw384BoV7hrB0f9JGslZsJ1uyCsiKxrdqkUzzp61qJKQsBvVgSS98GIY+FvRdmIrGyTUodnUiEC8j/Vvs0fXs+g2kudjYEthMFAUzsMlF4Sx6XButeSclohAhiZCgN97zL8xRfmhrw3aDYZ48dco/n6iUEGNceCxC4XUq8DtYQAsmgiBgIYmQoDfe8y/MUX5oa8N2g2GePHXKP5+olBBjXHgsQuFwjDH9MoCgAAACIGAj5N+pg4HkC8Ytk7YLc5Y16k+0HYxeW2Wi8nL1o0RR7MCHjGEKEKAAAAIgYC2T+yMdgHmC/udRKvSTblSWZ4Kf7vO2uKUPlooFiE5n8IG0FdcwoAAAAiBgLyP9W+zR9ez6DaS52NgS2EwUBTOwyUXhLHpcG615JyWgjUBchUCgAAACIGAzdYEJAzGF/LD6dywOpGk2BGFzVLcnkTZ5mTKtqZ//JiCNB4cCcKAAAAAAEBH5rdAAAAAAAAFgAUn+xCi99KzUC3VoIqlu43HKa3qtYBAwQBAAAAAAA=\"";
+        let cancel_psbt_str = "\"cHNidP8BAIcCAAAAAga9mxcLxWkl14cJX/shnW6eNUirrbe283Qs6JUfLv5zAAAAAAD9////sakwQeyflAE0MNndeR6Wyku71OiGsSWO1F7dNVztf8MAAAAAAP3///8B6MoCAAAAAAAiACBKcuyyzORrI79/OASaqXYVcsc6AverJ0Gyjfz5eMhakgAAAAAAAQErQA0DAAAAAAAiACB8+U9iz7c0p2jqC7UhNGFYZpnvtEv/Sff+t90zSccMoAEI/YMBBkgwRQIhAPm2zOTn/40LoN6Z8yhrUJmRgQ/93aGSqK8zdI2fqLyTAiB8M077JO8te/obE5J6SQydCPzPijYOAvG6Jkh64wJQyoEhAqg1gjG67ft3qNh1U2hWCYumJvmnWsb96aAQU3BKIwiOSDBFAiEA+gg7YUf2yPSDGKYufuLPaDRfDoqM+uqoEG3hfhi2FtECIG2giBUh4bcXNM+SbBTCO+fO0Oph/rcW1dYgy+6Nh48XgSED2l1MSok0kn+im8fepkDk9JJ4kmz7S7PJbLp2MHUScDsAqiEDncUagEr+XYCSpDykd7a6WrIa1q58GBTGSMVms8Dk/1asUYdkdqkUs3BYseNX1OvVfTMOlicdQe2aLpSIrGt2qRTRJAOLrxv69KTq6SNFbJ84QcsD04isbJNSh2dSIQLpTpYq/6wT0rqnPWe5hhVBNXpB78xkbgwNrIxYDxs2fiECCu8X76xDyD8Eurt1XmKvjamdwezV7UxLGsoa8yfMj2dSrwL1X7JoAAEBH5rdAAAAAAAAFgAUqFSKd3C3UEOLeYuRrrL/KOchvrUBCGsCRzBEAiAW/jTe7KhJihRTJKS7+8mczqfrxfUTVkzbYbWRDcYTJQIgQE7sBAgA1iGi6MoPnjXpqaofgJq4skvm0lWUmOQgVYQBIQOqRnFo/xOr8r6If80sZZeE0Z8IDc2hsPGUCELRZWb4ygAiAgKoNYIxuu37d6jYdVNoVgmLpib5p1rG/emgEFNwSiMIjgjAoMvqCgAAACICA9pdTEqJNJJ/opvH3qZA5PSSeJJs+0uzyWy6djB1EnA7CEyuhvAKAAAAAA==\"";
         let cancel_tx: CancelTransaction = serde_json::from_str(&cancel_psbt_str).unwrap();
-        assert_eq!(serialize_hex(cancel_tx.tx()), "0200000002f795613e9d4ab0d3cd07a4783b1e4d09a940285d231f459bfef2bcf06f76eec70000000000fdffffffe0c9f0d9e13344040df561863810b52634a7b0ac303125b2cb95bc69228d4a2d0000000000fdffffff01d2ca020000000000220020a2352f2da4097bec1799169a0c801a61f6b61db75f081b2031d1a3bb079dd85e00000000");
+        assert_eq!(serialize_hex(cancel_tx.tx()), "020000000206bd9b170bc56925d787095ffb219d6e9e3548abadb7b6f3742ce8951f2efe730000000000fdffffffb1a93041ec9f94013430d9dd791e96ca4bbbd4e886b1258ed45edd355ced7fc30000000000fdffffff01e8ca0200000000002200204a72ecb2cce46b23bf7f38049aa9761572c73a02f7ab2741b28dfcf978c85a9200000000");
 
         let unemergency_psbt_str = "\"cHNidP8BAIcCAAAAAveVYT6dSrDTzQekeDseTQmpQChdIx9Fm/7yvPBvdu7HAAAAAAD9////4Mnw2eEzRAQN9WGGOBC1JjSnsKwwMSWyy5W8aSKNSi0AAAAAAP3///8B0soCAAAAAAAiACCiNS8tpAl77BeZFpoMgBph9rYdt18IGyAx0aO7B53YXgAAAAAAAQErQA0DAAAAAAAiACBcDSz6rKcOOKdc6akn9CG6PzvEQHthwsRV3Ps5fkH6XyICAj5N+pg4HkC8Ytk7YLc5Y16k+0HYxeW2Wi8nL1o0RR7MRzBEAiA/lmAObA+fV+HuMqDB5NT4rQ6z++xj6QpidJw5h7AJWAIgb4pmu9ufwM8Ou8lDCxszPw8XbTzM7ZbqEh5MazBIk5iBIgIC2T+yMdgHmC/udRKvSTblSWZ4Kf7vO2uKUPlooFiE5n9HMEQCIFX1NO7S1UsxOUiUFKD8+vbWmql6E4gd240MLs0Ht7A/AiAXinxaCoQ36FokIQbSPCaYI6OJDPsTM3YfemzoITvKHYEBAwSBAAAAAQWrIQM3WBCQMxhfyw+ncsDqRpNgRhc1S3J5E2eZkyramf/yYqxRh2R2qRT8N/OAaFe4awdH/SRrJWbCdbsgrIisa3apFM86etaiSkLAb1YEkvfBiGPhb0XZiKxsk1KHZ1IhAvI/1b7NH17PoNpLnY2BLYTBQFM7DJReEselwbrXknJaIQIYmQoDfe8y/MUX5oa8N2g2GePHXKP5+olBBjXHgsQuF1KvA7WEALJoIgYCGJkKA33vMvzFF+aGvDdoNhnjx1yj+fqJQQY1x4LELhcIwx/TKAoAAAAiBgI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezAh4xhChCgAAACIGAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/CBtBXXMKAAAAIgYC8j/Vvs0fXs+g2kudjYEthMFAUzsMlF4Sx6XButeScloI1AXIVAoAAAAiBgM3WBCQMxhfyw+ncsDqRpNgRhc1S3J5E2eZkyramf/yYgjQeHAnCgAAAAABAR+a3QAAAAAAABYAFJ/sQovfSs1At1aCKpbuNxymt6rWAQMEAQAAAAAA\"";
         let unemergency_tx: UnvaultEmergencyTransaction =

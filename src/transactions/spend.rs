@@ -46,6 +46,7 @@ impl SpendTransaction {
     pub fn new(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
+        change_txout: Option<DepositTxOut>,
         cpfp_descriptor: &DerivedCpfpDescriptor,
         lock_time: u32,
         insane_fee_check: bool,
@@ -61,6 +62,7 @@ impl SpendTransaction {
         let cpfp_txo = SpendTransaction::cpfp_txout(
             unvault_inputs.clone(),
             spend_txouts.clone(),
+            change_txout.clone(),
             cpfp_descriptor,
             lock_time,
         );
@@ -75,22 +77,47 @@ impl SpendTransaction {
         let mut value_in: u64 = 0;
         let mut value_out: u64 = 0;
 
-        let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
+        let mut txos = if change_txout.is_some() {
+            Vec::with_capacity(spend_txouts.len() + 2)
+        } else {
+            Vec::with_capacity(spend_txouts.len() + 1)
+        };
+        let mut psbtouts = Vec::with_capacity(txos.len());
         txos.push(cpfp_txo.txout().clone());
-        for spend_txout in spend_txouts {
-            let txo = match spend_txout {
-                SpendTxOut::Destination(ref txo) => txo.clone(),
-                SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
-            };
+        psbtouts.push(PsbtOut {
+            bip32_derivation: cpfp_txo.bip32_derivation().clone(),
+            ..PsbtOut::default()
+        });
+        for spend_txout in spend_txouts.into_iter() {
+            let txo = spend_txout.into_txout();
 
             if txo.value < txo.script_pubkey.dust_value().as_sat() {
                 return Err(TransactionCreationError::Dust);
             }
 
             value_out += txo.value;
+
             txos.push(txo);
+            psbtouts.push(PsbtOut::default());
         }
-        let psbtouts = txos.iter().map(|_| PsbtOut::default()).collect();
+
+        if let Some(change_txout) = change_txout {
+            let psbtout = PsbtOut {
+                bip32_derivation: change_txout.bip32_derivation().clone(),
+                ..PsbtOut::default()
+            };
+
+            let txo = change_txout.into_txout();
+
+            if txo.value < txo.script_pubkey.dust_value().as_sat() {
+                return Err(TransactionCreationError::Dust);
+            }
+
+            value_out += txo.value;
+
+            txos.push(txo);
+            psbtouts.push(psbtout);
+        }
 
         let psbt = Psbt {
             global: PsbtGlobal {
@@ -157,16 +184,23 @@ impl SpendTransaction {
     pub fn cpfp_txout(
         unvault_inputs: Vec<UnvaultTxIn>,
         spend_txouts: Vec<SpendTxOut>,
+        change_txout: Option<DepositTxOut>,
         cpfp_descriptor: &DerivedCpfpDescriptor,
         lock_time: u32,
     ) -> CpfpTxOut {
         let mut txos = Vec::with_capacity(spend_txouts.len() + 1);
         let dummy_cpfp_txo = CpfpTxOut::new(Amount::from_sat(u64::MAX), &cpfp_descriptor);
         txos.push(dummy_cpfp_txo.txout().clone());
-        txos.extend(spend_txouts.iter().map(|spend_txout| match spend_txout {
-            SpendTxOut::Destination(ref txo) => txo.clone(),
-            SpendTxOut::Change(ref txo) => txo.clone().into_txout(),
-        }));
+        txos.extend(
+            spend_txouts
+                .into_iter()
+                .map(|spend_txout| spend_txout.into_txout()),
+        );
+
+        if let Some(change_txout) = change_txout {
+            txos.push(change_txout.into_txout());
+        }
+
         let dummy_tx = Transaction {
             version: TX_VERSION,
             lock_time,
