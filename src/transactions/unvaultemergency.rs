@@ -2,8 +2,7 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, RevaultTransaction, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, REVAULTING_TX_FEERATE,
-        TX_VERSION,
+        utils, RevaultTransaction, EMER_TX_FEERATE, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION,
     },
     txins::*,
     txouts::*,
@@ -111,7 +110,7 @@ impl UnvaultEmergencyTransaction {
             .checked_add(unvault_input.txout().max_sat_weight())
             .expect("Weight computation bug");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = REVAULTING_TX_FEERATE
+        let fees = EMER_TX_FEERATE
             .checked_mul(total_weight)
             .expect("Weight computation bug");
         // Without the feebump input, it should not be reachable.

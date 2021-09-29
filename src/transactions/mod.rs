@@ -40,9 +40,11 @@ pub const UNVAULT_CPFP_VALUE: u64 = 30000;
 /// The feerate, in sat / W, to create the unvaulting transactions with.
 pub const UNVAULT_TX_FEERATE: u64 = 6;
 
-/// The feerate, in sat / W, to create the revaulting transactions (both emergency and the
-/// cancel) with.
-pub const REVAULTING_TX_FEERATE: u64 = 22;
+/// The feerate, in sat / WU, to create the Cancel transaction with.
+pub const CANCEL_TX_FEERATE: u64 = 22;
+
+/// The feerate, in sat / WU, to create the Emergency transactions with.
+pub const EMER_TX_FEERATE: u64 = 75;
 
 /// We refuse to create a stakeholder-pre-signed transaction that would create an output worth
 /// less than this amount of sats. This is worth 30€ for 15k€/btc.

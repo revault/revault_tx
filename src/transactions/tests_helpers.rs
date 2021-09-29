@@ -310,10 +310,10 @@ pub fn derive_transactions(
         }
     );
 
-    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
+    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 75 is the feerate is sat/WU
     assert_eq!(
         emergency_tx_no_feebump.fees(),
-        (376 + deposit_txin.txout().max_sat_weight() as u64) * 22,
+        (376 + deposit_txin.txout().max_sat_weight() as u64) * 75,
     );
     // We cannot get a sighash for a non-existing input
     assert_eq!(
@@ -519,10 +519,10 @@ pub fn derive_transactions(
         }
     );
 
-    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
+    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 75 is the feerate is sat/WU
     assert_eq!(
         unemergency_tx_no_feebump.fees(),
-        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
+        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 75,
     );
     let unemergency_tx_sighash = unemergency_tx_no_feebump
         .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
