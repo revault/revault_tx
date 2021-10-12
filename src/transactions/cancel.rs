@@ -2,7 +2,7 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, RevaultTransaction, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, REVAULTING_TX_FEERATE,
+        utils, RevaultTransaction, CANCEL_TX_FEERATE, INSANE_FEES, MAX_STANDARD_TX_WEIGHT,
         TX_VERSION,
     },
     txins::*,
@@ -114,7 +114,7 @@ impl CancelTransaction {
             .checked_add(unvault_input.txout().max_sat_weight())
             .expect("Properly computed weight won't overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = REVAULTING_TX_FEERATE
+        let fees = CANCEL_TX_FEERATE
             .checked_mul(total_weight)
             .expect("Properly computed weight won't overflow");
         // Without the feebump input, it should not be reachable.
