@@ -701,6 +701,7 @@ mod tests {
                 feebump_prevout,
                 feebump_value,
                 unvaults_spent.clone(),
+                true,
                 &secp
             )
             .unwrap_err()
@@ -717,6 +718,7 @@ mod tests {
             feebump_prevout,
             feebump_value,
             unvaults_spent.clone(),
+            true,
             &secp,
         )
         .expect_err("Unclean CSV");
@@ -731,6 +733,7 @@ mod tests {
             feebump_prevout,
             feebump_value,
             unvaults_spent.clone(),
+            true,
             &secp,
         )
         .expect(&format!(
@@ -747,6 +750,7 @@ mod tests {
             feebump_prevout,
             feebump_value,
             unvaults_spent.clone(),
+            true,
             &secp,
         )
         .expect(&format!(
@@ -763,6 +767,7 @@ mod tests {
             feebump_prevout,
             feebump_value,
             unvaults_spent.clone(),
+            true,
             &secp,
         )
         .expect(&format!(
@@ -778,11 +783,29 @@ mod tests {
             100 * COIN_VALUE,
             feebump_prevout,
             feebump_value,
-            unvaults_spent,
+            unvaults_spent.clone(),
+            true,
             &secp,
         )
         .expect(&format!(
             "Tx chain with 38 stakeholders, 5 manager, {} csv, 100_000_000_000 deposit",
+            csv
+        ));
+        // 100 BTC, no cosigning server
+        derive_transactions(
+            38,
+            5,
+            csv,
+            deposit_prevout,
+            100 * COIN_VALUE,
+            feebump_prevout,
+            feebump_value,
+            unvaults_spent,
+            false,
+            &secp,
+        )
+        .expect(&format!(
+            "Tx chain with 38 stakeholders, 5 manager, {} csv, 100_000_000_000 deposit, no cosig",
             csv
         ));
     }

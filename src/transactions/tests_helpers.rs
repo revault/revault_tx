@@ -30,6 +30,7 @@ fn get_random_privkey(rng: &mut fastrand::Rng) -> bip32::ExtendedPrivKey {
 fn get_participants_sets(
     n_stk: usize,
     n_man: usize,
+    with_cosig_servers: bool,
     secp: &secp256k1::Secp256k1<secp256k1::All>,
 ) -> (
     (Vec<bip32::ExtendedPrivKey>, Vec<DescriptorPublicKey>),
@@ -74,13 +75,15 @@ fn get_participants_sets(
             wildcard: Wildcard::Unhardened,
         }));
 
-        cosigners_priv.push(get_random_privkey(&mut rng));
-        cosigners.push(DescriptorPublicKey::XPub(DescriptorXKey {
-            origin: None,
-            xkey: bip32::ExtendedPubKey::from_private(&secp, &cosigners_priv[i]),
-            derivation_path: bip32::DerivationPath::from(vec![]),
-            wildcard: Wildcard::Unhardened,
-        }));
+        if with_cosig_servers {
+            cosigners_priv.push(get_random_privkey(&mut rng));
+            cosigners.push(DescriptorPublicKey::XPub(DescriptorXKey {
+                origin: None,
+                xkey: bip32::ExtendedPubKey::from_private(&secp, &cosigners_priv[i]),
+                derivation_path: bip32::DerivationPath::from(vec![]),
+                wildcard: Wildcard::Unhardened,
+            }));
+        }
     }
 
     (
@@ -173,6 +176,7 @@ pub fn derive_transactions(
     feebump_value: u64,
     // Outpoint and amount of inputs of a Spend
     unvault_spends: Vec<(OutPoint, u64)>,
+    with_cosig_servers: bool,
     secp: &secp256k1::Secp256k1<secp256k1::All>,
 ) -> Result<(), Error> {
     // Let's get the 10th key of each
@@ -184,7 +188,7 @@ pub fn derive_transactions(
         (_, mancpfp),
         (stakeholders_priv, stakeholders),
         (cosigners_priv, cosigners),
-    ) = get_participants_sets(n_stk, n_man, secp);
+    ) = get_participants_sets(n_stk, n_man, with_cosig_servers, secp);
 
     // Get the script descriptors for the txos we're going to create
     let unvault_descriptor = UnvaultDescriptor::new(
