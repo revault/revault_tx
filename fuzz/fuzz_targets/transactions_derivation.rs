@@ -41,7 +41,7 @@ fuzz_target!(|config: Config| {
     };
     let feebump_prevout = OutPoint {
         txid: Txid::from_slice(&config.feebump_txid).unwrap(),
-        vout: config.deposit_vout,
+        vout: config.feebump_vout,
     };
     let unvault_spends = config
         .unvault_spends
