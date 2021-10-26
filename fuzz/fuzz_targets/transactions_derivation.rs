@@ -15,6 +15,7 @@ use revault_tx::{
 struct Config {
     n_stk: usize,
     n_man: usize,
+    with_cosig_servers: bool,
     csv: u32,
     deposit_txid: [u8; 32],
     deposit_vout: u32,
@@ -41,7 +42,7 @@ fuzz_target!(|config: Config| {
     };
     let feebump_prevout = OutPoint {
         txid: Txid::from_slice(&config.feebump_txid).unwrap(),
-        vout: config.deposit_vout,
+        vout: config.feebump_vout,
     };
     let unvault_spends = config
         .unvault_spends
@@ -66,6 +67,7 @@ fuzz_target!(|config: Config| {
         feebump_prevout,
         config.feebump_value,
         unvault_spends,
+        config.with_cosig_servers,
         &SECP256K1,
     )
     .unwrap_or_else(|_| ());

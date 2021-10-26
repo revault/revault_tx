@@ -293,7 +293,7 @@ macro_rules! unvault_desc_checks {
     ($stakeholders:ident,$managers:ident, $managers_threshold:ident, $cosigners:ident, $csv_value:ident) => {
         if $stakeholders.is_empty()
             || $managers.is_empty()
-            || $cosigners.len() != $stakeholders.len()
+            || !$cosigners.is_empty() && $cosigners.len() != $stakeholders.len()
         {
             return Err(ScriptCreationError::BadParameters);
         }
@@ -329,24 +329,21 @@ macro_rules! unvault_desc {
             .collect::<Vec<Policy<_>>>();
         let stakeholders_thres = Policy::Threshold(pubkeys.len(), pubkeys);
 
-        pubkeys = $cosigners
-            .into_iter()
-            .map(Policy::Key)
-            .collect::<Vec<Policy<_>>>();
-        let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
+        let managers_path = if $cosigners.is_empty() {
+            Policy::And(vec![spenders_thres, Policy::Older($csv_value)])
+        } else {
+            pubkeys = $cosigners
+                .into_iter()
+                .map(Policy::Key)
+                .collect::<Vec<Policy<_>>>();
+            let cosigners_thres = Policy::Threshold(pubkeys.len(), pubkeys);
+            let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older($csv_value)]);
 
-        let cosigners_and_csv = Policy::And(vec![cosigners_thres, Policy::Older($csv_value)]);
+            Policy::And(vec![spenders_thres, cosigners_and_csv])
+        };
 
-        let managers_and_cosigners_and_csv = Policy::And(vec![spenders_thres, cosigners_and_csv]);
-
-        let policy = Policy::Or(vec![
-            (1, stakeholders_thres),
-            (9, managers_and_cosigners_and_csv),
-        ]);
-
-        // This handles the non-safe or malleable cases.
+        let policy = Policy::Or(vec![(1, stakeholders_thres), (9, managers_path)]);
         let ms = policy.compile::<Segwitv0>()?;
-
         Descriptor::new_wsh(ms)?
     }};
 }
@@ -521,25 +518,22 @@ fn unvault_descriptor_managers_threshold<Pk: MiniscriptKey>(
             assert_eq!(subs.len(), 2);
 
             // The 'mans_branch' can be identified as the one containing the CSV. It is always an
-            // 'and()' of CSV + Cosigning Servers + Managers (the latter being potentially a thresh)
+            // 'and()' of CSV + Managers (the latter being potentially a thresh) and optionally
+            // along with Cosigning Servers
             for sub in subs {
                 match sub {
                     SemanticPolicy::Threshold(k, ref subs)
                         if k == &subs.len()
                             && subs
                                 .iter()
-                                .find(|sub| matches!(sub, SemanticPolicy::Older(..)))
-                                .is_some() =>
+                                .any(|sub| matches!(sub, SemanticPolicy::Older(..))) =>
                     {
                         // Now, the mans are either a Threshold or directly pks (in the case the
                         // thresh is an 'and()', pks are flattened in the upper 'and()').
-                        if let Some(thresh) = subs.iter().find_map(|sub| match sub {
+                        return subs.iter().find_map(|sub| match sub {
                             SemanticPolicy::Threshold(k, _) => Some(*k),
                             _ => None,
-                        }) {
-                            return Some(thresh);
-                        }
-                        return None;
+                        });
                     }
                     _ => continue,
                 }
@@ -557,10 +551,45 @@ fn unvault_descriptor_managers_threshold<Pk: MiniscriptKey>(
 impl UnvaultDescriptor {
     /// Get the miniscript descriptors for Unvault outputs.
     ///
-    /// The Unvault policy allows either all the stakeholders to spend, or (the fund managers + the cosigners)
+    /// The Unvault policy allows either all the stakeholders to spend, or the fund managers
     /// after a timelock.
+    /// Depending on the kind of spending policies required, Cosigning Servers may be deployed
+    /// to be used as anti-replay oracles and their signature required along with the managers'.
     ///
     /// # Examples
+    ///
+    /// ## Without Cosigning Servers
+    /// ```rust
+    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorPublicKey, DescriptorTrait}};
+    /// use std::str::FromStr;
+    ///
+    /// let first_stakeholder = DescriptorPublicKey::from_str("xpub6EHLFGpTTiZgHAHfBJ1LoepGFX5iyLeZ6CVtF9HhzeB1dkxLsEfkiJda78EKhSXuo2m8gQwAs4ZAbqaJixFYHMFWTL9DJX1KsAXS2VY5JJx/*").unwrap();
+    /// let second_stakeholder = DescriptorPublicKey::from_str("xpub6F2U61Uh9FNX94mZE6EgdZ3p5Wg8af6MHzFhskEskkAZ9ns2uvsnHBskU47wYY63yiYv8WufvTuHCePwUjK9zhKT1Cce8JGLBptncpvALw6/*").unwrap();
+    /// let third_stakeholder = DescriptorPublicKey::from_str("xpub6Br1DUfrzxTVGo1sanuKDCUmSxDfLRrxLQBqpMqygkQLkQWodoyvvGtUV8Rp3r6d6BNYvedBSU8c7whhn2U8haRVxsWwuQiZ9LoFp7jXPQA/*").unwrap();
+    ///
+    /// let first_manager = DescriptorPublicKey::from_str("xpub6Duq1ob3cQ8Wxees2fTGNK2wTsVjgTPQcKJiPquXY2rQJTDjeCxkXFxTCGhcunFDt26Ddz45KQu7pbLmmUGG2PXTRVx3iDpBPEhdrijJf4U/*").unwrap();
+    /// let second_manager = DescriptorPublicKey::from_str("xpub6EWL35hY9uZZs5Ljt6J3G2ZK1Tu4GPVkFdeGvMknG3VmwVRHhtadCaw5hdRDBgrmx1nPVHWjGBb5xeuC1BfbJzjjcic2gNm1aA7ywWjj7G8/*").unwrap();
+    ///
+    ///
+    /// let unvault_descriptor = scripts::UnvaultDescriptor::new(
+    ///     vec![first_stakeholder, second_stakeholder, third_stakeholder],
+    ///     vec![first_manager, second_manager],
+    ///     1,
+    ///     // No cosigning server
+    ///     vec![],
+    ///     // CSV
+    ///     42
+    /// ).expect("Compiling descriptor");
+    /// println!("Unvault descriptor: {}", unvault_descriptor);
+    ///
+    /// let desc_str = unvault_descriptor.to_string();
+    /// assert_eq!(unvault_descriptor, scripts::UnvaultDescriptor::from_str(&desc_str).unwrap());
+    ///
+    /// let secp = secp256k1::Secp256k1::verification_only();
+    /// println!("Tenth child witness script: {}", unvault_descriptor.derive(bip32::ChildNumber::from(10), &secp).inner().explicit_script());
+    /// ```
+    ///
+    /// ## With Cosigning Servers
     /// ```rust
     /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorPublicKey, DescriptorTrait}};
     /// use std::str::FromStr;
@@ -581,7 +610,7 @@ impl UnvaultDescriptor {
     ///     vec![first_stakeholder, second_stakeholder, third_stakeholder],
     ///     vec![first_manager, second_manager],
     ///     1,
-    ///     // Cosigners
+    ///     // Cosigning servers
     ///     vec![first_cosig, second_cosig, third_cosig],
     ///     // CSV
     ///     42
@@ -596,11 +625,10 @@ impl UnvaultDescriptor {
     /// ```
     ///
     /// # Errors
-    /// - If the given `DescriptorPublickKey`s are not wildcards (can be derived from).
-    /// - If any of the slice contains no public key, or if the number of non_managers public keys is
-    /// not the same as the number of cosigners public key.
-    /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
-    /// bug.
+    /// - If the stakeholders and managers `DescriptorPublickKey`s are not wildcards (can be derived from).
+    /// - If the cosigning servers public keys vector is both not empty and not of the same length
+    ///   as the stakeholders public keys vec
+    /// - If the policy compilation to miniscript failed (eg if a key is used twice)
     pub fn new(
         stakeholders: Vec<DescriptorPublicKey>,
         managers: Vec<DescriptorPublicKey>,
@@ -673,10 +701,40 @@ impl FromStr for UnvaultDescriptor {
 impl DerivedUnvaultDescriptor {
     /// Get the miniscript descriptors for Unvault outputs.
     ///
-    /// The Unvault policy allows either all the stakeholders to spend, or (the fund managers + the cosigners)
+    /// The Unvault policy allows either all the stakeholders to spend, or the fund managers
     /// after a timelock.
+    /// Depending on the kind of spending policies required, Cosigning Servers may be deployed
+    /// to be used as anti-replay oracles and their signature required along with the managers'.
     ///
     /// # Examples
+    ///
+    /// ## Without Cosigning Server
+    /// ```rust
+    /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorTrait}};
+    /// use std::str::FromStr;
+    /// let first_stakeholder = scripts::DerivedPublicKey::from_str("[21212121/21]0372f4bb19ecf98d7849148b4f40375d2fcef624a1b56fef94489ad012bc11b4df").unwrap();
+    /// let second_stakeholder = scripts::DerivedPublicKey::from_str("[10000000/1]036e7ac7a096270f676b53e9917942cf42c6fb9607e3bc09775b5209c908525e80").unwrap();
+    /// let third_stakeholder = scripts::DerivedPublicKey::from_str("[ffffffff/4]03a02e93cf8c47b250075b0af61f96ebd10376c0aaa7635148e889cb2b51c96927").unwrap();
+    ///
+    /// let first_manager = scripts::DerivedPublicKey::from_str("[fafafafa/21]03d33a510c0376a3d19ffa0e1ba71d5ee0cbfebbce2df0996b51262142e943c6f0").unwrap();
+    /// let second_manager = scripts::DerivedPublicKey::from_str("[fafafafa/21]030e7d7e1d8014dc17d63057ffc3ef26590bf237ce50054fb4f612be8e0a0dbe2a").unwrap();
+    ///
+    /// let unvault_descriptor = scripts::DerivedUnvaultDescriptor::new(
+    ///     vec![first_stakeholder, second_stakeholder, third_stakeholder],
+    ///     vec![first_manager, second_manager],
+    ///     1,
+    ///     // No cosigning server
+    ///     vec![],
+    ///     // CSV
+    ///     42
+    /// ).expect("Compiling descriptor");
+    /// println!("Unvault descriptor: {}", unvault_descriptor);
+    ///
+    /// let desc_str = unvault_descriptor.to_string();
+    /// assert_eq!(unvault_descriptor, scripts::DerivedUnvaultDescriptor::from_str(&desc_str).unwrap());
+    /// ```
+    ///
+    /// # With Cosigning Servers
     /// ```rust
     /// use revault_tx::{scripts, miniscript::{bitcoin::{self, secp256k1, util::bip32}, DescriptorTrait}};
     /// use std::str::FromStr;
@@ -689,7 +747,6 @@ impl DerivedUnvaultDescriptor {
     /// let third_cosig = scripts::DerivedPublicKey::from_str("[fafafafa/21]0371cdea381b365ea159a3cf4f14029d1bff5b36b4cf12ac9e42be6955d2ed4ecf").unwrap();
     /// let first_manager = scripts::DerivedPublicKey::from_str("[fafafafa/21]03d33a510c0376a3d19ffa0e1ba71d5ee0cbfebbce2df0996b51262142e943c6f0").unwrap();
     /// let second_manager = scripts::DerivedPublicKey::from_str("[fafafafa/21]030e7d7e1d8014dc17d63057ffc3ef26590bf237ce50054fb4f612be8e0a0dbe2a").unwrap();
-    ///
     ///
     /// let unvault_descriptor = scripts::DerivedUnvaultDescriptor::new(
     ///     vec![first_stakeholder, second_stakeholder, third_stakeholder],
@@ -705,12 +762,10 @@ impl DerivedUnvaultDescriptor {
     /// let desc_str = unvault_descriptor.to_string();
     /// assert_eq!(unvault_descriptor, scripts::DerivedUnvaultDescriptor::from_str(&desc_str).unwrap());
     /// ```
-    ///
     /// # Errors
-    /// - If any of the given vectors contains no public key, or if the number of stakeholders public keys
-    /// is not the same as the number of cosigners public keys.
-    /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
-    /// bug.
+    /// - If the cosigning servers public keys vector is both not empty and not of the same length
+    ///   as the stakeholders public keys vec
+    /// - If the policy compilation to miniscript failed (eg if a key is used twice)
     pub fn new(
         stakeholders: Vec<DerivedPublicKey>,
         managers: Vec<DerivedPublicKey>,
@@ -1147,6 +1202,15 @@ mod tests {
         )
         .expect("Refusing a wildcard cosigning server xpub");
 
+        UnvaultDescriptor::new(
+            vec![first_stakeholder.clone(), second_stakeholder.clone()],
+            vec![first_manager.clone(), second_manager.clone()],
+            1,
+            vec![],
+            6789,
+        )
+        .expect("Refusing an Unvault descriptor without Cosigning Server");
+
         // You can't mess up by from_str a wildcard descriptor from a derived one, and the other
         // way around.
         let raw_pk_a = DerivedPublicKey::from_str(
@@ -1200,9 +1264,31 @@ mod tests {
             .expect_err("FromStr on an xpub descriptor");
         let der_unvault_desc = DerivedUnvaultDescriptor::new(
             vec![raw_pk_a.clone(), raw_pk_b.clone()],
-            vec![raw_pk_c, raw_pk_d],
+            vec![raw_pk_c.clone(), raw_pk_d.clone()],
             2,
             vec![raw_pk_e, raw_pk_f],
+            1024,
+        )
+        .expect("Derived pubkeys");
+        UnvaultDescriptor::from_str(&der_unvault_desc.to_string())
+            .expect_err("FromStr on a derived descriptor");
+
+        // Same but without any cosigning server
+        let unvault_desc = UnvaultDescriptor::new(
+            vec![first_stakeholder.clone(), second_stakeholder.clone()],
+            vec![first_manager.clone(), second_manager.clone()],
+            2,
+            vec![],
+            128,
+        )
+        .expect("Valid, with xpubs");
+        DerivedUnvaultDescriptor::from_str(&unvault_desc.to_string())
+            .expect_err("FromStr on an xpub descriptor");
+        let der_unvault_desc = DerivedUnvaultDescriptor::new(
+            vec![raw_pk_a.clone(), raw_pk_b.clone()],
+            vec![raw_pk_c, raw_pk_d],
+            2,
+            vec![],
             1024,
         )
         .expect("Derived pubkeys");
