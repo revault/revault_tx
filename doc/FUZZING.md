@@ -19,9 +19,8 @@ cargo +nightly fuzz run parse_cancel -- -runs=0 -max_len=200000
 
 For running the `transactions_derivation` target, you'll need to either [build the fuzz target by
 hand](https://github.com/rust-fuzz/libfuzzer#manual-usage) without specifying `--cfg fuzzing` to
-`rustc` or use [a patched `cargo-fuzz`](https://github.com/darosior/cargo-fuzz/tree/no_cfg) with:
+`rustc` or pass `--no-cfg-fuzzing` to `cargo-fuzz`:
 ```
-cargo install --git https://github.com/darosior/cargo-fuzz --branch no_cfg
 cargo fuzz run --no-cfg-fuzzing <your fuzz target>
 ```
 
