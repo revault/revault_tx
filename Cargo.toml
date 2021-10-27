@@ -1,9 +1,9 @@
 [package]
 name = "revault_tx"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Antoine Poinsot <darosior@protonmail.com>"]
 edition = "2018"
-rust = "1.43"
+rust-version = "1.43"
 repository = "https://github.com/revault/revault_tx"
 license-file = "LICENCE"
 keywords = ["revault", "bitcoin", "vault"]
