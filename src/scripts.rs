@@ -21,13 +21,16 @@ use miniscript::{
         util::bip32,
         Address, PublicKey,
     },
-    descriptor::{DescriptorPublicKey, Wildcard, WshInner},
+    descriptor::{DescriptorPublicKey, DescriptorTrait, Wildcard, WshInner},
     miniscript::{
         iter::PkPkh,
         limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     },
-    policy::{concrete::Policy, semantic::Policy as SemanticPolicy, Liftable},
-    Descriptor, ForEachKey, MiniscriptKey, Segwitv0, Terminal, ToPublicKey, TranslatePk2,
+    policy::{
+        compiler::CompilerError, concrete::Policy, semantic::Policy as SemanticPolicy, Liftable,
+    },
+    Descriptor, ForEachKey, Miniscript, MiniscriptKey, Segwitv0, Terminal, ToPublicKey,
+    TranslatePk2,
 };
 
 use std::{
@@ -820,16 +823,19 @@ impl FromStr for DerivedUnvaultDescriptor {
 
 macro_rules! cpfp_descriptor {
     ($managers: ident) => {{
-        let pubkeys = $managers
-            .into_iter()
-            .map(Policy::Key)
-            .collect::<Vec<Policy<_>>>();
+        // FIXME: doing this manually as sanity_check() doesn't really do this check :(
+        // Obviously returning rust-miniscript's error here is really ugly, but hopefully
+        // this is just a temporary solution (see
+        // https://github.com/rust-bitcoin/rust-miniscript/pull/282)
+        if $managers.len() > 20 {
+            return Err(ScriptCreationError::PolicyCompilation(
+                CompilerError::LimitsExceeded,
+            ));
+        }
 
-        let policy = Policy::Threshold(1, pubkeys);
-
-        // This handles the non-safe or malleable cases.
-        let ms = policy.compile::<Segwitv0>()?;
-        Descriptor::new_wsh(ms)?
+        let desc = Descriptor::new_wsh(Miniscript::from_ast(Terminal::Multi(1, $managers))?)?;
+        desc.sanity_check()?;
+        desc
     }};
 }
 
@@ -859,6 +865,7 @@ impl CpfpDescriptor {
     ///
     /// # Errors
     /// - If the given `DescriptorPublickKey`s are not wildcards (can be derived from).
+    /// - If you attempt to create a CpfpDescriptor with more than 20 managers.
     /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
     /// bug.
     pub fn new(managers: Vec<DescriptorPublicKey>) -> Result<CpfpDescriptor, ScriptCreationError> {
@@ -910,6 +917,7 @@ impl DerivedCpfpDescriptor {
     /// ```
     ///
     /// # Errors
+    /// - If you attempt to create a DerivedCpfpDescriptor with more than 20 managers.
     /// - If the policy compilation to miniscript failed, which should not happen (tm) and would be a
     /// bug.
     pub fn new(
