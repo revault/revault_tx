@@ -90,6 +90,10 @@ pub enum TransactionCreationError {
     TooLarge,
     /// Trying to create a Spend transaction with the same prevout twice
     DuplicatedInput,
+    /// Attempting to CPFP a transaction with no CPFP output
+    MissingCpfpTxOut,
+    /// Insufficient funds (used in Cpfp)
+    InsufficientFunds,
 }
 
 impl fmt::Display for TransactionCreationError {
@@ -112,6 +116,11 @@ impl fmt::Display for TransactionCreationError {
                 f,
                 "Trying to create a Spend transaction with the same prevout twice"
             ),
+            Self::MissingCpfpTxOut => write!(
+                f,
+                "Attempting to create a CPFP transaction for a tx without a CPFP output"
+            ),
+            Self::InsufficientFunds => write!(f, "Insufficient funds"),
         }
     }
 }

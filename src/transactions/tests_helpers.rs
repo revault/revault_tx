@@ -1,7 +1,7 @@
 use super::{
-    transaction_chain, CancelTransaction, DepositTransaction, EmergencyAddress,
-    EmergencyTransaction, FeeBumpTransaction, RevaultTransaction, SpendTransaction,
-    UnvaultEmergencyTransaction, UnvaultTransaction, DUST_LIMIT,
+    transaction_chain, CancelTransaction, CpfpTransaction, CpfpableTransaction, DepositTransaction,
+    EmergencyAddress, EmergencyTransaction, FeeBumpTransaction, RevaultTransaction,
+    SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE, DUST_LIMIT,
 };
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
@@ -185,7 +185,7 @@ pub fn derive_transactions(
     // Keys, keys, keys everywhere !
     let (
         (managers_priv, managers),
-        (_, mancpfp),
+        (mancpfp_priv, mancpfp),
         (stakeholders_priv, stakeholders),
         (cosigners_priv, cosigners),
     ) = get_participants_sets(n_stk, n_man, with_cosig_servers, secp);
@@ -617,6 +617,80 @@ pub fn derive_transactions(
     unvault_tx.finalize(&secp)?;
     roundtrip!(unvault_tx, UnvaultTransaction);
 
+    // Create a CPFP transaction for the unvault
+    // Some fake listunspent outputs
+    let listunspent = vec![
+        CpfpTxIn::new(
+            OutPoint::from_str(
+                "f21596dd9df36b86bcf65f0884f1f20675c1fc185bc78a37a9cddb4ae5e3dd9f:0",
+            )
+            .unwrap(),
+            CpfpTxOut::new(Amount::from_sat(30_000), &der_cpfp_descriptor),
+        ),
+        CpfpTxIn::new(
+            OutPoint::from_str(
+                "f21596dd9df36b86bcf65f0884f1f20675c1fc185bc78a37a9cddb4ae5e3dd9f:1",
+            )
+            .unwrap(),
+            CpfpTxOut::new(Amount::from_sat(30_000), &der_cpfp_descriptor),
+        ),
+    ];
+
+    // Let's ask for a decent feerate
+    let added_feerate = 6121;
+    // We try to feebump two unvaults in 1 transaction
+    let mut cpfp_tx = CpfpableTransaction::cpfp_transactions(
+        &vec![
+            (unvault_tx.clone(), der_cpfp_descriptor.clone()),
+            (unvault_tx.clone(), der_cpfp_descriptor.clone()),
+        ],
+        added_feerate,
+        listunspent.clone(),
+    )
+    .unwrap();
+    let cpfp_txin = unvault_tx.cpfp_txin(&der_cpfp_descriptor).unwrap();
+
+    // The cpfp tx contains the input of the tx to be cpfped, right?
+    assert!(cpfp_tx.tx().input.contains(&cpfp_txin.unsigned_txin()));
+
+    for o in &cpfp_tx.tx().output {
+        // Either the change is 0 with an OP_RETURN,
+        // or its value is bigger than CPFP_MIN_CHANGE, and we send
+        // back to the cpfp_txin script_pubkey
+        assert!(
+            (o.value == 0 && o.script_pubkey.is_op_return())
+                || (o.value >= CPFP_MIN_CHANGE
+                    && o.script_pubkey == cpfp_txin.txout().txout().script_pubkey)
+        );
+    }
+
+    // We sign and check the package feerate
+    let inputs_len = cpfp_tx.psbt().inputs.len();
+    for i in 0..inputs_len {
+        let cpfp_tx_sighash = cpfp_tx
+            .signature_hash(i, SigHashType::All)
+            .expect("Input exists");
+        satisfy_transaction_input(
+            &secp,
+            &mut cpfp_tx,
+            i,
+            &cpfp_tx_sighash,
+            &mancpfp_priv,
+            Some(child_number),
+        )?;
+    }
+
+    cpfp_tx.finalize(&secp)?;
+    assert!(
+        1000 * (cpfp_tx.fees() + 2 * unvault_tx.fees())
+            / (cpfp_tx.clone().into_tx().get_weight() as u64 + 2 * unvault_tx.max_weight())
+            >= CpfpableTransaction::max_package_feerate(&vec![
+                unvault_tx.clone(),
+                unvault_tx.clone()
+            ]) * 1000
+                + added_feerate,
+    );
+
     // Create and sign a spend transaction
     let spend_unvault_txin = unvault_tx.spend_unvault_txin(&der_unvault_descriptor);
     let unvault_value = spend_unvault_txin.txout().txout().value;
@@ -794,6 +868,75 @@ pub fn derive_transactions(
             Some(child_number),
         )?
     }
+
+    // Create a CPFP transaction for the (not yet finalized) Spend
+    // Some fake listunspent outputs
+    let listunspent = vec![
+        CpfpTxIn::new(
+            OutPoint::from_str(
+                "f21596dd9df36b86bcf65f0884f1f20675c1fc185bc78a37a9cddb4ae5e3dd9f:0",
+            )
+            .unwrap(),
+            CpfpTxOut::new(Amount::from_sat(58_000), &der_cpfp_descriptor),
+        ),
+        CpfpTxIn::new(
+            OutPoint::from_str(
+                "f21596dd9df36b86bcf65f0884f1f20675c1fc185bc78a37a9cddb4ae5e3dd9f:1",
+            )
+            .unwrap(),
+            CpfpTxOut::new(Amount::from_sat(23_000), &der_cpfp_descriptor),
+        ),
+    ];
+
+    let added_feerate = 2142;
+    let mut cpfp_tx = CpfpableTransaction::cpfp_transactions(
+        &vec![(spend_tx.clone(), der_cpfp_descriptor.clone())],
+        added_feerate,
+        listunspent.clone(),
+    )
+    .unwrap();
+
+    // The cpfp tx contains the input of the tx to be cpfped
+    let cpfp_txin = spend_tx.cpfp_txin(&der_cpfp_descriptor).unwrap();
+    assert!(cpfp_tx.tx().input.contains(&cpfp_txin.unsigned_txin()));
+
+    for o in &cpfp_tx.tx().output {
+        // Either the change is 0 with an OP_RETURN,
+        // or its value is bigger than CPFP_MIN_CHANGE, and we send
+        // back to the cpfp_txin script_pubkey
+        assert!(
+            (o.value == 0 && o.script_pubkey.is_op_return())
+                || (o.value >= CPFP_MIN_CHANGE
+                    && o.script_pubkey == cpfp_txin.txout().txout().script_pubkey)
+        );
+    }
+
+    // We sign and check the package feerate
+    let inputs_len = cpfp_tx.psbt().inputs.len();
+    for i in 0..inputs_len {
+        let cpfp_tx_sighash = cpfp_tx
+            .signature_hash(i, SigHashType::All)
+            .expect("Input exists");
+        satisfy_transaction_input(
+            &secp,
+            &mut cpfp_tx,
+            i,
+            &cpfp_tx_sighash,
+            &mancpfp_priv,
+            Some(child_number),
+        )?;
+    }
+
+    roundtrip!(cpfp_tx, CpfpTransaction);
+    cpfp_tx.finalize(&secp)?;
+    roundtrip!(cpfp_tx, CpfpTransaction);
+
+    assert!(
+        1000 * (cpfp_tx.fees() + spend_tx.fees())
+            / (cpfp_tx.into_tx().get_weight() as u64 + spend_tx.max_weight())
+            >= spend_tx.max_feerate() * 1000 + added_feerate
+    );
+
     roundtrip!(spend_tx, SpendTransaction);
     spend_tx.finalize(&secp)?;
     roundtrip!(spend_tx, SpendTransaction);
