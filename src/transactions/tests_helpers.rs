@@ -657,7 +657,9 @@ pub fn derive_transactions(
     // The cpfp tx contains the input of the tx to be cpfped, right?
     assert!(cpfp_tx.tx().input.contains(&cpfp_txins[0].unsigned_txin()));
 
-    for o in &cpfp_tx.tx().output {
+    assert_eq!(cpfp_tx.tx().output.len(), 1);
+    {
+        let o = &cpfp_tx.tx().output[0];
         // Either the change is 0 with an OP_RETURN,
         // or its value is bigger than CPFP_MIN_CHANGE, and we send
         // back to the cpfp_txin script_pubkey
@@ -905,10 +907,12 @@ pub fn derive_transactions(
     // The cpfp tx contains the input of the tx to be cpfped
     assert!(cpfp_tx.tx().input.contains(&cpfp_txin.unsigned_txin()));
 
-    for o in &cpfp_tx.tx().output {
-        // Either the change is 0 with an OP_RETURN,
-        // or its value is bigger than CPFP_MIN_CHANGE, and we send
-        // back to the cpfp_txin script_pubkey
+    assert_eq!(cpfp_tx.tx().output.len(), 1);
+    // Either the change is 0 with an OP_RETURN,
+    // or its value is bigger than CPFP_MIN_CHANGE, and we send
+    // back to the cpfp_txin script_pubkey
+    {
+        let o = &cpfp_tx.tx().output[0];
         assert!(
             (o.value == 0 && o.script_pubkey.is_op_return())
                 || (o.value >= CPFP_MIN_CHANGE
