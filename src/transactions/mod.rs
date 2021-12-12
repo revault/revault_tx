@@ -183,6 +183,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Create a RevaultTransaction from a base64-encoded BIP174-serialized transaction.
     fn from_psbt_str(psbt_str: &str) -> Result<Self, TransactionSerialisationError>;
 
+    // TODO: should return an Amount
     fn fees(&self) -> u64;
 
     /// Get the inner unsigned transaction id
@@ -490,16 +491,6 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
 
 /// A transaction that can be CPFPed
 pub trait CpfpableTransaction: RevaultTransaction {
-    /// Returns a CpfpTransaction fee-bumping this tx. The package feerate
-    /// of the txs + Cpfp will be increased of `added_feerate` sats/kWU.
-    fn cpfp_transactions(
-        to_be_cpfped: &[(Self, DerivedCpfpDescriptor)],
-        feerate: u64,
-        additional_utxos: Vec<CpfpTxIn>,
-    ) -> Result<CpfpTransaction, TransactionCreationError> {
-        CpfpTransaction::from_txs(to_be_cpfped, feerate, additional_utxos)
-    }
-
     /// Return the txin refering to the output to spend to CPFP this transaction, if any.
     fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> Option<CpfpTxIn> {
         let spk = cpfp_descriptor.inner().script_pubkey();
