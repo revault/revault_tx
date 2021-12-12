@@ -526,16 +526,6 @@ pub trait CpfpableTransaction: RevaultTransaction {
             .expect("Weight is never 0")
     }
 
-    fn max_package_feerate(txs: &[Self]) -> u64 {
-        let fees = txs.iter().fold(0, |sum, x| sum + x.fees());
-        let weight = txs.iter().fold(0, |sum, x| sum + x.max_weight());
-
-        fees.checked_add(weight - 1) // Weight is never 0
-            .expect("Feerate computation bug, fees >u64::MAX")
-            .checked_div(weight)
-            .expect("Weight is never 0")
-    }
-
     /// Get the size of this transaction, assuming fully-satisfied inputs. If the transaction
     /// is already finalized, returns the exact size in witness units. Otherwise computes the
     /// maximum reasonable weight of a satisfaction.
