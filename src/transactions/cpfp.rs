@@ -1,7 +1,6 @@
 use crate::{
     error::*,
-    scripts::DerivedCpfpDescriptor,
-    transactions::{utils, CpfpableTransaction, RevaultTransaction, CPFP_MIN_CHANGE},
+    transactions::{utils, RevaultTransaction, CPFP_MIN_CHANGE},
     txins::*,
     txouts::*,
 };
@@ -55,8 +54,10 @@ impl CpfpTransaction {
     // - calculate the fees we need to cover before being ok
     // - if the biggest coin is less than the fees, take the biggest coin
     // - otherwise, take the smallest coin big enough to cover fees
-    pub(crate) fn from_txs(
-        to_be_cpfped: &[(impl CpfpableTransaction, DerivedCpfpDescriptor)],
+    pub fn from_txins(
+        to_be_cpfped: Vec<CpfpTxIn>,
+        tbc_weight: u64,
+        tbc_fees: Amount,
         added_feerate: u64,
         mut available_utxos: Vec<CpfpTxIn>,
     ) -> Result<CpfpTransaction, TransactionCreationError> {
@@ -71,10 +72,7 @@ impl CpfpTransaction {
         let mut inputs_sum = Amount::from_sat(0);
         let mut total_satisfation_weight = 0;
 
-        for (tx, cpfp_descriptor) in to_be_cpfped {
-            let cpfp_txin = tx
-                .cpfp_txin(&cpfp_descriptor)
-                .ok_or(TransactionCreationError::MissingCpfpTxOut)?;
+        for cpfp_txin in to_be_cpfped {
             dummy_change = Some(cpfp_txin.txout().txout().clone());
             inputs_sum += Amount::from_sat(cpfp_txin.txout().txout().value);
             // I can't collapse this in one call (total_satisfation_weight += ...)
@@ -116,12 +114,9 @@ impl CpfpTransaction {
         };
 
         // We discard the CPFP descriptors in to_be_cpfped as we don't need them anymore
-        let to_be_cpfped: Vec<_> = to_be_cpfped.into_iter().map(|c| c.0.clone()).collect();
-        let tbc_fees = Amount::from_sat(to_be_cpfped.iter().fold(0, |sum, x| sum + x.fees()));
-        let tbc_weight = to_be_cpfped.iter().fold(0, |sum, x| sum + x.max_weight());
-        let tbc_feerate = CpfpableTransaction::max_package_feerate(&to_be_cpfped) * 1000;
-        let target_feerate = tbc_feerate + added_feerate;
+        let tbc_feerate = 1_000 * (tbc_fees.as_sat() + tbc_weight) / tbc_weight; // * 1000 for kWU
 
+        let target_feerate = tbc_feerate + added_feerate;
         loop {
             let cpfp_weight: u64 = psbt
                 .global

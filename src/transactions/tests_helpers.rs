@@ -636,31 +636,37 @@ pub fn derive_transactions(
         ),
     ];
 
+    let cpfp_txins = vec![
+        unvault_tx.cpfp_txin(&der_cpfp_descriptor).unwrap(),
+        unvault_tx.cpfp_txin(&der_cpfp_descriptor).unwrap(),
+    ];
+    let tbc_weight = unvault_tx.max_weight() * 2;
+    let tbc_fees = Amount::from_sat(unvault_tx.fees() * 2);
     // Let's ask for a decent feerate
     let added_feerate = 6121;
     // We try to feebump two unvaults in 1 transaction
-    let mut cpfp_tx = CpfpableTransaction::cpfp_transactions(
-        &vec![
-            (unvault_tx.clone(), der_cpfp_descriptor.clone()),
-            (unvault_tx.clone(), der_cpfp_descriptor.clone()),
-        ],
+    let mut cpfp_tx = CpfpTransaction::from_txins(
+        cpfp_txins.clone(),
+        tbc_weight,
+        tbc_fees,
         added_feerate,
         listunspent.clone(),
     )
     .unwrap();
-    let cpfp_txin = unvault_tx.cpfp_txin(&der_cpfp_descriptor).unwrap();
 
     // The cpfp tx contains the input of the tx to be cpfped, right?
-    assert!(cpfp_tx.tx().input.contains(&cpfp_txin.unsigned_txin()));
+    assert!(cpfp_tx.tx().input.contains(&cpfp_txins[0].unsigned_txin()));
 
-    for o in &cpfp_tx.tx().output {
+    assert_eq!(cpfp_tx.tx().output.len(), 1);
+    {
+        let o = &cpfp_tx.tx().output[0];
         // Either the change is 0 with an OP_RETURN,
         // or its value is bigger than CPFP_MIN_CHANGE, and we send
         // back to the cpfp_txin script_pubkey
         assert!(
             (o.value == 0 && o.script_pubkey.is_op_return())
                 || (o.value >= CPFP_MIN_CHANGE
-                    && o.script_pubkey == cpfp_txin.txout().txout().script_pubkey)
+                    && o.script_pubkey == cpfp_txins[0].txout().txout().script_pubkey)
         );
     }
 
@@ -684,11 +690,7 @@ pub fn derive_transactions(
     assert!(
         1000 * (cpfp_tx.fees() + 2 * unvault_tx.fees())
             / (cpfp_tx.clone().into_tx().get_weight() as u64 + 2 * unvault_tx.max_weight())
-            >= CpfpableTransaction::max_package_feerate(&vec![
-                unvault_tx.clone(),
-                unvault_tx.clone()
-            ]) * 1000
-                + added_feerate,
+            >= 1_000 * (tbc_fees.as_sat() / tbc_weight) + added_feerate,
     );
 
     // Create and sign a spend transaction
@@ -888,22 +890,29 @@ pub fn derive_transactions(
         ),
     ];
 
-    let added_feerate = 2142;
-    let mut cpfp_tx = CpfpableTransaction::cpfp_transactions(
-        &vec![(spend_tx.clone(), der_cpfp_descriptor.clone())],
+    let cpfp_txin = spend_tx.cpfp_txin(&der_cpfp_descriptor).unwrap();
+    let cpfp_txins = vec![cpfp_txin.clone()];
+    let tbc_weight = spend_tx.max_weight();
+    let tbc_fees = Amount::from_sat(spend_tx.fees());
+    let added_feerate = 6121;
+    let mut cpfp_tx = CpfpTransaction::from_txins(
+        cpfp_txins,
+        tbc_weight,
+        tbc_fees,
         added_feerate,
         listunspent.clone(),
     )
     .unwrap();
 
     // The cpfp tx contains the input of the tx to be cpfped
-    let cpfp_txin = spend_tx.cpfp_txin(&der_cpfp_descriptor).unwrap();
     assert!(cpfp_tx.tx().input.contains(&cpfp_txin.unsigned_txin()));
 
-    for o in &cpfp_tx.tx().output {
-        // Either the change is 0 with an OP_RETURN,
-        // or its value is bigger than CPFP_MIN_CHANGE, and we send
-        // back to the cpfp_txin script_pubkey
+    assert_eq!(cpfp_tx.tx().output.len(), 1);
+    // Either the change is 0 with an OP_RETURN,
+    // or its value is bigger than CPFP_MIN_CHANGE, and we send
+    // back to the cpfp_txin script_pubkey
+    {
+        let o = &cpfp_tx.tx().output[0];
         assert!(
             (o.value == 0 && o.script_pubkey.is_op_return())
                 || (o.value >= CPFP_MIN_CHANGE
