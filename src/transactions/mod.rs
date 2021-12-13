@@ -6,28 +6,35 @@
 //! for data structure as well as roles distribution.
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
-use miniscript::bitcoin::{
-    consensus::encode::Encodable,
-    hash_types,
-    hashes::Hash,
-    secp256k1,
-    util::{bip143::SigHashCache, bip32::ChildNumber, psbt::PartiallySignedTransaction as Psbt},
-    Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash, SigHashType,
-    Transaction, Txid, Wtxid,
+use miniscript::{
+    bitcoin::{
+        consensus::encode::Encodable,
+        hash_types,
+        hashes::Hash,
+        secp256k1,
+        util::{
+            bip143::SigHashCache, bip32::ChildNumber, psbt::PartiallySignedTransaction as Psbt,
+        },
+        Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash,
+        SigHashType, Transaction, Txid, Wtxid,
+    },
+    DescriptorTrait,
 };
 
-use std::fmt;
+use std::{convert::TryInto, fmt};
 
 #[macro_use]
 mod utils;
 
 mod cancel;
+mod cpfp;
 mod emergency;
 mod spend;
 mod unvault;
 mod unvaultemergency;
 
 pub use cancel::CancelTransaction;
+pub use cpfp::CpfpTransaction;
 pub use emergency::EmergencyTransaction;
 pub use spend::SpendTransaction;
 pub use unvault::UnvaultTransaction;
@@ -37,7 +44,7 @@ pub use unvaultemergency::UnvaultEmergencyTransaction;
 /// See [practical-revault](https://github.com/revault/practical-revault/blob/master/transactions.md#unvault_tx).
 pub const UNVAULT_CPFP_VALUE: u64 = 30000;
 
-/// The feerate, in sat / W, to create the unvaulting transactions with.
+/// The feerate, in sat / WU, to create the unvaulting transactions with.
 pub const UNVAULT_TX_FEERATE: u64 = 6;
 
 /// The feerate, in sat / WU, to create the Cancel transaction with.
@@ -61,6 +68,10 @@ pub const TX_VERSION: i32 = 2;
 ///
 /// <https://github.com/bitcoin/bitcoin/blob/590e49ccf2af27c6c1f1e0eb8be3a4bf4d92ce8b/src/policy/policy.h#L23-L24>
 pub const MAX_STANDARD_TX_WEIGHT: u32 = 400_000;
+
+/// The min value for which we'll create a change in a CpfpTransaction. In other words: if the sum
+/// of the inputs minus the fees is less than CPFP_MIN_CHANGE, we'll throw everything in fees.
+pub const CPFP_MIN_CHANGE: u64 = 10_000;
 
 /// This private module is used to make mutable references to the PSBT inside transaction newtypes
 /// available to functions inside the transaction module, but not beyond that. This is needed to
@@ -475,6 +486,69 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
     fn into_tx(self) -> Transaction {
         self.into_psbt().extract_tx()
     }
+}
+
+/// A transaction that can be CPFPed
+pub trait CpfpableTransaction: RevaultTransaction {
+    /// Returns a CpfpTransaction fee-bumping this tx. The package feerate
+    /// of the txs + Cpfp will be increased of `added_feerate` sats/kWU.
+    fn cpfp_transactions(
+        to_be_cpfped: &[(Self, DerivedCpfpDescriptor)],
+        feerate: u64,
+        additional_utxos: Vec<CpfpTxIn>,
+    ) -> Result<CpfpTransaction, TransactionCreationError> {
+        CpfpTransaction::from_txs(to_be_cpfped, feerate, additional_utxos)
+    }
+
+    /// Return the txin refering to the output to spend to CPFP this transaction, if any.
+    fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> Option<CpfpTxIn> {
+        let spk = cpfp_descriptor.inner().script_pubkey();
+        let index = self
+            .psbt()
+            .global
+            .unsigned_tx
+            .output
+            .iter()
+            .position(|txo| txo.script_pubkey == spk)?;
+
+        let txo = &self.psbt().global.unsigned_tx.output[index];
+        let prev_txout = CpfpTxOut::new(Amount::from_sat(txo.value), cpfp_descriptor);
+        Some(CpfpTxIn::new(
+            OutPoint {
+                txid: self.psbt().global.unsigned_tx.txid(),
+                vout: index.try_into().expect("vout doesn't fit in a u32?"),
+            },
+            prev_txout,
+        ))
+    }
+
+    /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction
+    /// is already finalized, returns the exact feerate. Otherwise computes the maximum reasonable
+    /// weight of a satisfaction and returns the feerate based on this estimation.
+    fn max_feerate(&self) -> u64 {
+        let fees = self.fees();
+        let weight = self.max_weight();
+
+        fees.checked_add(weight - 1) // Weight is never 0
+            .expect("Feerate computation bug, fees >u64::MAX")
+            .checked_div(weight)
+            .expect("Weight is never 0")
+    }
+
+    fn max_package_feerate(txs: &[Self]) -> u64 {
+        let fees = txs.iter().fold(0, |sum, x| sum + x.fees());
+        let weight = txs.iter().fold(0, |sum, x| sum + x.max_weight());
+
+        fees.checked_add(weight - 1) // Weight is never 0
+            .expect("Feerate computation bug, fees >u64::MAX")
+            .checked_div(weight)
+            .expect("Weight is never 0")
+    }
+
+    /// Get the size of this transaction, assuming fully-satisfied inputs. If the transaction
+    /// is already finalized, returns the exact size in witness units. Otherwise computes the
+    /// maximum reasonable weight of a satisfaction.
+    fn max_weight(&self) -> u64;
 }
 
 /// The funding transaction, we don't create nor sign it.

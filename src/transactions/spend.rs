@@ -1,7 +1,10 @@
 use crate::{
     error::*,
     scripts::*,
-    transactions::{utils, RevaultTransaction, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION},
+    transactions::{
+        utils, CpfpableTransaction, RevaultTransaction, INSANE_FEES, MAX_STANDARD_TX_WEIGHT,
+        TX_VERSION,
+    },
     txins::*,
     txouts::*,
 };
@@ -231,62 +234,6 @@ impl SpendTransaction {
         CpfpTxOut::new(Amount::from_sat(cpfp_value), &cpfp_descriptor)
     }
 
-    /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction
-    /// is already finalized, returns the exact feerate. Otherwise computes the maximum reasonable
-    /// weight of a satisfaction and returns the feerate based on this estimation.
-    pub fn max_feerate(&self) -> u64 {
-        let fees = self.fees();
-        let weight = self.max_weight();
-
-        fees.checked_add(weight - 1) // Weight is never 0
-            .expect("Feerate computation bug, fees >u64::MAX")
-            .checked_div(weight)
-            .expect("Weight is never 0")
-    }
-
-    /// Get the size of this transaction, assuming fully-satisfied inputs. If the transaction
-    /// is already finalized, returns the exact size in witness units. Otherwise computes the
-    /// maximum reasonable weight of a satisfaction.
-    pub fn max_weight(&self) -> u64 {
-        let psbt = self.psbt();
-        let tx = &psbt.global.unsigned_tx;
-
-        let mut weight: u64 = tx.get_weight().try_into().expect("Can't be >u64::MAX");
-        for txin in psbt.inputs.iter() {
-            let txin_weight: u64 = if self.is_finalized() {
-                txin.final_script_witness
-                    .as_ref()
-                    .expect("Always set if final")
-                    .iter()
-                    .map(|e| e.len())
-                    .sum::<usize>()
-                    .try_into()
-                    .expect("Bug: witness size >u64::MAX")
-            } else {
-                // FIXME: this panic can probably be triggered...
-                miniscript::descriptor::Wsh::new(
-                    miniscript::Miniscript::parse(
-                        txin.witness_script
-                            .as_ref()
-                            .expect("Unvault txins always have a witness Script"),
-                    )
-                    .expect("UnvaultTxIn witness_script is created from a Miniscript"),
-                )
-                .expect("")
-                .max_satisfaction_weight()
-                .expect("It's a sane Script, derived from a Miniscript")
-                .try_into()
-                .expect("Can't be >u64::MAX")
-            };
-            weight = weight
-                .checked_add(txin_weight)
-                .expect("Weight computation bug: overflow computing spent coins value");
-        }
-        assert!(weight > 0, "We never create an empty tx");
-
-        weight
-    }
-
     // FIXME: feerate sanity checks
     /// Parse a Spend transaction from a PSBT
     pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
@@ -355,5 +302,47 @@ impl SpendTransaction {
         }
 
         Ok(spend_tx)
+    }
+}
+
+impl CpfpableTransaction for SpendTransaction {
+    fn max_weight(&self) -> u64 {
+        let psbt = self.psbt();
+        let tx = &psbt.global.unsigned_tx;
+
+        let mut weight: u64 = tx.get_weight().try_into().expect("Can't be >u64::MAX");
+        for txin in psbt.inputs.iter() {
+            let txin_weight: u64 = if self.is_finalized() {
+                txin.final_script_witness
+                    .as_ref()
+                    .expect("Always set if final")
+                    .iter()
+                    .map(|e| e.len())
+                    .sum::<usize>()
+                    .try_into()
+                    .expect("Bug: witness size >u64::MAX")
+            } else {
+                // FIXME: this panic can probably be triggered...
+                miniscript::descriptor::Wsh::new(
+                    miniscript::Miniscript::parse(
+                        txin.witness_script
+                            .as_ref()
+                            .expect("Unvault txins always have a witness Script"),
+                    )
+                    .expect("UnvaultTxIn witness_script is created from a Miniscript"),
+                )
+                .expect("")
+                .max_satisfaction_weight()
+                .expect("It's a sane Script, derived from a Miniscript")
+                .try_into()
+                .expect("Can't be >u64::MAX")
+            };
+            weight = weight
+                .checked_add(txin_weight)
+                .expect("Weight computation bug: overflow computing spent coins value");
+        }
+        assert!(weight > 0, "We never create an empty tx");
+
+        weight
     }
 }

@@ -2,8 +2,8 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, RevaultTransaction, DUST_LIMIT, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION,
-        UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
+        utils, CpfpableTransaction, RevaultTransaction, DUST_LIMIT, INSANE_FEES,
+        MAX_STANDARD_TX_WEIGHT, TX_VERSION, UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
     },
     txins::*,
     txouts::*,
@@ -181,30 +181,6 @@ impl UnvaultTransaction {
         self.unvault_txin(unvault_descriptor, RBF_SEQUENCE)
     }
 
-    /// Get the CPFP txo to be referenced in a spending transaction
-    pub fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> CpfpTxIn {
-        let spk = cpfp_descriptor.inner().script_pubkey();
-        let index = self
-            .psbt()
-            .global
-            .unsigned_tx
-            .output
-            .iter()
-            .position(|txo| txo.script_pubkey == spk)
-            .expect("We always create UnvaultTransaction with a CPFP output");
-
-        // Unwraped above
-        let txo = &self.psbt().global.unsigned_tx.output[index];
-        let prev_txout = CpfpTxOut::new(Amount::from_sat(txo.value), cpfp_descriptor);
-        CpfpTxIn::new(
-            OutPoint {
-                txid: self.psbt().global.unsigned_tx.txid(),
-                vout: index.try_into().expect("There are two outputs"),
-            },
-            prev_txout,
-        )
-    }
-
     /// Parse an Unvault transaction from a PSBT
     pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
         let psbt = Decodable::consensus_decode(raw_psbt)?;
@@ -267,5 +243,45 @@ impl UnvaultTransaction {
         // We are only ever created with a single input
         let input_index = 0;
         RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
+    }
+}
+
+impl CpfpableTransaction for UnvaultTransaction {
+    fn max_weight(&self) -> u64 {
+        let psbt = self.psbt();
+        let tx = &psbt.global.unsigned_tx;
+
+        // We are only ever created with exactly one input.
+        let txin = &psbt.inputs[0];
+        let txin_weight: u64 = if self.is_finalized() {
+            txin.final_script_witness
+                .as_ref()
+                .expect("Always set if final")
+                .iter()
+                .map(|e| e.len())
+                .sum::<usize>()
+                .try_into()
+                .expect("Bug: witness size >u64::MAX")
+        } else {
+            // FIXME: this panic can probably be triggered...
+            miniscript::descriptor::Wsh::new(
+                miniscript::Miniscript::parse(
+                    txin.witness_script
+                        .as_ref()
+                        .expect("Unvault txins always have a witness Script"),
+                )
+                .expect("UnvaultTxIn witness_script is created from a Miniscript"),
+            )
+            .expect("")
+            .max_satisfaction_weight()
+            .expect("It's a sane Script, derived from a Miniscript")
+            .try_into()
+            .expect("Can't be >u64::MAX")
+        };
+
+        let weight: u64 = tx.get_weight().try_into().expect("Can't be >u64::MAX");
+        let weight = weight + txin_weight;
+        assert!(weight > 0, "We never create an empty tx");
+        weight
     }
 }
