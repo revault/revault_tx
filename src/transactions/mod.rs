@@ -439,29 +439,10 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
         <T as PrivateInnerMut>::from_psbt_serialized(raw_psbt)
     }
 
+    /// Return the absolute fees this transaction is paying.
     fn fees(&self) -> u64 {
-        let mut value_in: u64 = 0;
-        for i in self.psbt().inputs.iter() {
-            value_in = value_in
-                .checked_add(
-                    i.witness_utxo
-                        .as_ref()
-                        .expect("A witness utxo is always set")
-                        .value,
-                )
-                .expect("PSBT bug: overflow while computing spent coins value");
-        }
-
-        let mut value_out: u64 = 0;
-        for o in self.psbt().global.unsigned_tx.output.iter() {
-            value_out = value_out
-                .checked_add(o.value)
-                .expect("PSBT bug: overflow while computing created coins value");
-        }
-
-        value_in
-            .checked_sub(value_out)
-            .expect("We never create a transaction with negative fees")
+        // We always set witness_utxo, it can only be a bug we introduced with amounts.
+        utils::psbt_fees(self.psbt()).expect("Fee computation bug: overflow")
     }
 
     /// Get the inner unsigned transaction id

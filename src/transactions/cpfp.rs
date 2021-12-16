@@ -1,28 +1,17 @@
 use crate::{
     error::*,
-    transactions::{utils, RevaultTransaction, CPFP_MIN_CHANGE},
+    transactions::{utils, CPFP_MIN_CHANGE},
     txins::*,
     txouts::*,
 };
 
 use miniscript::bitcoin::{
-    consensus::encode::Decodable,
+    consensus::encode,
     util::psbt::{Global as PsbtGlobal, Input as PsbtIn, PartiallySignedTransaction as Psbt},
     Amount, Script, SigHashType, Transaction, TxIn,
 };
 
-use std::convert::TryInto;
-
-#[cfg(feature = "use-serde")]
-use {
-    serde::de::{self, Deserialize, Deserializer},
-    serde::ser::{Serialize, Serializer},
-};
-
-impl_revault_transaction!(
-    CpfpTransaction,
-    doc = "The transaction feebumping either an unvault or a spend"
-);
+use std::{convert::TryInto, fmt};
 
 // If single-input single-output we need this many dummy vbytes to keep our transaction above the
 // minimum standard size.
@@ -41,6 +30,24 @@ fn op_return_script(cpfp_psbt: &Psbt) -> Script {
         Script::new_op_return(&[])
     } else {
         Script::new_op_return(&OP_RETURN_DUMMY_DATA)
+    }
+}
+
+/// The transaction spending the Unvault and Spend transactions' CPFP output in order
+/// to bump their fees.
+#[derive(Clone, PartialEq)]
+pub struct CpfpTransaction(Psbt);
+
+// A custom implementation of Debug to make it more compact in logs
+impl fmt::Debug for CpfpTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", base64::encode(encode::serialize(&self.0)))
+    }
+}
+
+impl fmt::Display for CpfpTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", &self)
     }
 }
 
@@ -197,47 +204,20 @@ impl CpfpTransaction {
         }
     }
 
-    /// Parse a Cpfp transaction from a PSBT
-    // FIXME: We shouldn't really be able to serialize/deserialize a cpfp transaction,
-    // but the RevaultTransaction trait requires us to implement this method, so here we are.
-    pub fn from_raw_psbt(raw_psbt: &[u8]) -> Result<Self, TransactionSerialisationError> {
-        let psbt = Decodable::consensus_decode(raw_psbt)?;
-        let psbt = utils::psbt_common_sanity_checks(psbt)?;
+    pub fn psbt(&self) -> &Psbt {
+        &self.0
+    }
 
-        // Either one OP_RETURN or one change
-        let output_count = psbt.global.unsigned_tx.output.len();
-        if output_count != 1 {
-            return Err(PsbtValidationError::InvalidOutputCount(output_count).into());
-        }
+    pub fn into_psbt(self) -> Psbt {
+        self.0
+    }
 
-        for input in &psbt.inputs {
-            if input.final_script_witness.is_none() {
-                if input.sighash_type != Some(SigHashType::All) {
-                    return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
-                }
+    pub fn tx(&self) -> &Transaction {
+        &self.psbt().global.unsigned_tx
+    }
 
-                if input.bip32_derivation.is_empty() {
-                    return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
-                }
-
-                if let Some(ref ws) = input.witness_script {
-                    if ws.to_v0_p2wsh()
-                        != input
-                            .witness_utxo
-                            .as_ref()
-                            .expect("Check in sanity checks")
-                            .script_pubkey
-                    {
-                        return Err(
-                            PsbtValidationError::InvalidInWitnessScript(input.clone()).into()
-                        );
-                    }
-                } else {
-                    return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
-                }
-            }
-        }
-
-        Ok(CpfpTransaction(psbt))
+    pub fn fees(&self) -> u64 {
+        // We always set a witness_utxo in our PSBT inputs.
+        utils::psbt_fees(self.psbt()).expect("Fee computation bug: overflow")
     }
 }
