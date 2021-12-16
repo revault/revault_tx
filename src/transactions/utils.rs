@@ -300,3 +300,22 @@ pub fn p2wsh_input_index(psbt: &Psbt) -> Option<usize> {
             == Some(true)
     })
 }
+
+/// Returns the absolute fees paid by a PSBT.
+///
+/// Returns None if:
+/// - A witness UTxO isn't set in one of the PSBT inputs
+/// - There an overflow or underflow when computing the fees
+pub fn psbt_fees(psbt: &Psbt) -> Option<u64> {
+    let mut value_in: u64 = 0;
+    for i in psbt.inputs.iter() {
+        value_in = value_in.checked_add(i.witness_utxo.as_ref()?.value)?;
+    }
+
+    let mut value_out: u64 = 0;
+    for o in psbt.global.unsigned_tx.output.iter() {
+        value_out = value_out.checked_add(o.value)?
+    }
+
+    value_in.checked_sub(value_out)
+}

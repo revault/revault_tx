@@ -11,6 +11,7 @@ use std::{iter::repeat_with, str::FromStr};
 use miniscript::{
     bitcoin::{
         secp256k1,
+        util::psbt::PartiallySignedTransaction as Psbt,
         util::{bip143::SigHashCache, bip32},
         Address, Amount, Network, OutPoint, SigHash, SigHashType, Transaction, TxIn, TxOut,
     },
@@ -141,6 +142,54 @@ fn satisfy_transaction_input(
     }
 
     Ok(())
+}
+
+fn sign_psbt(
+    secp: &secp256k1::Secp256k1<secp256k1::All>,
+    psbt: &mut Psbt,
+    input_index: usize,
+    xprivs: &[bip32::ExtendedPrivKey],
+    child_number: bip32::ChildNumber,
+) {
+    for xpriv in xprivs {
+        let deriv_path = bip32::DerivationPath::from(vec![child_number]);
+        let sig = {
+            let prev_amount = psbt.inputs[input_index]
+                .witness_utxo
+                .as_ref()
+                .unwrap()
+                .value;
+            let script_code = psbt.inputs[input_index].witness_script.as_ref().unwrap();
+            let sighash = SigHashCache::new(&psbt.global.unsigned_tx).signature_hash(
+                input_index,
+                &script_code,
+                prev_amount,
+                SigHashType::All,
+            );
+            secp.sign(
+                &secp256k1::Message::from_slice(&sighash).unwrap(),
+                &xpriv
+                    .derive_priv(&secp, &deriv_path)
+                    .unwrap()
+                    .private_key
+                    .key,
+            )
+        };
+
+        let xpub = bip32::ExtendedPubKey::from_private(&secp, xpriv);
+        let pubkey = xpub.derive_pub(secp, &deriv_path).unwrap();
+        let mut sig = sig.serialize_der().to_vec();
+        sig.push(SigHashType::All.as_u32() as u8);
+        psbt.inputs[input_index]
+            .partial_sigs
+            .insert(pubkey.public_key, sig);
+    }
+}
+
+fn finalize_psbt(secp: &secp256k1::Secp256k1<impl secp256k1::Verification>, psbt: &mut Psbt) {
+    miniscript::psbt::finalize(psbt, secp)
+        .map_err(|e| Error::TransactionFinalisation(e.to_string()))
+        .unwrap();
 }
 
 fn desc_san_check<P: MiniscriptKey>(desc: &Descriptor<P>) -> Result<(), ScriptCreationError> {
@@ -645,7 +694,7 @@ pub fn derive_transactions(
     // Let's ask for a decent feerate
     let added_feerate = 6121;
     // We try to feebump two unvaults in 1 transaction
-    let mut cpfp_tx = CpfpTransaction::from_txins(
+    let cpfp_tx = CpfpTransaction::from_txins(
         cpfp_txins.clone(),
         tbc_weight,
         tbc_fees,
@@ -670,27 +719,18 @@ pub fn derive_transactions(
         );
     }
 
-    // We sign and check the package feerate
+    // we sign the cpfp and then check the package feerate
+    let cpfp_fees = cpfp_tx.fees();
     let inputs_len = cpfp_tx.psbt().inputs.len();
+    let mut psbt = cpfp_tx.into_psbt();
     for i in 0..inputs_len {
-        let cpfp_tx_sighash = cpfp_tx
-            .signature_hash(i, SigHashType::All)
-            .expect("Input exists");
-        satisfy_transaction_input(
-            &secp,
-            &mut cpfp_tx,
-            i,
-            &cpfp_tx_sighash,
-            &mancpfp_priv,
-            Some(child_number),
-        )?;
+        sign_psbt(&secp, &mut psbt, i, &mancpfp_priv, child_number);
     }
-
-    cpfp_tx.finalize(&secp)?;
+    finalize_psbt(&secp, &mut psbt);
     assert!(
-        1000 * (cpfp_tx.fees() + 2 * unvault_tx.fees())
-            / (cpfp_tx.clone().into_tx().get_weight() as u64 + 2 * unvault_tx.max_weight())
-            >= 1_000 * (tbc_fees.as_sat() / tbc_weight) + added_feerate,
+        1000 * (cpfp_fees + unvault_tx.fees())
+            / (psbt.global.unsigned_tx.get_weight() as u64 + unvault_tx.max_weight())
+            >= unvault_tx.max_feerate() * 1000 + added_feerate
     );
 
     // Create and sign a spend transaction
@@ -895,7 +935,7 @@ pub fn derive_transactions(
     let tbc_weight = spend_tx.max_weight();
     let tbc_fees = Amount::from_sat(spend_tx.fees());
     let added_feerate = 6121;
-    let mut cpfp_tx = CpfpTransaction::from_txins(
+    let cpfp_tx = CpfpTransaction::from_txins(
         cpfp_txins,
         tbc_weight,
         tbc_fees,
@@ -906,7 +946,6 @@ pub fn derive_transactions(
 
     // The cpfp tx contains the input of the tx to be cpfped
     assert!(cpfp_tx.tx().input.contains(&cpfp_txin.unsigned_txin()));
-
     assert_eq!(cpfp_tx.tx().output.len(), 1);
     // Either the change is 0 with an OP_RETURN,
     // or its value is bigger than CPFP_MIN_CHANGE, and we send
@@ -920,29 +959,17 @@ pub fn derive_transactions(
         );
     }
 
-    // We sign and check the package feerate
+    // we sign the cpfp and then check the package feerate
+    let cpfp_fees = cpfp_tx.fees();
     let inputs_len = cpfp_tx.psbt().inputs.len();
+    let mut psbt = cpfp_tx.into_psbt();
     for i in 0..inputs_len {
-        let cpfp_tx_sighash = cpfp_tx
-            .signature_hash(i, SigHashType::All)
-            .expect("Input exists");
-        satisfy_transaction_input(
-            &secp,
-            &mut cpfp_tx,
-            i,
-            &cpfp_tx_sighash,
-            &mancpfp_priv,
-            Some(child_number),
-        )?;
+        sign_psbt(&secp, &mut psbt, i, &mancpfp_priv, child_number);
     }
-
-    roundtrip!(cpfp_tx, CpfpTransaction);
-    cpfp_tx.finalize(&secp)?;
-    roundtrip!(cpfp_tx, CpfpTransaction);
-
+    finalize_psbt(&secp, &mut psbt);
     assert!(
-        1000 * (cpfp_tx.fees() + spend_tx.fees())
-            / (cpfp_tx.into_tx().get_weight() as u64 + spend_tx.max_weight())
+        1000 * (cpfp_fees + spend_tx.fees())
+            / (psbt.global.unsigned_tx.get_weight() as u64 + spend_tx.max_weight())
             >= spend_tx.max_feerate() * 1000 + added_feerate
     );
 
