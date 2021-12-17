@@ -473,25 +473,40 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
 /// A transaction that can be CPFPed
 pub trait CpfpableTransaction: RevaultTransaction {
     /// Return the txin refering to the output to spend to CPFP this transaction, if any.
-    fn cpfp_txin(&self, cpfp_descriptor: &DerivedCpfpDescriptor) -> Option<CpfpTxIn> {
-        let spk = cpfp_descriptor.inner().script_pubkey();
-        let index = self
-            .psbt()
-            .global
-            .unsigned_tx
-            .output
-            .iter()
-            .position(|txo| txo.script_pubkey == spk)?;
+    fn cpfp_txin(
+        &self,
+        cpfp_descriptor: &CpfpDescriptor,
+        secp: &secp256k1::Secp256k1<impl secp256k1::Verification>,
+    ) -> Option<CpfpTxIn> {
+        let psbtouts = &self.psbt().outputs;
 
-        let txo = &self.psbt().global.unsigned_tx.output[index];
-        let prev_txout = CpfpTxOut::new(Amount::from_sat(txo.value), cpfp_descriptor);
-        Some(CpfpTxIn::new(
-            OutPoint {
-                txid: self.psbt().global.unsigned_tx.txid(),
-                vout: index.try_into().expect("vout doesn't fit in a u32?"),
-            },
-            prev_txout,
-        ))
+        for i in 0..psbtouts.len() {
+            // For instance the external outputs of the Spend have no bip32_derivation
+            if psbtouts[i].bip32_derivation.is_empty() {
+                continue;
+            }
+
+            // But when we do set it, the path always have a depth of 1
+            let der_path = &psbtouts[i].bip32_derivation.values().next().unwrap().1;
+            assert_eq!(der_path.len(), 1,);
+            let der_index = der_path[0];
+            let der_cpfp_desc = cpfp_descriptor.derive(der_index, secp);
+
+            // Is it the CPFP txo?
+            if self.tx().output[i].script_pubkey == der_cpfp_desc.inner().script_pubkey() {
+                let txo = &self.tx().output[i];
+                let prev_txout = CpfpTxOut::new(Amount::from_sat(txo.value), &der_cpfp_desc);
+                return Some(CpfpTxIn::new(
+                    OutPoint {
+                        txid: self.txid(),
+                        vout: i.try_into().expect("vout doesn't fit in a u32?"),
+                    },
+                    prev_txout,
+                ));
+            }
+        }
+
+        None
     }
 
     /// Get the feerate of this transaction, assuming fully-satisfied inputs. If the transaction

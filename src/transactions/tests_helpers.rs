@@ -685,10 +685,8 @@ pub fn derive_transactions(
         ),
     ];
 
-    let cpfp_txins = vec![
-        unvault_tx.cpfp_txin(&der_cpfp_descriptor).unwrap(),
-        unvault_tx.cpfp_txin(&der_cpfp_descriptor).unwrap(),
-    ];
+    let cpfp_txin = unvault_tx.cpfp_txin(&cpfp_descriptor, &secp).unwrap();
+    let cpfp_txins = vec![cpfp_txin.clone(), cpfp_txin];
     let tbc_weight = unvault_tx.max_weight() * 2;
     let tbc_fees = Amount::from_sat(unvault_tx.fees() * 2);
     // Let's ask for a decent feerate
@@ -930,7 +928,7 @@ pub fn derive_transactions(
         ),
     ];
 
-    let cpfp_txin = spend_tx.cpfp_txin(&der_cpfp_descriptor).unwrap();
+    let cpfp_txin = spend_tx.cpfp_txin(&cpfp_descriptor, &secp).unwrap();
     let cpfp_txins = vec![cpfp_txin.clone()];
     let tbc_weight = spend_tx.max_weight();
     let tbc_fees = Amount::from_sat(spend_tx.fees());
