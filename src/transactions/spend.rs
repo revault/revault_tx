@@ -291,6 +291,24 @@ impl SpendTransaction {
             .map_err(|_| PsbtValidationError::InvalidInputField(input.clone()))?;
         }
 
+        let mut derivation_count: usize = 0;
+        for o in psbt.outputs.iter() {
+            if !o.bip32_derivation.is_empty() {
+                derivation_count += 1;
+                if derivation_count > 2 {
+                    return Err(PsbtValidationError::InvalidCountOuputWithDerivations(
+                        derivation_count,
+                    )
+                    .into());
+                }
+            }
+        }
+        if derivation_count < 1 {
+            return Err(
+                PsbtValidationError::InvalidCountOuputWithDerivations(derivation_count).into(),
+            );
+        }
+
         // Make sure the transaction cannot get out of standardness bounds once finalized
         let spend_tx = SpendTransaction(psbt);
         let witstrip_weight = spend_tx.psbt().global.unsigned_tx.get_weight();
