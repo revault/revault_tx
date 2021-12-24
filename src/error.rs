@@ -184,6 +184,7 @@ pub enum PsbtValidationError {
     InvalidInputField(PsbtInput),
     InvalidOutputField(PsbtOutput),
     InvalidPrevoutType(PsbtInput),
+    InvalidCountOuputWithDerivations(usize),
     PartiallyFinalized,
     InsaneAmounts,
     TransactionTooLarge,
@@ -232,6 +233,11 @@ impl fmt::Display for PsbtValidationError {
                 f,
                 "This input refers to an output of invalid type: '{:#?}'",
                 i
+            ),
+            Self::InvalidCountOuputWithDerivations(c) => write!(
+                f,
+                "Incorrect number of PSBT outputs with bip32 derivation set: {}.",
+                c
             ),
             Self::PartiallyFinalized => write!(f, "PSBT contains both final and non-final inputs"),
             Self::InsaneAmounts => write!(
