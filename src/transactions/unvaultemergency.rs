@@ -35,26 +35,17 @@ impl UnvaultEmergencyTransaction {
     // Internal DRY routine for creating the inner PSBT
     fn create_psbt(
         unvault_txin: UnvaultTxIn,
-        feebump_txin: Option<FeeBumpTxIn>,
         emergency_txo: EmergencyTxOut,
         lock_time: u32,
     ) -> Psbt {
-        let mut txins = vec![unvault_txin.unsigned_txin()];
-        let mut psbtins = vec![PsbtIn {
+        let txins = vec![unvault_txin.unsigned_txin()];
+        let psbtins = vec![PsbtIn {
             witness_script: Some(unvault_txin.txout().witness_script().clone()),
             bip32_derivation: unvault_txin.txout().bip32_derivation().clone(),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
             witness_utxo: Some(unvault_txin.into_txout().into_txout()),
             ..PsbtIn::default()
         }];
-        if let Some(feebump_txin) = feebump_txin {
-            txins.push(feebump_txin.unsigned_txin());
-            psbtins.push(PsbtIn {
-                sighash_type: Some(SigHashType::All),
-                witness_utxo: Some(feebump_txin.into_txout().into_txout()),
-                ..PsbtIn::default()
-            });
-        }
 
         Psbt {
             global: PsbtGlobal {
@@ -76,35 +67,23 @@ impl UnvaultEmergencyTransaction {
     }
 
     /// The second emergency transaction always spends an unvault output and pays to the Emergency
-    /// Script. It may also spend an additional output for fee-bumping.
+    /// Script.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_input: UnvaultTxIn,
-        feebump_input: Option<FeeBumpTxIn>,
         emer_address: EmergencyAddress,
         lock_time: u32,
     ) -> Result<UnvaultEmergencyTransaction, TransactionCreationError> {
-        if let Some(ref txin) = feebump_input {
-            if txin.txout().txout().value > max_money(Network::Bitcoin) {
-                return Err(TransactionCreationError::InsaneAmounts);
-            }
-        }
-
-        // First, create a dummy transaction to get its weight without Witness. Note that we always
-        // account for the weight *without* feebump input. It has to pay for itself.
+        // First, create a dummy transaction to get its weight without Witness.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), Amount::from_sat(u64::MAX));
-        let dummy_tx = UnvaultEmergencyTransaction::create_psbt(
-            unvault_input.clone(),
-            None,
-            emer_txo,
-            lock_time,
-        )
-        .global
-        .unsigned_tx;
+        let dummy_tx =
+            UnvaultEmergencyTransaction::create_psbt(unvault_input.clone(), emer_txo, lock_time)
+                .global
+                .unsigned_tx;
 
-        // The weight of the unvault emergency transaction without a feebump input is the weight of
-        // the witness-stripped transaction plus the weight required to satisfy the unvault txin
+        // The weight of the Unvault Emergency transaction is the weight of the witness-stripped
+        // transaction plus the weight required to satisfy the Unvault txin
         let total_weight = dummy_tx
             .get_weight()
             .checked_add(unvault_input.txout().max_sat_weight())
@@ -113,12 +92,11 @@ impl UnvaultEmergencyTransaction {
         let fees = EMER_TX_FEERATE
             .checked_mul(total_weight)
             .expect("Weight computation bug");
-        // Without the feebump input, it should not be reachable.
-        debug_assert!(fees < INSANE_FEES);
+        assert!(fees < INSANE_FEES);
 
         assert!(
             total_weight <= MAX_STANDARD_TX_WEIGHT as u64,
-            "At most 2 inputs and a single output"
+            "A single output and a single output"
         );
 
         // Now, get the emergency output value out of it.
@@ -133,12 +111,7 @@ impl UnvaultEmergencyTransaction {
         let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
         Ok(UnvaultEmergencyTransaction(
-            UnvaultEmergencyTransaction::create_psbt(
-                unvault_input,
-                feebump_input,
-                emer_txo,
-                lock_time,
-            ),
+            UnvaultEmergencyTransaction::create_psbt(unvault_input, emer_txo, lock_time),
         ))
     }
 
@@ -154,31 +127,27 @@ impl UnvaultEmergencyTransaction {
         }
 
         let input_count = psbt.global.unsigned_tx.input.len();
-        if input_count > 2 {
+        if psbt.inputs.len() != 1 {
             return Err(PsbtValidationError::InvalidInputCount(input_count).into());
         }
-        if input_count > 1 {
-            let input = utils::find_feebumping_input(&psbt.inputs)
-                .ok_or(PsbtValidationError::MissingFeeBumpingInput)?;
-            utils::check_feebump_input(&input)?;
-        }
-        let input = utils::find_revocationtx_input(&psbt.inputs)
-            .ok_or(PsbtValidationError::MissingRevocationInput)?;
-        utils::check_revocationtx_input(&input)?;
+        utils::check_revocationtx_input(&psbt.inputs[0])?;
 
         Ok(UnvaultEmergencyTransaction(psbt))
     }
 
     /// Add a signature for the input spending the Unvault transaction
-    pub fn add_emer_sig<C: secp256k1::Verification>(
+    pub fn add_sig<C: secp256k1::Verification>(
         &mut self,
         pubkey: secp256k1::PublicKey,
         signature: secp256k1::Signature,
         secp: &secp256k1::Secp256k1<C>,
     ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
-        let input_index = utils::p2wsh_input_index(&self.0)
-            .expect("We are always created with a (single) P2WSH input");
-        RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
+        assert_eq!(
+            self.psbt().inputs.len(),
+            1,
+            "We are always created with a (single) P2WSH input"
+        );
+        RevaultTransaction::add_signature(self, 0, pubkey, signature, secp)
     }
 
     /// Get the reference to the Emergency UTXO

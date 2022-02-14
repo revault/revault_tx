@@ -3,11 +3,8 @@
 //! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
-use crate::{
-    error::TxoutCreationError,
-    scripts::{
-        DerivedCpfpDescriptor, DerivedDepositDescriptor, DerivedUnvaultDescriptor, EmergencyAddress,
-    },
+use crate::scripts::{
+    DerivedCpfpDescriptor, DerivedDepositDescriptor, DerivedUnvaultDescriptor, EmergencyAddress,
 };
 
 use miniscript::{
@@ -197,31 +194,6 @@ impl CpfpTxOut {
                 })
                 .collect(),
         }
-    }
-}
-
-/// The output spent by the revocation transactions to bump their feerate
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct FeeBumpTxOut(TxOut);
-impl FeeBumpTxOut {
-    /// Create a new FeeBumpTxOut, note that it's managed externally so we don't need a witness
-    /// Script.
-    pub fn new(txout: TxOut) -> Result<FeeBumpTxOut, TxoutCreationError> {
-        if !txout.script_pubkey.is_v0_p2wpkh() {
-            return Err(TxoutCreationError::InvalidScriptPubkeyType);
-        }
-
-        Ok(FeeBumpTxOut(txout))
-    }
-}
-
-impl RevaultTxOut for FeeBumpTxOut {
-    fn txout(&self) -> &TxOut {
-        &self.0
-    }
-
-    fn into_txout(self) -> TxOut {
-        self.0
     }
 }
 

@@ -44,7 +44,7 @@ fuzz_target!(|data: &[u8]| {
 
             // We can add a signature
             assert!(tx
-                .add_emer_sig(dummykey, dummy_sig, &SECP256K1,)
+                .add_sig(dummykey, dummy_sig, &SECP256K1,)
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid signature"));

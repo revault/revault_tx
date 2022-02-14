@@ -1,7 +1,7 @@
 use super::{
     transaction_chain, CancelTransaction, CpfpTransaction, CpfpableTransaction, DepositTransaction,
-    EmergencyAddress, EmergencyTransaction, FeeBumpTransaction, RevaultTransaction,
-    SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE, DUST_LIMIT,
+    EmergencyAddress, EmergencyTransaction, RevaultTransaction, SpendTransaction,
+    UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE, DUST_LIMIT,
 };
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
@@ -221,8 +221,6 @@ pub fn derive_transactions(
     csv: u32,
     deposit_prevout: OutPoint,
     deposit_value: u64,
-    feebump_prevout: OutPoint,
-    feebump_value: u64,
     // Outpoint and amount of inputs of a Spend
     unvault_spends: Vec<(OutPoint, u64)>,
     with_cosig_servers: bool,
@@ -319,102 +317,10 @@ pub fn derive_transactions(
         secp,
     )?;
 
-    // The fee-bumping utxo, used in revaulting transactions inputs to bump their feerate.
-    // We simulate a wallet utxo.
-    let mut rng = fastrand::Rng::new();
-    let feebump_xpriv = get_random_privkey(&mut rng);
-    let feebump_xpub = bip32::ExtendedPubKey::from_private(&secp, &feebump_xpriv);
-    let feebump_descriptor = Descriptor::new_wpkh(
-        DescriptorPublicKey::XPub(DescriptorXKey {
-            origin: None,
-            xkey: feebump_xpub,
-            derivation_path: bip32::DerivationPath::from(vec![]),
-            wildcard: Wildcard::None, // We are not going to derive from this one
-        })
-        .derive_public_key(secp)
-        .unwrap(),
-    )
-    .unwrap();
-    let raw_feebump_tx = Transaction {
-        version: 2,
-        lock_time: 0,
-        input: vec![TxIn {
-            previous_output: feebump_prevout,
-            ..TxIn::default()
-        }],
-        output: vec![TxOut {
-            value: feebump_value,
-            script_pubkey: feebump_descriptor.script_pubkey(),
-        }],
-    };
-    let feebump_txo = FeeBumpTxOut::new(raw_feebump_tx.output[0].clone()).expect("It is a p2wpkh");
-    let feebump_tx = FeeBumpTransaction(raw_feebump_tx);
-
     // Create and sign the first (deposit) emergency transaction
-    // We can sign the transaction without the feebump input
-    let mut emergency_tx_no_feebump =
-        EmergencyTransaction::new(deposit_txin.clone(), None, emergency_address.clone(), 0)?;
-    assert_eq!(h_emer, emergency_tx_no_feebump);
-    assert_eq!(
-        emergency_tx_no_feebump.emergency_outpoint(),
-        OutPoint {
-            txid: emergency_tx_no_feebump.txid(),
-            vout: 0
-        }
-    );
-
-    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 250 is the feerate is sat/WU
-    assert_eq!(
-        emergency_tx_no_feebump.fees(),
-        (376 + deposit_txin.txout().max_sat_weight() as u64) * 250,
-    );
-    // We cannot get a sighash for a non-existing input
-    assert_eq!(
-        emergency_tx_no_feebump.signature_hash(10, SigHashType::AllPlusAnyoneCanPay),
-        Err(InputSatisfactionError::OutOfBounds)
-    );
-    // But for an existing one, all good
-    let emergency_tx_sighash_vault = emergency_tx_no_feebump
-        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
-        .expect("Input exists");
-    // We can't force it to accept a SIGHASH_ALL signature:
-    let emer_sighash_all = emergency_tx_no_feebump
-        .signature_hash(0, SigHashType::All)
-        .unwrap();
-    let err = satisfy_transaction_input(
-        &secp,
-        &mut emergency_tx_no_feebump,
-        0,
-        &emer_sighash_all,
-        &stakeholders_priv,
-        Some(child_number),
-    );
-    assert!(err.unwrap_err().to_string().contains("Invalid signature"),);
-    // Now, that's the right SIGHASH
-    satisfy_transaction_input(
-        &secp,
-        &mut emergency_tx_no_feebump,
-        0,
-        &emergency_tx_sighash_vault,
-        &stakeholders_priv,
-        Some(child_number),
-    )?;
-    // Without feebump it finalizes just fine
-    emergency_tx_no_feebump.finalize(&secp)?;
-
-    let feebump_txin = FeeBumpTxIn::new(
-        OutPoint {
-            txid: feebump_tx.0.txid(),
-            vout: 0,
-        },
-        feebump_txo.clone(),
-    );
-    let mut emergency_tx = EmergencyTransaction::new(
-        deposit_txin.clone(),
-        Some(feebump_txin),
-        emergency_address.clone(),
-        0,
-    )?;
+    let mut emergency_tx =
+        EmergencyTransaction::new(deposit_txin.clone(), emergency_address.clone(), 0)?;
+    assert_eq!(h_emer, emergency_tx);
     assert_eq!(
         emergency_tx.emergency_outpoint(),
         OutPoint {
@@ -423,26 +329,42 @@ pub fn derive_transactions(
         }
     );
 
-    let emergency_tx_sighash_feebump = emergency_tx
-        .signature_hash(1, SigHashType::All)
+    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 250 is the feerate is sat/WU
+    assert_eq!(
+        emergency_tx.fees(),
+        (376 + deposit_txin.txout().max_sat_weight() as u64) * 250,
+    );
+    // We cannot get a sighash for a non-existing input
+    assert_eq!(
+        emergency_tx.signature_hash(10, SigHashType::AllPlusAnyoneCanPay),
+        Err(InputSatisfactionError::OutOfBounds)
+    );
+    // But for an existing one, all good
+    let emergency_tx_sighash_vault = emergency_tx
+        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
         .expect("Input exists");
-    satisfy_transaction_input(
+    // We can't force it to accept a SIGHASH_ALL signature:
+    let emer_sighash_all = emergency_tx
+        .signature_hash(0, SigHashType::All)
+        .unwrap();
+    let err = satisfy_transaction_input(
         &secp,
         &mut emergency_tx,
         0,
-        // This sighash was created without knowledge of the feebump input. It's fine.
-        &emergency_tx_sighash_vault,
+        &emer_sighash_all,
         &stakeholders_priv,
         Some(child_number),
-    )?;
+    );
+    assert!(err.unwrap_err().to_string().contains("Invalid signature"),);
+    // Now, that's the right SIGHASH
     roundtrip!(emergency_tx, EmergencyTransaction);
     satisfy_transaction_input(
         &secp,
         &mut emergency_tx,
-        1,
-        &emergency_tx_sighash_feebump,
-        &vec![feebump_xpriv],
-        None,
+        0,
+        &emergency_tx_sighash_vault,
+        &stakeholders_priv,
+        Some(child_number),
     )?;
     roundtrip!(emergency_tx, EmergencyTransaction);
     emergency_tx.finalize(&secp)?;
@@ -468,144 +390,44 @@ pub fn derive_transactions(
     // Create and sign the cancel transaction
     let rev_unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
     assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
-    // We can create it entirely without the feebump input
-    let mut cancel_tx_without_feebump =
-        CancelTransaction::new(rev_unvault_txin.clone(), None, &der_deposit_descriptor, 0)?;
-    roundtrip!(cancel_tx_without_feebump, CancelTransaction);
-    assert_eq!(h_cancel, cancel_tx_without_feebump);
+    let mut cancel_tx =
+        CancelTransaction::new(rev_unvault_txin.clone(), &der_deposit_descriptor, 0)?;
+    roundtrip!(cancel_tx, CancelTransaction);
+    assert_eq!(h_cancel, cancel_tx);
     assert_eq!(
-        cancel_tx_without_feebump
+        cancel_tx
             .deposit_txin(&der_deposit_descriptor)
             .outpoint(),
-        OutPoint {
-            txid: cancel_tx_without_feebump.txid(),
-            vout: 0
-        }
-    );
-    // Keep track of the fees we computed..
-    let value_no_feebump = cancel_tx_without_feebump.psbt().global.unsigned_tx.output[0].value;
-    // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
-    assert_eq!(
-        cancel_tx_without_feebump.fees(),
-        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
-    );
-    let cancel_tx_without_feebump_sighash = cancel_tx_without_feebump
-        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
-        .expect("Input exists");
-    satisfy_transaction_input(
-        &secp,
-        &mut cancel_tx_without_feebump,
-        0,
-        &cancel_tx_without_feebump_sighash,
-        &stakeholders_priv,
-        Some(child_number),
-    )?;
-    roundtrip!(cancel_tx_without_feebump, CancelTransaction);
-    cancel_tx_without_feebump.finalize(&secp).unwrap();
-    roundtrip!(cancel_tx_without_feebump, CancelTransaction);
-    // We can reuse the ANYONE_ALL sighash for the one with the feebump input
-    let feebump_txin = FeeBumpTxIn::new(
-        OutPoint {
-            txid: feebump_tx.0.txid(),
-            vout: 0,
-        },
-        feebump_txo.clone(),
-    );
-    let mut cancel_tx = CancelTransaction::new(
-        rev_unvault_txin.clone(),
-        Some(feebump_txin),
-        &der_deposit_descriptor,
-        0,
-    )?;
-    assert_eq!(
-        cancel_tx.deposit_txin(&der_deposit_descriptor).outpoint(),
         OutPoint {
             txid: cancel_tx.txid(),
             vout: 0
         }
     );
-
-    // It really is a belt-and-suspenders check as the sighash would differ too.
+    // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
     assert_eq!(
-        cancel_tx_without_feebump.psbt().global.unsigned_tx.output[0].value,
-        value_no_feebump,
-        "Base fees when computing with with feebump differ !!"
+        cancel_tx.fees(),
+        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
     );
-    let cancel_tx_sighash_feebump = cancel_tx
-        .signature_hash(1, SigHashType::All)
-        .expect("Input exists");
-    satisfy_transaction_input(
-        &secp,
-        &mut cancel_tx,
-        0,
-        &cancel_tx_without_feebump_sighash,
-        &stakeholders_priv,
-        Some(child_number),
-    )?;
-    roundtrip!(cancel_tx, CancelTransaction);
-    satisfy_transaction_input(
-        &secp,
-        &mut cancel_tx,
-        1,
-        &cancel_tx_sighash_feebump,
-        &vec![feebump_xpriv],
-        None, // No derivation path for the feebump key
-    )?;
-    roundtrip!(cancel_tx, CancelTransaction);
-    cancel_tx.finalize(&secp)?;
-    roundtrip!(cancel_tx, CancelTransaction);
-
-    // We can create it without the feebump input
-    let mut unemergency_tx_no_feebump = UnvaultEmergencyTransaction::new(
-        rev_unvault_txin.clone(),
-        None,
-        emergency_address.clone(),
-        0,
-    )?;
-    roundtrip!(unemergency_tx_no_feebump, UnvaultEmergencyTransaction);
-    assert_eq!(h_unemer, unemergency_tx_no_feebump);
-    assert_eq!(
-        unemergency_tx_no_feebump.emergency_outpoint(),
-        OutPoint {
-            txid: unemergency_tx_no_feebump.txid(),
-            vout: 0
-        }
-    );
-
-    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 75 is the feerate is sat/WU
-    assert_eq!(
-        unemergency_tx_no_feebump.fees(),
-        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 250,
-    );
-    let unemergency_tx_sighash = unemergency_tx_no_feebump
+    let cancel_tx_sighash = cancel_tx
         .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
         .expect("Input exists");
+    roundtrip!(cancel_tx, CancelTransaction);
     satisfy_transaction_input(
         &secp,
-        &mut unemergency_tx_no_feebump,
+        &mut cancel_tx,
         0,
-        &unemergency_tx_sighash,
+        &cancel_tx_sighash,
         &stakeholders_priv,
         Some(child_number),
     )?;
-    roundtrip!(unemergency_tx_no_feebump, UnvaultEmergencyTransaction);
-    unemergency_tx_no_feebump.finalize(&secp)?;
-    roundtrip!(unemergency_tx_no_feebump, UnvaultEmergencyTransaction);
+    roundtrip!(cancel_tx, CancelTransaction);
+    cancel_tx.finalize(&secp).unwrap();
+    roundtrip!(cancel_tx, CancelTransaction);
 
-    let feebump_txin = FeeBumpTxIn::new(
-        OutPoint {
-            txid: feebump_tx.0.txid(),
-            vout: 0,
-        },
-        feebump_txo.clone(),
-    );
-    let mut unemergency_tx = UnvaultEmergencyTransaction::new(
-        rev_unvault_txin.clone(),
-        Some(feebump_txin),
-        emergency_address,
-        0,
-    )?;
+    let mut unemergency_tx =
+        UnvaultEmergencyTransaction::new(rev_unvault_txin.clone(), emergency_address.clone(), 0)?;
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
+    assert_eq!(h_unemer, unemergency_tx);
     assert_eq!(
         unemergency_tx.emergency_outpoint(),
         OutPoint {
@@ -614,6 +436,15 @@ pub fn derive_transactions(
         }
     );
 
+    // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 75 is the feerate is sat/WU
+    assert_eq!(
+        unemergency_tx.fees(),
+        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 250,
+    );
+    let unemergency_tx_sighash = unemergency_tx
+        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
+        .expect("Input exists");
+    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     satisfy_transaction_input(
         &secp,
         &mut unemergency_tx,
@@ -621,30 +452,6 @@ pub fn derive_transactions(
         &unemergency_tx_sighash,
         &stakeholders_priv,
         Some(child_number),
-    )?;
-    roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
-    // We don't have satisfied the feebump input yet!
-    // Note that we clone because Miniscript's finalize() will wipe the PSBT input..
-    match unemergency_tx.clone().finalize(&secp) {
-        Err(e) => assert!(
-            e.to_string()
-                .contains("Missing pubkey for a pkh/wpkh at index 1"),
-            "Got another error: {}",
-            e
-        ),
-        Ok(_) => unreachable!(),
-    }
-    // Now actually satisfy it, libbitcoinconsensus should not yell
-    let unemer_tx_sighash_feebump = unemergency_tx
-        .signature_hash(1, SigHashType::All)
-        .expect("Input exists");
-    satisfy_transaction_input(
-        &secp,
-        &mut unemergency_tx,
-        1,
-        &unemer_tx_sighash_feebump,
-        &vec![feebump_xpriv],
-        None,
     )?;
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     unemergency_tx.finalize(&secp)?;

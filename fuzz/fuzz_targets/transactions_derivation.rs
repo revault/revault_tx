@@ -20,9 +20,6 @@ struct Config {
     deposit_txid: [u8; 32],
     deposit_vout: u32,
     deposit_value: u64,
-    feebump_txid: [u8; 32],
-    feebump_vout: u32,
-    feebump_value: u64,
     unvault_spends: Vec<([u8; 32], u32, u64)>,
 }
 
@@ -39,10 +36,6 @@ fuzz_target!(|config: Config| {
     let deposit_prevout = OutPoint {
         txid: Txid::from_slice(&config.deposit_txid).unwrap(),
         vout: config.deposit_vout,
-    };
-    let feebump_prevout = OutPoint {
-        txid: Txid::from_slice(&config.feebump_txid).unwrap(),
-        vout: config.feebump_vout,
     };
     let unvault_spends = config
         .unvault_spends
@@ -64,8 +57,6 @@ fuzz_target!(|config: Config| {
         config.csv,
         deposit_prevout,
         config.deposit_value,
-        feebump_prevout,
-        config.feebump_value,
         unvault_spends,
         config.with_cosig_servers,
         &SECP256K1,

@@ -3,7 +3,7 @@
 //! Wrappers around bitcoin's OutPoint and previous TxOut to statically check Revault
 //! transaction creation and ease PSBT management.
 
-use crate::txouts::{CpfpTxOut, DepositTxOut, FeeBumpTxOut, UnvaultTxOut};
+use crate::txouts::{CpfpTxOut, DepositTxOut, UnvaultTxOut};
 
 use miniscript::bitcoin::{OutPoint, TxIn};
 
@@ -91,25 +91,6 @@ impl UnvaultTxIn {
             outpoint,
             prev_txout,
             sequence,
-        }
-    }
-}
-
-implem_revault_txin!(
-    FeeBumpTxIn,
-    FeeBumpTxOut,
-    doc = "A wallet txo spent by a revocation ([Cancel](crate::transactions::CancelTransaction), \
-           [Emergency](crate::transactions::EmergencyTransaction)) transaction to bump the package feerate. \
-           \
-           This output is from an external wallet and is often created by a first stage transaction."
-);
-impl FeeBumpTxIn {
-    /// Instanciate a txin referencing a feebump txout which signals for RBF.
-    pub fn new(outpoint: OutPoint, prev_txout: FeeBumpTxOut) -> FeeBumpTxIn {
-        FeeBumpTxIn {
-            outpoint,
-            prev_txout,
-            sequence: RBF_SEQUENCE,
         }
     }
 }

@@ -9,14 +9,12 @@ use crate::{error::*, scripts::*, txins::*, txouts::*};
 use miniscript::{
     bitcoin::{
         consensus::encode::Encodable,
-        hash_types,
-        hashes::Hash,
         secp256k1,
         util::{
             bip143::SigHashCache, bip32::ChildNumber, psbt::PartiallySignedTransaction as Psbt,
         },
-        Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, Script, SigHash,
-        SigHashType, Transaction, Txid, Wtxid,
+        Address, Amount, Network, OutPoint, PublicKey as BitcoinPubKey, SigHash, SigHashType,
+        Transaction, Txid, Wtxid,
     },
     DescriptorTrait,
 };
@@ -111,7 +109,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     fn into_psbt(self) -> Psbt;
 
     /// Get the sighash for an input of a Revault transaction. Will deduce the scriptCode from
-    /// the previous scriptPubKey type, assuming either P2WSH or P2WPKH.
+    /// the previous witness script.
     ///
     /// Will error if the input is out of bounds or the PSBT input is insane (eg a P2WSH that
     /// does not contain a Witness Script (ie was already finalized)).
@@ -237,22 +235,12 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
             .as_ref()
             .expect("We always set witness_txo");
 
-        if prev_txo.script_pubkey.is_v0_p2wsh() {
-            let witscript = psbtin
-                .witness_script
-                .as_ref()
-                .ok_or(InputSatisfactionError::MissingWitnessScript)?;
-            Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
-        } else {
-            assert!(
-                prev_txo.script_pubkey.is_v0_p2wpkh(),
-                "If not a P2WSH, it must be a feebump input."
-            );
-            let raw_pkh = &prev_txo.script_pubkey[2..];
-            let pkh = hash_types::PubkeyHash::from_slice(raw_pkh).expect("Never fails");
-            let witscript = Script::new_p2pkh(&pkh);
-            Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
-        }
+        assert!(prev_txo.script_pubkey.is_v0_p2wsh());
+        let witscript = psbtin
+            .witness_script
+            .as_ref()
+            .ok_or(InputSatisfactionError::MissingWitnessScript)?;
+        Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
     }
 
     fn add_signature<C: secp256k1::Verification>(
@@ -288,19 +276,14 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
 
         // -- If a witnessScript is provided, the scriptPubKey or the redeemScript must be for
         // that witnessScript
-        if let Some(witness_script) = &psbtin.witness_script {
-            // Note the network is irrelevant here.
-            let expected_script_pubkey =
-                Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
-            assert!(
-                expected_script_pubkey == prev_txo.script_pubkey,
-                "We create TxOut scriptPubKey out of this exact witnessScript."
-            );
-        } else {
-            // We only use P2WSH utxos internally. External inputs are only ever added for fee
-            // bumping, for which we require P2WPKH.
-            assert!(prev_txo.script_pubkey.is_v0_p2wpkh());
-        }
+        let witness_script = psbtin.witness_script.as_ref().expect("We only use wsh");
+        // Note the network is irrelevant here.
+        let expected_script_pubkey =
+            Address::p2wsh(witness_script, Network::Bitcoin).script_pubkey();
+        assert!(
+            expected_script_pubkey == prev_txo.script_pubkey,
+            "We create TxOut scriptPubKey out of this exact witnessScript."
+        );
         assert!(
             psbtin.redeem_script.is_none(),
             "We never create Psbt input with legacy txos."
@@ -548,12 +531,7 @@ impl DepositTransaction {
     }
 }
 
-/// The fee-bumping transaction, we don't create nor sign it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FeeBumpTransaction(pub Transaction);
-
 /// Get the chain of pre-signed transaction out of a deposit available for a manager.
-/// No feebump input.
 #[allow(clippy::too_many_arguments)]
 pub fn transaction_chain_manager<C: secp256k1::Verification>(
     deposit_outpoint: OutPoint,
@@ -584,7 +562,6 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
 
     let cancel_tx = CancelTransaction::new(
         unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
-        None,
         &der_deposit_descriptor,
         lock_time,
     )?;
@@ -592,7 +569,7 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
     Ok((unvault_tx, cancel_tx))
 }
 
-/// Get the entire chain of pre-signed transaction for this derivation index out of a deposit. No feebump input.
+/// Get the entire chain of pre-signed transaction for this derivation index out of a deposit.
 #[allow(clippy::too_many_arguments)]
 pub fn transaction_chain<C: secp256k1::Verification>(
     deposit_outpoint: OutPoint,
@@ -629,13 +606,12 @@ pub fn transaction_chain<C: secp256k1::Verification>(
         deposit_outpoint,
         DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
     );
-    let emergency_tx =
-        EmergencyTransaction::new(deposit_txin, None, emer_address.clone(), lock_time)?;
+    let emergency_tx = EmergencyTransaction::new(deposit_txin, emer_address.clone(), lock_time)?;
 
     let der_unvault_descriptor = unvault_descriptor.derive(derivation_index, secp);
     let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
     let unvault_emergency_tx =
-        UnvaultEmergencyTransaction::new(unvault_txin, None, emer_address, lock_time)?;
+        UnvaultEmergencyTransaction::new(unvault_txin, emer_address, lock_time)?;
 
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
@@ -705,12 +681,6 @@ mod tests {
             "39a8212c6a9b467680d43e47b61b8363fe1febb761f9f548eb4a432b2bc9bbec:0",
         )
         .unwrap();
-        let feebump_prevout = OutPoint::from_str(
-            "4bb4545bb4bc8853cb03e42984d677fbe880c81e7d95609360eed0d8f45b52f8:0",
-        )
-        .unwrap();
-
-        let feebump_value = 56730;
         let unvaults_spent = vec![
             (
                 OutPoint::from_str(
@@ -749,8 +719,6 @@ mod tests {
                 csv,
                 deposit_prevout,
                 234_631,
-                feebump_prevout,
-                feebump_value,
                 unvaults_spent.clone(),
                 true,
                 &secp
@@ -766,8 +734,6 @@ mod tests {
             SEQUENCE_LOCKTIME_MASK + 1,
             deposit_prevout,
             300_000,
-            feebump_prevout,
-            feebump_value,
             unvaults_spent.clone(),
             true,
             &secp,
@@ -781,8 +747,6 @@ mod tests {
             csv,
             deposit_prevout,
             234_632,
-            feebump_prevout,
-            feebump_value,
             unvaults_spent.clone(),
             true,
             &secp,
@@ -798,8 +762,6 @@ mod tests {
             csv,
             deposit_prevout,
             COIN_VALUE,
-            feebump_prevout,
-            feebump_value,
             unvaults_spent.clone(),
             true,
             &secp,
@@ -815,8 +777,6 @@ mod tests {
             csv,
             deposit_prevout,
             100_000 * COIN_VALUE,
-            feebump_prevout,
-            feebump_value,
             unvaults_spent.clone(),
             true,
             &secp,
@@ -832,8 +792,6 @@ mod tests {
             csv,
             deposit_prevout,
             100 * COIN_VALUE,
-            feebump_prevout,
-            feebump_value,
             unvaults_spent.clone(),
             true,
             &secp,
@@ -849,8 +807,6 @@ mod tests {
             csv,
             deposit_prevout,
             100 * COIN_VALUE,
-            feebump_prevout,
-            feebump_value,
             unvaults_spent,
             false,
             &secp,
@@ -871,22 +827,22 @@ mod tests {
         };
         use crate::bitcoin::consensus::encode::serialize_hex;
 
-        let emergency_psbt_str = "\"cHNidP8BAIcCAAAAArlxjSMtT1NW43OtU7paIqVl/6bzTw5Q5xX7lsGErjsMAAAAAAD9////aNrJbTchwjZaRiz9bZbIQxRo/wRp5LQANqA7qTHWtzsAAAAAAP3///8BGHb1BQAAAAAiACAA3UtE19HiWwGiB6ERj47s1dIBZwo69vjfXEQw1jdANgAAAAAAAQErAOH1BQAAAAAiACAA3UtE19HiWwGiB6ERj47s1dIBZwo69vjfXEQw1jdANgEDBIEAAAABBf0TAVghAslTGncWjnHdqiPxR0bCa47bbZ9IfacoUvOtMfezbzavIQJOoGnPoDCo/yIaRQyi0WbNhOBwjW9+KuyS0tXzNDOXaiEDhIEpuvcgOIYN3wvBFQs0Tfma6tvKlb94W80dUAzrvgMhAjJCk6/xHPV/zcdKEmqkAAVQmuXAyVVa4jX1PG+WIYgPIQNRzJs4CMgBDWWmmweCLf8OqoLNncEQszFWZ25aqYOEcSEDtXG6kmkdzbsLFIxb2x0iFLVokBAyaTipwn5HdpU34/8hAtiB7MFlv5uXBDBXui9tTgu6qsa2NBla4DY1G5GyuuB3IQPd8cUxIS+8niMSWK/5BXfBtCdZsPMHc1NpAvx80ZdjQFiuIgYCMkKTr/Ec9X/Nx0oSaqQABVCa5cDJVVriNfU8b5YhiA8IQohVzwoAAAAiBgJOoGnPoDCo/yIaRQyi0WbNhOBwjW9+KuyS0tXzNDOXagiO14bnCgAAACIGAslTGncWjnHdqiPxR0bCa47bbZ9IfacoUvOtMfezbzavCOEWDZEKAAAAIgYC2IHswWW/m5cEMFe6L21OC7qqxrY0GVrgNjUbkbK64HcIADRz8AoAAAAiBgNRzJs4CMgBDWWmmweCLf8OqoLNncEQszFWZ25aqYOEcQi93C9kCgAAACIGA4SBKbr3IDiGDd8LwRULNE35murbypW/eFvNHVAM674DCBdIsDYKAAAAIgYDtXG6kmkdzbsLFIxb2x0iFLVokBAyaTipwn5HdpU34/8IonEPuQoAAAAiBgPd8cUxIS+8niMSWK/5BXfBtCdZsPMHc1NpAvx80ZdjQAinqwY/CgAAAAABAR+a3QAAAAAAABYAFOq4VB+mNQOpoT6VOJRqxIa20L7LAQMEAQAAAAAA\"";
+        let emergency_psbt_str = "\"cHNidP8BAF4CAAAAAblxjSMtT1NW43OtU7paIqVl/6bzTw5Q5xX7lsGErjsMAAAAAAD9////ARh29QUAAAAAIgAgAN1LRNfR4lsBogehEY+O7NXSAWcKOvb431xEMNY3QDYAAAAAAAEBKwDh9QUAAAAAIgAgAN1LRNfR4lsBogehEY+O7NXSAWcKOvb431xEMNY3QDYBAwSBAAAAAQX9EwFYIQLJUxp3Fo5x3aoj8UdGwmuO222fSH2nKFLzrTH3s282ryECTqBpz6AwqP8iGkUMotFmzYTgcI1vfirsktLV8zQzl2ohA4SBKbr3IDiGDd8LwRULNE35murbypW/eFvNHVAM674DIQIyQpOv8Rz1f83HShJqpAAFUJrlwMlVWuI19TxvliGIDyEDUcybOAjIAQ1lppsHgi3/DqqCzZ3BELMxVmduWqmDhHEhA7VxupJpHc27CxSMW9sdIhS1aJAQMmk4qcJ+R3aVN+P/IQLYgezBZb+blwQwV7ovbU4LuqrGtjQZWuA2NRuRsrrgdyED3fHFMSEvvJ4jEliv+QV3wbQnWbDzB3NTaQL8fNGXY0BYriIGAjJCk6/xHPV/zcdKEmqkAAVQmuXAyVVa4jX1PG+WIYgPCEKIVc8KAAAAIgYCTqBpz6AwqP8iGkUMotFmzYTgcI1vfirsktLV8zQzl2oIjteG5woAAAAiBgLJUxp3Fo5x3aoj8UdGwmuO222fSH2nKFLzrTH3s282rwjhFg2RCgAAACIGAtiB7MFlv5uXBDBXui9tTgu6qsa2NBla4DY1G5GyuuB3CAA0c/AKAAAAIgYDUcybOAjIAQ1lppsHgi3/DqqCzZ3BELMxVmduWqmDhHEIvdwvZAoAAAAiBgOEgSm69yA4hg3fC8EVCzRN+Zrq28qVv3hbzR1QDOu+AwgXSLA2CgAAACIGA7VxupJpHc27CxSMW9sdIhS1aJAQMmk4qcJ+R3aVN+P/CKJxD7kKAAAAIgYD3fHFMSEvvJ4jEliv+QV3wbQnWbDzB3NTaQL8fNGXY0AIp6sGPwoAAAAAAA==\"";
         let emergency_tx: EmergencyTransaction = serde_json::from_str(&emergency_psbt_str).unwrap();
-        assert_eq!(serialize_hex(emergency_tx.tx()), "0200000002b9718d232d4f5356e373ad53ba5a22a565ffa6f34f0e50e715fb96c184ae3b0c0000000000fdffffff68dac96d3721c2365a462cfd6d96c8431468ff0469e4b40036a03ba931d6b73b0000000000fdffffff011876f5050000000022002000dd4b44d7d1e25b01a207a1118f8eecd5d201670a3af6f8df5c4430d637403600000000");
+        assert_eq!(serialize_hex(emergency_tx.tx()), "0200000001b9718d232d4f5356e373ad53ba5a22a565ffa6f34f0e50e715fb96c184ae3b0c0000000000fdffffff011876f5050000000022002000dd4b44d7d1e25b01a207a1118f8eecd5d201670a3af6f8df5c4430d637403600000000");
 
         let unvault_psbt_str = "\"cHNidP8BAIkCAAAAAfmN22Yg3hsR6wgkPWJ3tSpO40wY5fgINkSlClxgasy7AAAAAAD9////AkANAwAAAAAAIgAgfPlPYs+3NKdo6gu1ITRhWGaZ77RL/0n3/rfdM0nHDKAwdQAAAAAAACIAIBqfyVGG6ozM3AZyeJhKeLNsjlt7AuXs89eFQSUEgx3xAAAAAAABASuIlAMAAAAAACIAIEpy7LLM5Gsjv384BJqpdhVyxzoC96snQbKN/Pl4yFqSAQjaBABHMEQCIG7ue0n/D+JrDMknOV2Up/NyLh06p2tQTHoEZAAYYoCfAiA0fZxErfzZFgLpSV/f1uvCArcXStNUnhConPYBvEmwcgFHMEQCIALfcLNVtS1zZ/AH/5JGVPlUyNGB4tAWOAvJm5DFCFkPAiAxw8oPariZ4OqNZH/PiSQytLInnsYMmzY8khNtDWS7WQFHUiED2l1MSok0kn+im8fepkDk9JJ4kmz7S7PJbLp2MHUScDshAqg1gjG67ft3qNh1U2hWCYumJvmnWsb96aAQU3BKIwiOUq4AIgICCu8X76xDyD8Eurt1XmKvjamdwezV7UxLGsoa8yfMj2cI/w6LrAoAAAAiAgKoNYIxuu37d6jYdVNoVgmLpib5p1rG/emgEFNwSiMIjgjAoMvqCgAAACICAulOlir/rBPSuqc9Z7mGFUE1ekHvzGRuDA2sjFgPGzZ+CDooLAQKAAAAIgIDncUagEr+XYCSpDykd7a6WrIa1q58GBTGSMVms8Dk/1YI0jxctQoAAAAiAgPaXUxKiTSSf6Kbx96mQOT0kniSbPtLs8lsunYwdRJwOwhMrobwCgAAAAAiAgOdxRqASv5dgJKkPKR3trpashrWrnwYFMZIxWazwOT/VgjSPFy1CgAAAAA=\"";
         let unvault_tx: UnvaultTransaction = serde_json::from_str(&unvault_psbt_str).unwrap();
         assert_eq!(serialize_hex(unvault_tx.tx()), "0200000001f98ddb6620de1b11eb08243d6277b52a4ee34c18e5f8083644a50a5c606accbb0000000000fdffffff02400d0300000000002200207cf94f62cfb734a768ea0bb5213461586699efb44bff49f7feb7dd3349c70ca030750000000000002200201a9fc95186ea8cccdc067278984a78b36c8e5b7b02e5ecf3d785412504831df100000000");
 
-        let cancel_psbt_str = "\"cHNidP8BAIcCAAAAAga9mxcLxWkl14cJX/shnW6eNUirrbe283Qs6JUfLv5zAAAAAAD9////sakwQeyflAE0MNndeR6Wyku71OiGsSWO1F7dNVztf8MAAAAAAP3///8B6MoCAAAAAAAiACBKcuyyzORrI79/OASaqXYVcsc6AverJ0Gyjfz5eMhakgAAAAAAAQErQA0DAAAAAAAiACB8+U9iz7c0p2jqC7UhNGFYZpnvtEv/Sff+t90zSccMoAEI/YMBBkgwRQIhAPm2zOTn/40LoN6Z8yhrUJmRgQ/93aGSqK8zdI2fqLyTAiB8M077JO8te/obE5J6SQydCPzPijYOAvG6Jkh64wJQyoEhAqg1gjG67ft3qNh1U2hWCYumJvmnWsb96aAQU3BKIwiOSDBFAiEA+gg7YUf2yPSDGKYufuLPaDRfDoqM+uqoEG3hfhi2FtECIG2giBUh4bcXNM+SbBTCO+fO0Oph/rcW1dYgy+6Nh48XgSED2l1MSok0kn+im8fepkDk9JJ4kmz7S7PJbLp2MHUScDsAqiEDncUagEr+XYCSpDykd7a6WrIa1q58GBTGSMVms8Dk/1asUYdkdqkUs3BYseNX1OvVfTMOlicdQe2aLpSIrGt2qRTRJAOLrxv69KTq6SNFbJ84QcsD04isbJNSh2dSIQLpTpYq/6wT0rqnPWe5hhVBNXpB78xkbgwNrIxYDxs2fiECCu8X76xDyD8Eurt1XmKvjamdwezV7UxLGsoa8yfMj2dSrwL1X7JoAAEBH5rdAAAAAAAAFgAUqFSKd3C3UEOLeYuRrrL/KOchvrUBCGsCRzBEAiAW/jTe7KhJihRTJKS7+8mczqfrxfUTVkzbYbWRDcYTJQIgQE7sBAgA1iGi6MoPnjXpqaofgJq4skvm0lWUmOQgVYQBIQOqRnFo/xOr8r6If80sZZeE0Z8IDc2hsPGUCELRZWb4ygAiAgKoNYIxuu37d6jYdVNoVgmLpib5p1rG/emgEFNwSiMIjgjAoMvqCgAAACICA9pdTEqJNJJ/opvH3qZA5PSSeJJs+0uzyWy6djB1EnA7CEyuhvAKAAAAAA==\"";
+        let cancel_psbt_str = "\"cHNidP8BAF4CAAAAAQa9mxcLxWkl14cJX/shnW6eNUirrbe283Qs6JUfLv5zAAAAAAD9////AejKAgAAAAAAIgAgSnLssszkayO/fzgEmql2FXLHOgL3qydBso38+XjIWpIAAAAAAAEBK0ANAwAAAAAAIgAgfPlPYs+3NKdo6gu1ITRhWGaZ77RL/0n3/rfdM0nHDKABCP2DAQZIMEUCIQD5tszk5/+NC6DemfMoa1CZkYEP/d2hkqivM3SNn6i8kwIgfDNO+yTvLXv6GxOSekkMnQj8z4o2DgLxuiZIeuMCUMqBIQKoNYIxuu37d6jYdVNoVgmLpib5p1rG/emgEFNwSiMIjkgwRQIhAPoIO2FH9sj0gximLn7iz2g0Xw6KjPrqqBBt4X4YthbRAiBtoIgVIeG3FzTPkmwUwjvnztDqYf63FtXWIMvujYePF4EhA9pdTEqJNJJ/opvH3qZA5PSSeJJs+0uzyWy6djB1EnA7AKohA53FGoBK/l2AkqQ8pHe2ulqyGtaufBgUxkjFZrPA5P9WrFGHZHapFLNwWLHjV9Tr1X0zDpYnHUHtmi6UiKxrdqkU0SQDi68b+vSk6ukjRWyfOEHLA9OIrGyTUodnUiEC6U6WKv+sE9K6pz1nuYYVQTV6Qe/MZG4MDayMWA8bNn4hAgrvF++sQ8g/BLq7dV5ir42pncHs1e1MSxrKGvMnzI9nUq8C9V+yaAAiAgKoNYIxuu37d6jYdVNoVgmLpib5p1rG/emgEFNwSiMIjgjAoMvqCgAAACICA9pdTEqJNJJ/opvH3qZA5PSSeJJs+0uzyWy6djB1EnA7CEyuhvAKAAAAAA==\"";
         let cancel_tx: CancelTransaction = serde_json::from_str(&cancel_psbt_str).unwrap();
-        assert_eq!(serialize_hex(cancel_tx.tx()), "020000000206bd9b170bc56925d787095ffb219d6e9e3548abadb7b6f3742ce8951f2efe730000000000fdffffffb1a93041ec9f94013430d9dd791e96ca4bbbd4e886b1258ed45edd355ced7fc30000000000fdffffff01e8ca0200000000002200204a72ecb2cce46b23bf7f38049aa9761572c73a02f7ab2741b28dfcf978c85a9200000000");
+        assert_eq!(serialize_hex(cancel_tx.tx()), "020000000106bd9b170bc56925d787095ffb219d6e9e3548abadb7b6f3742ce8951f2efe730000000000fdffffff01e8ca0200000000002200204a72ecb2cce46b23bf7f38049aa9761572c73a02f7ab2741b28dfcf978c85a9200000000");
 
-        let unemergency_psbt_str = "\"cHNidP8BAIcCAAAAAveVYT6dSrDTzQekeDseTQmpQChdIx9Fm/7yvPBvdu7HAAAAAAD9////4Mnw2eEzRAQN9WGGOBC1JjSnsKwwMSWyy5W8aSKNSi0AAAAAAP3///8B0soCAAAAAAAiACCiNS8tpAl77BeZFpoMgBph9rYdt18IGyAx0aO7B53YXgAAAAAAAQErQA0DAAAAAAAiACBcDSz6rKcOOKdc6akn9CG6PzvEQHthwsRV3Ps5fkH6XyICAj5N+pg4HkC8Ytk7YLc5Y16k+0HYxeW2Wi8nL1o0RR7MRzBEAiA/lmAObA+fV+HuMqDB5NT4rQ6z++xj6QpidJw5h7AJWAIgb4pmu9ufwM8Ou8lDCxszPw8XbTzM7ZbqEh5MazBIk5iBIgIC2T+yMdgHmC/udRKvSTblSWZ4Kf7vO2uKUPlooFiE5n9HMEQCIFX1NO7S1UsxOUiUFKD8+vbWmql6E4gd240MLs0Ht7A/AiAXinxaCoQ36FokIQbSPCaYI6OJDPsTM3YfemzoITvKHYEBAwSBAAAAAQWrIQM3WBCQMxhfyw+ncsDqRpNgRhc1S3J5E2eZkyramf/yYqxRh2R2qRT8N/OAaFe4awdH/SRrJWbCdbsgrIisa3apFM86etaiSkLAb1YEkvfBiGPhb0XZiKxsk1KHZ1IhAvI/1b7NH17PoNpLnY2BLYTBQFM7DJReEselwbrXknJaIQIYmQoDfe8y/MUX5oa8N2g2GePHXKP5+olBBjXHgsQuF1KvA7WEALJoIgYCGJkKA33vMvzFF+aGvDdoNhnjx1yj+fqJQQY1x4LELhcIwx/TKAoAAAAiBgI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezAh4xhChCgAAACIGAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/CBtBXXMKAAAAIgYC8j/Vvs0fXs+g2kudjYEthMFAUzsMlF4Sx6XButeScloI1AXIVAoAAAAiBgM3WBCQMxhfyw+ncsDqRpNgRhc1S3J5E2eZkyramf/yYgjQeHAnCgAAAAABAR+a3QAAAAAAABYAFJ/sQovfSs1At1aCKpbuNxymt6rWAQMEAQAAAAAA\"";
+        let unemergency_psbt_str = "\"cHNidP8BAF4CAAAAAfeVYT6dSrDTzQekeDseTQmpQChdIx9Fm/7yvPBvdu7HAAAAAAD9////AdLKAgAAAAAAIgAgojUvLaQJe+wXmRaaDIAaYfa2HbdfCBsgMdGjuwed2F4AAAAAAAEBK0ANAwAAAAAAIgAgXA0s+qynDjinXOmpJ/Qhuj87xEB7YcLEVdz7OX5B+l8iAgI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezEcwRAIgP5ZgDmwPn1fh7jKgweTU+K0Os/vsY+kKYnScOYewCVgCIG+KZrvbn8DPDrvJQwsbMz8PF208zO2W6hIeTGswSJOYgSICAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/RzBEAiBV9TTu0tVLMTlIlBSg/Pr21pqpehOIHduNDC7NB7ewPwIgF4p8WgqEN+haJCEG0jwmmCOjiQz7EzN2H3ps6CE7yh2BAQMEgQAAAAEFqyEDN1gQkDMYX8sPp3LA6kaTYEYXNUtyeRNnmZMq2pn/8mKsUYdkdqkU/DfzgGhXuGsHR/0kayVmwnW7IKyIrGt2qRTPOnrWokpCwG9WBJL3wYhj4W9F2YisbJNSh2dSIQLyP9W+zR9ez6DaS52NgS2EwUBTOwyUXhLHpcG615JyWiECGJkKA33vMvzFF+aGvDdoNhnjx1yj+fqJQQY1x4LELhdSrwO1hACyaCIGAhiZCgN97zL8xRfmhrw3aDYZ48dco/n6iUEGNceCxC4XCMMf0ygKAAAAIgYCPk36mDgeQLxi2TtgtzljXqT7QdjF5bZaLycvWjRFHswIeMYQoQoAAAAiBgLZP7Ix2AeYL+51Eq9JNuVJZngp/u87a4pQ+WigWITmfwgbQV1zCgAAACIGAvI/1b7NH17PoNpLnY2BLYTBQFM7DJReEselwbrXknJaCNQFyFQKAAAAIgYDN1gQkDMYX8sPp3LA6kaTYEYXNUtyeRNnmZMq2pn/8mII0HhwJwoAAAAAAA==\"";
         let unemergency_tx: UnvaultEmergencyTransaction =
             serde_json::from_str(&unemergency_psbt_str).unwrap();
-        assert_eq!(serialize_hex(unemergency_tx.tx()), "0200000002f795613e9d4ab0d3cd07a4783b1e4d09a940285d231f459bfef2bcf06f76eec70000000000fdffffffe0c9f0d9e13344040df561863810b52634a7b0ac303125b2cb95bc69228d4a2d0000000000fdffffff01d2ca020000000000220020a2352f2da4097bec1799169a0c801a61f6b61db75f081b2031d1a3bb079dd85e00000000");
+        assert_eq!(serialize_hex(unemergency_tx.tx()), "0200000001f795613e9d4ab0d3cd07a4783b1e4d09a940285d231f459bfef2bcf06f76eec70000000000fdffffff01d2ca020000000000220020a2352f2da4097bec1799169a0c801a61f6b61db75f081b2031d1a3bb079dd85e00000000");
 
         let spend_psbt_str = "\"cHNidP8BAIkCAAAAAdKM0NH1IfB5EqCmcrExViMrYq0YCHkfmZvTSzFoVNmJAAAAAAD9////AkANAwAAAAAAIgAgWfVjq6I2IH//GE9+5VT1A85InZCfKg9BfxCTDKdmEFUwdQAAAAAAACIAIPkvfw7mDhcLjDoAv/ciWdH+adf8/RRqXZEu2BCe9ZsUAAAAAAABASuIlAMAAAAAACIAIFyKAdGPlWYmCg7Lut2cL8DgFJiAKJItdJTyaYGQbCNWAQjbBABHMEQCIFmUwt4fnJL3eRAWqklyV3Aikc8TYwv7CrhxPRicUbU5AiB8g+ASYSGglLZleMFDh9Pi2W/FqQYwEWesor9Bv/EiQQFIMEUCIQCGvJsPxgFZtpsNRQ3VETEkDB78gcsgB4W9hkrkBXCMBgIgIDIbqQtHakOcqtl14jpPjiMVz0KO0HVJB51tvGDU/4wBR1IhAwl6ytUyWFcjWXapo8WMj2sasbgUCRx5K+F2jeGXb8d/IQJM5T/F+uoP2b/xce+xNoDZ9+6ocbz/8PSVoayx6TJnrlKuACICAkzlP8X66g/Zv/Fx77E2gNn37qhxvP/w9JWhrLHpMmeuCLhkVBQKAAAAIgICjlU/HP1v6DJ8m2Z5ANX5jZeC9cJ/Z0eakLYfzX5gX6YISNmuZwoAAAAiAgMJesrVMlhXI1l2qaPFjI9rGrG4FAkceSvhdo3hl2/HfwiILvO9CgAAACICAzkvyp9Q3knkMYAWBKeo5xcgiaoOwUdF/SQVMdYU3QtdCBxghxwKAAAAIgIDmeAIO+xbMz8grQfSwjY97Vgl7NHkVth6Z0JfrPpBaMAIsVo/DgoAAAAAIgIC640I7MqUC5FxRyF6yE8OB2aK8YojzUiyDmWrvnjn6lgIo2rccQoAAAAAcHNidP8BAGcCAAAAAVYetH70pzOUyZwutTULwN97mzGRBqx2K/u/qMstAMuxAAAAAAB6GwAAAoAyAAAAAAAAIgAg+S9/DuYOFwuMOgC/9yJZ0f5p1/z9FGpdkS7YEJ71mxSwswIAAAAAAAAAAAAAAAEBK0ANAwAAAAAAIgAgWfVjq6I2IH//GE9+5VT1A85InZCfKg9BfxCTDKdmEFUBAwQBAAAAAQWqIQM5L8qfUN5J5DGAFgSnqOcXIImqDsFHRf0kFTHWFN0LXaxRh2R2qRSLYmchXl+UoOeURf6sOKVrNpQlfIisa3apFOlaWTA4VwFVjhhA7wAx6l1dCbTKiKxsk1KHZ1IhA5ngCDvsWzM/IK0H0sI2Pe1YJezR5FbYemdCX6z6QWjAIQKOVT8c/W/oMnybZnkA1fmNl4L1wn9nR5qQth/NfmBfplKvAnobsmgiBgJM5T/F+uoP2b/xce+xNoDZ9+6ocbz/8PSVoayx6TJnrgi4ZFQUCgAAACIGAo5VPxz9b+gyfJtmeQDV+Y2XgvXCf2dHmpC2H81+YF+mCEjZrmcKAAAAIgYDCXrK1TJYVyNZdqmjxYyPaxqxuBQJHHkr4XaN4Zdvx38IiC7zvQoAAAAiBgM5L8qfUN5J5DGAFgSnqOcXIImqDsFHRf0kFTHWFN0LXQgcYIccCgAAACIGA5ngCDvsWzM/IK0H0sI2Pe1YJezR5FbYemdCX6z6QWjACLFaPw4KAAAAACICAuuNCOzKlAuRcUcheshPDgdmivGKI81Isg5lq7545+pYCKNq3HEKAAAAAAA=\"";
         let spend_tx: SpendTransaction = serde_json::from_str(&spend_psbt_str).unwrap();

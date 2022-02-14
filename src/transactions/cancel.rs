@@ -34,28 +34,15 @@ impl_revault_transaction!(
 );
 impl CancelTransaction {
     // Internal DRY routine for creating the inner PSBT
-    fn create_psbt(
-        unvault_txin: UnvaultTxIn,
-        feebump_txin: Option<FeeBumpTxIn>,
-        deposit_txo: DepositTxOut,
-        lock_time: u32,
-    ) -> Psbt {
-        let mut txins = vec![unvault_txin.unsigned_txin()];
-        let mut psbtins = vec![PsbtIn {
+    fn create_psbt(unvault_txin: UnvaultTxIn, deposit_txo: DepositTxOut, lock_time: u32) -> Psbt {
+        let txins = vec![unvault_txin.unsigned_txin()];
+        let psbtins = vec![PsbtIn {
             witness_script: Some(unvault_txin.txout().witness_script().clone()),
             bip32_derivation: unvault_txin.txout().bip32_derivation().clone(),
             sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
             witness_utxo: Some(unvault_txin.into_txout().into_txout()),
             ..PsbtIn::default()
         }];
-        if let Some(feebump_txin) = feebump_txin {
-            txins.push(feebump_txin.unsigned_txin());
-            psbtins.push(PsbtIn {
-                sighash_type: Some(SigHashType::All),
-                witness_utxo: Some(feebump_txin.into_txout().into_txout()),
-                ..PsbtIn::default()
-            });
-        }
 
         Psbt {
             inputs: psbtins,
@@ -79,36 +66,23 @@ impl CancelTransaction {
         }
     }
 
-    /// A cancel transaction always pays to a deposit output and spends the unvault output, and
-    /// may have a fee-bumping input.
+    /// A Cancel transaction always pays to a Deposit output and spends the Unvault output.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_input: UnvaultTxIn,
-        feebump_input: Option<FeeBumpTxIn>,
         deposit_descriptor: &DerivedDepositDescriptor,
         lock_time: u32,
     ) -> Result<CancelTransaction, TransactionCreationError> {
-        if let Some(ref txin) = feebump_input {
-            if txin.txout().txout().value > max_money(Network::Bitcoin) {
-                return Err(TransactionCreationError::InsaneAmounts);
-            }
-        }
-
-        // First, create a dummy transaction to get its weight without Witness. Note that we always
-        // account for the weight *without* feebump input. It pays for itself.
+        // First, create a dummy transaction to get its weight without Witness.
         let dummy_deposit_txo = DepositTxOut::new(Amount::from_sat(u64::MAX), deposit_descriptor);
-        let dummy_tx = CancelTransaction::create_psbt(
-            unvault_input.clone(),
-            None,
-            dummy_deposit_txo,
-            lock_time,
-        )
-        .global
-        .unsigned_tx;
+        let dummy_tx =
+            CancelTransaction::create_psbt(unvault_input.clone(), dummy_deposit_txo, lock_time)
+                .global
+                .unsigned_tx;
 
-        // The weight of the cancel transaction without a feebump input is the weight of the
-        // witness-stripped transaction plus the weight required to satisfy the unvault txin
+        // The weight of the cancel transaction is the weight of the witness-stripped transaction
+        // plus the weight required to satisfy the Unvault txin
         let total_weight = dummy_tx
             .get_weight()
             .checked_add(unvault_input.txout().max_sat_weight())
@@ -117,12 +91,11 @@ impl CancelTransaction {
         let fees = CANCEL_TX_FEERATE
             .checked_mul(total_weight)
             .expect("Properly computed weight won't overflow");
-        // Without the feebump input, it should not be reachable.
-        debug_assert!(fees < INSANE_FEES);
+        assert!(fees < INSANE_FEES);
 
         assert!(
             total_weight <= MAX_STANDARD_TX_WEIGHT as u64,
-            "At most 2 inputs and single output"
+            "Single input and single output"
         );
 
         // Now, get the revaulting output value out of it.
@@ -138,7 +111,6 @@ impl CancelTransaction {
 
         Ok(CancelTransaction(CancelTransaction::create_psbt(
             unvault_input,
-            feebump_input,
             deposit_txo,
             lock_time,
         )))
@@ -167,32 +139,27 @@ impl CancelTransaction {
             return Err(PsbtValidationError::InvalidOutputField(output.clone()).into());
         }
 
-        let input_count = psbt.global.unsigned_tx.input.len();
-        if input_count > 2 {
-            return Err(PsbtValidationError::InvalidInputCount(input_count).into());
+        if psbt.inputs.len() != 1 {
+            return Err(PsbtValidationError::InvalidInputCount(psbt.inputs.len()).into());
         }
-        if input_count > 1 {
-            let input = utils::find_feebumping_input(&psbt.inputs)
-                .ok_or(PsbtValidationError::MissingFeeBumpingInput)?;
-            utils::check_feebump_input(&input)?;
-        }
-        let input = utils::find_revocationtx_input(&psbt.inputs)
-            .ok_or(PsbtValidationError::MissingRevocationInput)?;
-        utils::check_revocationtx_input(&input)?;
+        utils::check_revocationtx_input(&psbt.inputs[0])?;
 
         Ok(CancelTransaction(psbt))
     }
 
     /// Add a signature for the input spending the Unvault transaction
-    pub fn add_cancel_sig<C: secp256k1::Verification>(
+    pub fn add_sig<C: secp256k1::Verification>(
         &mut self,
         pubkey: secp256k1::PublicKey,
         signature: secp256k1::Signature,
         secp: &secp256k1::Secp256k1<C>,
     ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
-        let input_index = utils::p2wsh_input_index(&self.0)
-            .expect("We are always created with a (single) P2WSH input");
-        RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
+        assert_eq!(
+            self.psbt().inputs.len(),
+            1,
+            "We are always created with a (single) P2WSH input"
+        );
+        RevaultTransaction::add_signature(self, 0, pubkey, signature, secp)
     }
 
     /// Get the Deposit txo to be referenced by the Unvault / Emergency txs

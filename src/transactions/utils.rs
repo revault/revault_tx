@@ -124,7 +124,7 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
     // Record the number of coins spent by the transaction
     let mut value_in: u64 = 0;
     for input in psbt.inputs.iter() {
-        // We restrict to native segwit, also for the external fee-bumping wallet.
+        // We restrict to native segwit
         if input.witness_utxo.is_none() {
             return Err(PsbtValidationError::MissingWitnessUtxo(input.clone()));
         }
@@ -171,24 +171,22 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
             .checked_add(spent_utxo_value)
             .ok_or(PsbtValidationError::InsaneAmounts)?;
 
-        // The previous output must either be P2WSH, in which case the witness script must
-        // correspond to the ScriptPubKey, or P2WPKH.
+        // The previous output must be P2WSH
         let spk = &input.witness_utxo.as_ref().unwrap().script_pubkey;
-        if spk.is_v0_p2wsh() {
-            // It's blanked when finalized
-            if is_final == Some(true) {
-                continue;
-            }
-
-            let ws = input
-                .witness_script
-                .as_ref()
-                .ok_or_else(|| PsbtValidationError::MissingInWitnessScript(input.clone()))?;
-            if &ws.to_v0_p2wsh() != spk {
-                return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()));
-            }
-        } else if !spk.is_v0_p2wpkh() {
+        if !spk.is_v0_p2wsh() {
             return Err(PsbtValidationError::InvalidInputField(input.clone()));
+        }
+        // It's blanked when finalized
+        if is_final == Some(true) {
+            continue;
+        }
+
+        let ws = input
+            .witness_script
+            .as_ref()
+            .ok_or_else(|| PsbtValidationError::MissingInWitnessScript(input.clone()))?;
+        if &ws.to_v0_p2wsh() != spk {
+            return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()));
         }
     }
 
@@ -214,27 +212,7 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
     Ok(psbt)
 }
 
-/// If one of these inputs is a P2WSH, return it.
-pub fn find_revocationtx_input(inputs: &[PsbtIn]) -> Option<&PsbtIn> {
-    inputs.iter().find(|i| {
-        i.witness_utxo
-            .as_ref()
-            .map(|o| o.script_pubkey.is_v0_p2wsh())
-            == Some(true)
-    })
-}
-
-/// If one of these inputs is a P2WPKH, return it.
-pub fn find_feebumping_input(inputs: &[PsbtIn]) -> Option<&PsbtIn> {
-    inputs.iter().find(|i| {
-        i.witness_utxo
-            .as_ref()
-            .map(|o| o.script_pubkey.is_v0_p2wpkh())
-            == Some(true)
-    })
-}
-
-/// Sanity check an "internal" PSBT input of a revocation transaction
+/// Sanity check the PSBT input of a revocation transaction
 pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
     assert!(input
         .witness_utxo
@@ -259,46 +237,6 @@ pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationErro
     }
 
     Ok(())
-}
-
-/// Sanity check a feebump PSBT input of a revocation transaction
-pub fn check_feebump_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
-    if input.final_script_witness.is_some() {
-        // Already final, sighash type and witness script are wiped
-        return Ok(());
-    }
-
-    // The feebump input must indicate that it wants to be signed with ALL
-    if input.sighash_type != Some(SigHashType::All) {
-        return Err(PsbtValidationError::InvalidSighashType(input.clone()));
-    }
-
-    // The feebump input must be P2WPKH
-    if input
-        .witness_utxo
-        .as_ref()
-        .map(|u| u.script_pubkey.is_v0_p2wpkh())
-        != Some(true)
-    {
-        return Err(PsbtValidationError::InvalidPrevoutType(input.clone()));
-    }
-
-    // And therefore must not have a witness script
-    if input.witness_script.is_some() {
-        return Err(PsbtValidationError::InvalidInputField(input.clone()));
-    }
-
-    Ok(())
-}
-
-/// Return the position of the first P2WSH input of a Psbt
-pub fn p2wsh_input_index(psbt: &Psbt) -> Option<usize> {
-    psbt.inputs.iter().position(|i| {
-        i.witness_utxo
-            .as_ref()
-            .map(|o| o.script_pubkey.is_v0_p2wsh())
-            == Some(true)
-    })
 }
 
 /// Returns the absolute fees paid by a PSBT.
