@@ -336,16 +336,16 @@ pub fn derive_transactions(
     );
     // We cannot get a sighash for a non-existing input
     assert_eq!(
-        emergency_tx.signature_hash(10, SigHashType::AllPlusAnyoneCanPay),
+        emergency_tx.signature_hash(10, SigHashType::All),
         Err(InputSatisfactionError::OutOfBounds)
     );
     // But for an existing one, all good
     let emergency_tx_sighash_vault = emergency_tx
-        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
-        .expect("Input exists");
-    // We can't force it to accept a SIGHASH_ALL signature:
-    let emer_sighash_all = emergency_tx
         .signature_hash(0, SigHashType::All)
+        .expect("Input exists");
+    // We can't force it to accept another signature type
+    let emer_sighash_all = emergency_tx
+        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
         .unwrap();
     let err = satisfy_transaction_input(
         &secp,
@@ -395,9 +395,7 @@ pub fn derive_transactions(
     roundtrip!(cancel_tx, CancelTransaction);
     assert_eq!(h_cancel, cancel_tx);
     assert_eq!(
-        cancel_tx
-            .deposit_txin(&der_deposit_descriptor)
-            .outpoint(),
+        cancel_tx.deposit_txin(&der_deposit_descriptor).outpoint(),
         OutPoint {
             txid: cancel_tx.txid(),
             vout: 0
@@ -409,7 +407,7 @@ pub fn derive_transactions(
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
     );
     let cancel_tx_sighash = cancel_tx
-        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
+        .signature_hash(0, SigHashType::All)
         .expect("Input exists");
     roundtrip!(cancel_tx, CancelTransaction);
     satisfy_transaction_input(
@@ -442,7 +440,7 @@ pub fn derive_transactions(
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 250,
     );
     let unemergency_tx_sighash = unemergency_tx
-        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
+        .signature_hash(0, SigHashType::All)
         .expect("Input exists");
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     satisfy_transaction_input(

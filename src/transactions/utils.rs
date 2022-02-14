@@ -226,8 +226,8 @@ pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationErro
         return Ok(());
     }
 
-    // The revocation input must indicate that it wants to be signed with ACP
-    if input.sighash_type != Some(SigHashType::AllPlusAnyoneCanPay) {
+    // We always sign revocation transactions with SIGHASH_ALL
+    if input.sighash_type != Some(SigHashType::All) {
         return Err(PsbtValidationError::InvalidSighashType(input.clone()));
     }
 

@@ -42,7 +42,7 @@ impl UnvaultEmergencyTransaction {
         let psbtins = vec![PsbtIn {
             witness_script: Some(unvault_txin.txout().witness_script().clone()),
             bip32_derivation: unvault_txin.txout().bip32_derivation().clone(),
-            sighash_type: Some(SigHashType::AllPlusAnyoneCanPay),
+            sighash_type: Some(SigHashType::All),
             witness_utxo: Some(unvault_txin.into_txout().into_txout()),
             ..PsbtIn::default()
         }];
