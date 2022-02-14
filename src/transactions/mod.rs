@@ -51,7 +51,7 @@ pub const UNVAULT_TX_FEERATE: u64 = 6;
 pub const CANCEL_TX_FEERATE: u64 = 22;
 
 /// The feerate, in sat / WU, to create the Emergency transactions with.
-pub const EMER_TX_FEERATE: u64 = 75;
+pub const EMER_TX_FEERATE: u64 = 250;
 
 /// We refuse to create a stakeholder-pre-signed transaction that would create an output worth
 /// less than this amount of sats. This is worth 30€ for 15k€/btc.
