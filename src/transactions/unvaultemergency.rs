@@ -2,14 +2,15 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, RevaultTransaction, EMER_TX_FEERATE, INSANE_FEES, MAX_STANDARD_TX_WEIGHT,
+        utils, RevaultPresignedTransaction, RevaultTransaction, EMER_TX_FEERATE, INSANE_FEES,
+        MAX_STANDARD_TX_WEIGHT,
     },
     txins::*,
     txouts::*,
 };
 
 use miniscript::bitcoin::{
-    blockdata::constants::max_money, consensus::encode::Decodable, secp256k1,
+    blockdata::constants::max_money, consensus::encode::Decodable,
     util::psbt::PartiallySignedTransaction as Psbt, Amount, Network, OutPoint,
 };
 
@@ -25,6 +26,7 @@ impl_revault_transaction!(
     UnvaultEmergencyTransaction,
     doc = "The transaction spending an unvault output to The Emergency Script."
 );
+impl RevaultPresignedTransaction for UnvaultEmergencyTransaction {}
 impl UnvaultEmergencyTransaction {
     /// The second emergency transaction always spends an unvault output and pays to the Emergency
     /// Script.
@@ -93,21 +95,6 @@ impl UnvaultEmergencyTransaction {
         }
 
         Ok(UnvaultEmergencyTransaction(psbt))
-    }
-
-    /// Add a signature for the input spending the Unvault transaction
-    pub fn add_sig<C: secp256k1::Verification>(
-        &mut self,
-        pubkey: secp256k1::PublicKey,
-        signature: secp256k1::Signature,
-        secp: &secp256k1::Secp256k1<C>,
-    ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
-        assert_eq!(
-            self.psbt().inputs.len(),
-            1,
-            "We are always created with a (single) P2WSH input"
-        );
-        RevaultTransaction::add_signature(self, 0, pubkey, signature, secp)
     }
 
     /// Get the reference to the Emergency UTXO

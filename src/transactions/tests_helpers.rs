@@ -1,7 +1,7 @@
 use super::{
     transaction_chain, CancelTransaction, CpfpTransaction, CpfpableTransaction, DepositTransaction,
-    EmergencyAddress, EmergencyTransaction, RevaultTransaction, SpendTransaction,
-    UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE, DUST_LIMIT,
+    EmergencyAddress, EmergencyTransaction, RevaultPresignedTransaction, RevaultTransaction,
+    SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE, DUST_LIMIT,
 };
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
@@ -330,11 +330,11 @@ pub fn derive_transactions(
     );
     // But for an existing one, all good
     let emergency_tx_sighash_vault = emergency_tx
-        .signature_hash(0, SigHashType::All)
+        .sig_hash(SigHashType::All)
         .expect("Input exists");
     // We can't force it to accept another signature type
     let emer_sighash_all = emergency_tx
-        .signature_hash(0, SigHashType::AllPlusAnyoneCanPay)
+        .sig_hash(SigHashType::AllPlusAnyoneCanPay)
         .unwrap();
     let err = satisfy_transaction_input(
         &secp,
@@ -395,9 +395,7 @@ pub fn derive_transactions(
         cancel_tx.fees(),
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
     );
-    let cancel_tx_sighash = cancel_tx
-        .signature_hash(0, SigHashType::All)
-        .expect("Input exists");
+    let cancel_tx_sighash = cancel_tx.sig_hash(SigHashType::All).expect("Input exists");
     roundtrip!(cancel_tx, CancelTransaction);
     satisfy_transaction_input(
         &secp,
@@ -429,7 +427,7 @@ pub fn derive_transactions(
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 250,
     );
     let unemergency_tx_sighash = unemergency_tx
-        .signature_hash(0, SigHashType::All)
+        .sig_hash(SigHashType::All)
         .expect("Input exists");
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     satisfy_transaction_input(
@@ -445,9 +443,7 @@ pub fn derive_transactions(
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
 
     // Now we can sign the unvault
-    let unvault_tx_sighash = unvault_tx
-        .signature_hash(0, SigHashType::All)
-        .expect("Input exists");
+    let unvault_tx_sighash = unvault_tx.sig_hash(SigHashType::All).expect("Input exists");
     satisfy_transaction_input(
         &secp,
         &mut unvault_tx,

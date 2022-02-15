@@ -6,7 +6,7 @@ use revault_tx::{
         secp256k1::{Signature, SECP256K1},
         SigHashType,
     },
-    transactions::{EmergencyTransaction, RevaultTransaction},
+    transactions::{EmergencyTransaction, RevaultPresignedTransaction, RevaultTransaction},
 };
 
 use std::str::FromStr;

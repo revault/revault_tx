@@ -19,7 +19,7 @@ use miniscript::{
     DescriptorTrait,
 };
 
-use std::{convert::TryInto, fmt};
+use std::{collections::BTreeMap, convert::TryInto, fmt};
 
 #[macro_use]
 mod utils;
@@ -199,6 +199,58 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// The BIP174 Transaction Extractor (without any check, which are done in
     /// [RevaultTransaction.finalize]).
     fn into_tx(self) -> Transaction;
+}
+
+/// A Revault transaction which is signed in advance and whose signatures are exchanged by
+/// the participants.
+/// Contains a single transaction input.
+pub trait RevaultPresignedTransaction: RevaultTransaction {
+    /// Get the sighash for the single input of a presigned Revault transaction.
+    fn sig_hash(&self, sighash_type: SigHashType) -> Result<SigHash, InputSatisfactionError> {
+        debug_assert_eq!(
+            self.psbt().inputs.len(),
+            1,
+            "Presigned transactions are always created with a single input"
+        );
+        RevaultTransaction::signature_hash(self, 0, sighash_type)
+    }
+
+    /// Cached version of [RevaultPresignedTransaction::signature_hash]
+    fn sig_hash_cached(
+        &self,
+        sighash_type: SigHashType,
+        cache: &mut SigHashCache<&Transaction>,
+    ) -> Result<SigHash, InputSatisfactionError> {
+        debug_assert_eq!(
+            self.psbt().inputs.len(),
+            1,
+            "Presigned transactions are always created with a single input"
+        );
+        RevaultTransaction::signature_hash_cached(self, 0, sighash_type, cache)
+    }
+
+    /// Add a signature to the single input of a presigned Revault transaction.
+    ///
+    /// Note this checks the signature according to the specified expected sighash type in
+    /// the PSBT input.
+    fn add_sig<C: secp256k1::Verification>(
+        &mut self,
+        pubkey: secp256k1::PublicKey,
+        signature: secp256k1::Signature,
+        secp: &secp256k1::Secp256k1<C>,
+    ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
+        debug_assert_eq!(
+            self.psbt().inputs.len(),
+            1,
+            "Presigned transactions are always created with a single input"
+        );
+        RevaultTransaction::add_signature(self, 0, pubkey, signature, secp)
+    }
+
+    /// Get the signatures for the single input of this presigned Revault transaction.
+    fn signatures(&self) -> &BTreeMap<BitcoinPubKey, Vec<u8>> {
+        &self.psbt().inputs[0].partial_sigs
+    }
 }
 
 impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTransaction for T {

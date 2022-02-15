@@ -2,8 +2,8 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, CpfpableTransaction, RevaultTransaction, DUST_LIMIT, INSANE_FEES,
-        MAX_STANDARD_TX_WEIGHT, TX_VERSION, UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
+        utils, CpfpableTransaction, RevaultPresignedTransaction, RevaultTransaction, DUST_LIMIT,
+        INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION, UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
     },
     txins::*,
     txouts::*,
@@ -13,7 +13,6 @@ use miniscript::{
     bitcoin::{
         blockdata::constants::max_money,
         consensus::encode::Decodable,
-        secp256k1,
         util::psbt::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
@@ -35,6 +34,7 @@ impl_revault_transaction!(
     UnvaultTransaction,
     doc = "The unvaulting transaction, spending a deposit and being eventually spent by a spend transaction (if not revaulted)."
 );
+impl RevaultPresignedTransaction for UnvaultTransaction {}
 impl UnvaultTransaction {
     // Internal DRY routine for creating the inner PSBT
     fn create_psbt(
@@ -207,18 +207,6 @@ impl UnvaultTransaction {
         // NOTE: the Unvault transaction cannot get larger than MAX_STANDARD_TX_WEIGHT
 
         Ok(UnvaultTransaction(psbt))
-    }
-
-    /// Add a signature for the (single) input spending the Deposit transaction
-    pub fn add_sig<C: secp256k1::Verification>(
-        &mut self,
-        pubkey: secp256k1::PublicKey,
-        signature: secp256k1::Signature,
-        secp: &secp256k1::Secp256k1<C>,
-    ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
-        // We are only ever created with a single input
-        let input_index = 0;
-        RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
     }
 }
 
