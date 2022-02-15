@@ -62,6 +62,10 @@ pub const INSANE_FEES: u64 = 20_000_000;
 /// This enables CSV and is easier to apply to all transactions anyways.
 pub const TX_VERSION: i32 = 2;
 
+/// The default nLockTime used. Note we can't set it to prevent fee sniping for pre-signed
+/// transactions.
+pub const TX_LOCKTIME: u32 = 0;
+
 /// Maximum weight of a transaction to be relayed.
 ///
 /// <https://github.com/bitcoin/bitcoin/blob/590e49ccf2af27c6c1f1e0eb8be3a4bf4d92ce8b/src/policy/policy.h#L23-L24>
@@ -592,7 +596,6 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
     unvault_descriptor: &UnvaultDescriptor,
     cpfp_descriptor: &CpfpDescriptor,
     derivation_index: ChildNumber,
-    lock_time: u32,
     secp: &secp256k1::Secp256k1<C>,
 ) -> Result<(UnvaultTransaction, CancelTransaction), Error> {
     let (der_deposit_descriptor, der_unvault_descriptor, der_cpfp_descriptor) = (
@@ -605,17 +608,12 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
         deposit_outpoint,
         DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
     );
-    let unvault_tx = UnvaultTransaction::new(
-        deposit_txin,
-        &der_unvault_descriptor,
-        &der_cpfp_descriptor,
-        lock_time,
-    )?;
+    let unvault_tx =
+        UnvaultTransaction::new(deposit_txin, &der_unvault_descriptor, &der_cpfp_descriptor)?;
 
     let cancel_tx = CancelTransaction::new(
         unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
         &der_deposit_descriptor,
-        lock_time,
     )?;
 
     Ok((unvault_tx, cancel_tx))
@@ -631,7 +629,6 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     cpfp_descriptor: &CpfpDescriptor,
     derivation_index: ChildNumber,
     emer_address: EmergencyAddress,
-    lock_time: u32,
     secp: &secp256k1::Secp256k1<C>,
 ) -> Result<
     (
@@ -649,7 +646,6 @@ pub fn transaction_chain<C: secp256k1::Verification>(
         unvault_descriptor,
         cpfp_descriptor,
         derivation_index,
-        lock_time,
         secp,
     )?;
 
@@ -658,12 +654,11 @@ pub fn transaction_chain<C: secp256k1::Verification>(
         deposit_outpoint,
         DepositTxOut::new(deposit_amount, &der_deposit_descriptor),
     );
-    let emergency_tx = EmergencyTransaction::new(deposit_txin, emer_address.clone(), lock_time)?;
+    let emergency_tx = EmergencyTransaction::new(deposit_txin, emer_address.clone())?;
 
     let der_unvault_descriptor = unvault_descriptor.derive(derivation_index, secp);
     let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
-    let unvault_emergency_tx =
-        UnvaultEmergencyTransaction::new(unvault_txin, emer_address, lock_time)?;
+    let unvault_emergency_tx = UnvaultEmergencyTransaction::new(unvault_txin, emer_address)?;
 
     Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
 }
@@ -695,7 +690,7 @@ pub fn spend_tx_from_deposits<C: secp256k1::Verification>(
                 max_deriv_index = deriv_index;
             }
 
-            UnvaultTransaction::new(txin, &der_unvault_desc, &der_cpfp_desc, lock_time)
+            UnvaultTransaction::new(txin, &der_unvault_desc, &der_cpfp_desc)
                 .map(|unvault_tx| unvault_tx.spend_unvault_txin(&der_unvault_desc))
         })
         .collect::<Result<Vec<UnvaultTxIn>, TransactionCreationError>>()?;

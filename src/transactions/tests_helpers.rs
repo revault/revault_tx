@@ -302,13 +302,12 @@ pub fn derive_transactions(
         &cpfp_descriptor,
         child_number,
         emergency_address.clone(),
-        0,
         secp,
     )?;
 
     // Create and sign the first (deposit) emergency transaction
     let mut emergency_tx =
-        EmergencyTransaction::new(deposit_txin.clone(), emergency_address.clone(), 0)?;
+        EmergencyTransaction::new(deposit_txin.clone(), emergency_address.clone())?;
     assert_eq!(h_emer, emergency_tx);
     assert_eq!(
         emergency_tx.emergency_outpoint(),
@@ -366,7 +365,6 @@ pub fn derive_transactions(
         deposit_txin.clone(),
         &der_unvault_descriptor,
         &der_cpfp_descriptor,
-        0,
     )?;
     roundtrip!(unvault_tx, UnvaultTransaction);
 
@@ -380,7 +378,7 @@ pub fn derive_transactions(
     let rev_unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
     assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
     let mut cancel_tx =
-        CancelTransaction::new(rev_unvault_txin.clone(), &der_deposit_descriptor, 0)?;
+        CancelTransaction::new(rev_unvault_txin.clone(), &der_deposit_descriptor)?;
     roundtrip!(cancel_tx, CancelTransaction);
     assert_eq!(h_cancel, cancel_tx);
     assert_eq!(
@@ -410,7 +408,7 @@ pub fn derive_transactions(
     roundtrip!(cancel_tx, CancelTransaction);
 
     let mut unemergency_tx =
-        UnvaultEmergencyTransaction::new(rev_unvault_txin.clone(), emergency_address.clone(), 0)?;
+        UnvaultEmergencyTransaction::new(rev_unvault_txin.clone(), emergency_address.clone())?;
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     assert_eq!(h_unemer, unemergency_tx);
     assert_eq!(

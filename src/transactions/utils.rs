@@ -1,6 +1,6 @@
 use crate::{
     error::*,
-    transactions::TX_VERSION,
+    transactions::{TX_LOCKTIME, TX_VERSION},
     txins::RevaultTxIn,
     txouts::{RevaultInternalTxOut, RevaultTxOut},
 };
@@ -252,7 +252,6 @@ pub fn psbt_fees(psbt: &Psbt) -> Option<u64> {
 pub fn create_psbt<Out: RevaultTxOut, IntOut: RevaultInternalTxOut, In: RevaultTxIn<IntOut>>(
     txin: In,
     txo: Out,
-    lock_time: u32,
 ) -> Psbt {
     let input = vec![txin.unsigned_txin()];
     let psbtins = vec![PsbtIn {
@@ -269,7 +268,7 @@ pub fn create_psbt<Out: RevaultTxOut, IntOut: RevaultInternalTxOut, In: RevaultT
         global: PsbtGlobal {
             unsigned_tx: Transaction {
                 version: TX_VERSION,
-                lock_time,
+                lock_time: TX_LOCKTIME,
                 input,
                 output,
             },

@@ -36,11 +36,10 @@ impl EmergencyTransaction {
     pub fn new(
         deposit_input: DepositTxIn,
         emer_address: EmergencyAddress,
-        lock_time: u32,
     ) -> Result<EmergencyTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), Amount::from_sat(u64::MAX));
-        let dummy_tx = utils::create_psbt(deposit_input.clone(), emer_txo, lock_time)
+        let dummy_tx = utils::create_psbt(deposit_input.clone(), emer_txo)
             .global
             .unsigned_tx;
 
@@ -75,7 +74,6 @@ impl EmergencyTransaction {
         Ok(EmergencyTransaction(utils::create_psbt(
             deposit_input,
             emer_txo,
-            lock_time,
         )))
     }
 

@@ -3,7 +3,8 @@ use crate::{
     scripts::*,
     transactions::{
         utils, CpfpableTransaction, RevaultPresignedTransaction, RevaultTransaction, DUST_LIMIT,
-        INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION, UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
+        INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_LOCKTIME, TX_VERSION, UNVAULT_CPFP_VALUE,
+        UNVAULT_TX_FEERATE,
     },
     txins::*,
     txouts::*,
@@ -41,7 +42,6 @@ impl UnvaultTransaction {
         deposit_txin: DepositTxIn,
         unvault_txout: UnvaultTxOut,
         cpfp_txout: CpfpTxOut,
-        lock_time: u32,
     ) -> Psbt {
         Psbt {
             // 1 Unvault, 1 CPFP
@@ -58,7 +58,7 @@ impl UnvaultTransaction {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: TX_VERSION,
-                    lock_time,
+                    lock_time: TX_LOCKTIME,
                     input: vec![deposit_txin.unsigned_txin()],
                     output: vec![unvault_txout.into_txout(), cpfp_txout.into_txout()],
                 },
@@ -86,7 +86,6 @@ impl UnvaultTransaction {
         deposit_input: DepositTxIn,
         unvault_descriptor: &DerivedUnvaultDescriptor,
         cpfp_descriptor: &DerivedCpfpDescriptor,
-        lock_time: u32,
     ) -> Result<UnvaultTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness
         let dummy_unvault_txout = UnvaultTxOut::new(Amount::from_sat(u64::MAX), unvault_descriptor);
@@ -95,7 +94,6 @@ impl UnvaultTransaction {
             deposit_input.clone(),
             dummy_unvault_txout,
             dummy_cpfp_txout,
-            lock_time,
         )
         .global
         .unsigned_tx;
@@ -136,7 +134,6 @@ impl UnvaultTransaction {
             deposit_input,
             unvault_txout,
             cpfp_txout,
-            lock_time,
         )))
     }
 

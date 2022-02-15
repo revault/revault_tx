@@ -35,11 +35,10 @@ impl UnvaultEmergencyTransaction {
     pub fn new(
         unvault_input: UnvaultTxIn,
         emer_address: EmergencyAddress,
-        lock_time: u32,
     ) -> Result<UnvaultEmergencyTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), Amount::from_sat(u64::MAX));
-        let dummy_tx = utils::create_psbt(unvault_input.clone(), emer_txo, lock_time)
+        let dummy_tx = utils::create_psbt(unvault_input.clone(), emer_txo)
             .global
             .unsigned_tx;
 
@@ -74,7 +73,6 @@ impl UnvaultEmergencyTransaction {
         Ok(UnvaultEmergencyTransaction(utils::create_psbt(
             unvault_input,
             emer_txo,
-            lock_time,
         )))
     }
 

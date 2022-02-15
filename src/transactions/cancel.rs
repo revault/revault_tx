@@ -34,11 +34,10 @@ impl CancelTransaction {
     pub fn new(
         unvault_input: UnvaultTxIn,
         deposit_descriptor: &DerivedDepositDescriptor,
-        lock_time: u32,
     ) -> Result<CancelTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness.
         let dummy_deposit_txo = DepositTxOut::new(Amount::from_sat(u64::MAX), deposit_descriptor);
-        let dummy_tx = utils::create_psbt(unvault_input.clone(), dummy_deposit_txo, lock_time)
+        let dummy_tx = utils::create_psbt(unvault_input.clone(), dummy_deposit_txo)
             .global
             .unsigned_tx;
 
@@ -73,7 +72,6 @@ impl CancelTransaction {
         Ok(CancelTransaction(utils::create_psbt(
             unvault_input,
             deposit_txo,
-            lock_time,
         )))
     }
 
