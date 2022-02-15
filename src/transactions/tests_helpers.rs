@@ -102,13 +102,9 @@ fn satisfy_transaction_input(
     input_index: usize,
     tx_sighash: &SigHash,
     xprivs: &Vec<bip32::ExtendedPrivKey>,
-    child_number: Option<bip32::ChildNumber>,
+    child_number: bip32::ChildNumber,
 ) -> Result<(), Error> {
-    let derivation_path = bip32::DerivationPath::from(if let Some(cn) = child_number {
-        vec![cn]
-    } else {
-        vec![]
-    });
+    let derivation_path = bip32::DerivationPath::from(vec![child_number]);
 
     for xpriv in xprivs {
         let sig = secp.sign(
@@ -124,19 +120,12 @@ fn satisfy_transaction_input(
             origin: None,
             xkey: bip32::ExtendedPubKey::from_private(&secp, xpriv),
             derivation_path: bip32::DerivationPath::from(vec![]),
-            wildcard: if child_number.is_some() {
-                Wildcard::Unhardened
-            } else {
-                Wildcard::None
-            },
+            wildcard: Wildcard::Unhardened,
         });
-        let key = if let Some(index) = child_number {
-            xpub.derive(index.into())
-        } else {
-            xpub
-        }
-        .derive_public_key(secp)
-        .unwrap();
+        let key = xpub
+            .derive(child_number.into())
+            .derive_public_key(secp)
+            .unwrap();
 
         tx.add_signature(input_index, key.key, sig, secp)?;
     }
@@ -353,7 +342,7 @@ pub fn derive_transactions(
         0,
         &emer_sighash_all,
         &stakeholders_priv,
-        Some(child_number),
+        child_number,
     );
     assert!(err.unwrap_err().to_string().contains("Invalid signature"),);
     // Now, that's the right SIGHASH
@@ -364,7 +353,7 @@ pub fn derive_transactions(
         0,
         &emergency_tx_sighash_vault,
         &stakeholders_priv,
-        Some(child_number),
+        child_number,
     )?;
     roundtrip!(emergency_tx, EmergencyTransaction);
     emergency_tx.finalize(&secp)?;
@@ -416,7 +405,7 @@ pub fn derive_transactions(
         0,
         &cancel_tx_sighash,
         &stakeholders_priv,
-        Some(child_number),
+        child_number,
     )?;
     roundtrip!(cancel_tx, CancelTransaction);
     cancel_tx.finalize(&secp).unwrap();
@@ -449,7 +438,7 @@ pub fn derive_transactions(
         0,
         &unemergency_tx_sighash,
         &stakeholders_priv,
-        Some(child_number),
+        child_number,
     )?;
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     unemergency_tx.finalize(&secp)?;
@@ -465,7 +454,7 @@ pub fn derive_transactions(
         0,
         &unvault_tx_sighash,
         &stakeholders_priv,
-        Some(child_number),
+        child_number,
     )?;
     roundtrip!(unvault_tx, UnvaultTransaction);
     unvault_tx.finalize(&secp)?;
@@ -603,7 +592,7 @@ pub fn derive_transactions(
             .chain(cosigners_priv.iter())
             .copied()
             .collect::<Vec<bip32::ExtendedPrivKey>>(),
-        Some(child_number),
+        child_number,
     )?;
     roundtrip!(spend_tx, SpendTransaction);
     spend_tx.finalize(&secp)?;
@@ -710,7 +699,7 @@ pub fn derive_transactions(
                 .chain(cosigners_priv.iter())
                 .copied()
                 .collect::<Vec<bip32::ExtendedPrivKey>>(),
-            Some(child_number),
+            child_number,
         )?
     }
 
