@@ -1,9 +1,8 @@
 use crate::{error::*, transactions::TX_VERSION};
 
 use miniscript::bitcoin::{
-    blockdata::constants::max_money,
-    util::psbt::{Input as PsbtIn, PartiallySignedTransaction as Psbt},
-    Network, OutPoint, SigHashType,
+    blockdata::constants::max_money, util::psbt::PartiallySignedTransaction as Psbt, Network,
+    OutPoint, SigHashType,
 };
 
 use std::collections::HashSet;
@@ -176,9 +175,20 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
         if !spk.is_v0_p2wsh() {
             return Err(PsbtValidationError::InvalidInputField(input.clone()));
         }
-        // It's blanked when finalized
+
+        // The below fields are blanked when finalized
         if is_final == Some(true) {
             continue;
+        }
+
+        // We always presign transactions with SIGHASH_ALL
+        if input.sighash_type != Some(SigHashType::All) {
+            return Err(PsbtValidationError::InvalidSighashType(input.clone()));
+        }
+
+        // It must have derivation paths set since it must have a witscript
+        if input.bip32_derivation.is_empty() {
+            return Err(PsbtValidationError::InvalidInputField(input.clone()));
         }
 
         let ws = input
@@ -210,33 +220,6 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
     }
 
     Ok(psbt)
-}
-
-/// Sanity check the PSBT input of a revocation transaction
-pub fn check_revocationtx_input(input: &PsbtIn) -> Result<(), PsbtValidationError> {
-    assert!(input
-        .witness_utxo
-        .as_ref()
-        .expect("Checked in the common checks")
-        .script_pubkey
-        .is_v0_p2wsh());
-
-    if input.final_script_witness.is_some() {
-        // Already final, sighash type and witness script are wiped
-        return Ok(());
-    }
-
-    // We always sign revocation transactions with SIGHASH_ALL
-    if input.sighash_type != Some(SigHashType::All) {
-        return Err(PsbtValidationError::InvalidSighashType(input.clone()));
-    }
-
-    // It must have derivation paths set since it must have a witscript
-    if input.bip32_derivation.is_empty() {
-        return Err(PsbtValidationError::InvalidInputField(input.clone()));
-    }
-
-    Ok(())
 }
 
 /// Returns the absolute fees paid by a PSBT.

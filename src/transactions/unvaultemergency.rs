@@ -130,7 +130,6 @@ impl UnvaultEmergencyTransaction {
         if psbt.inputs.len() != 1 {
             return Err(PsbtValidationError::InvalidInputCount(input_count).into());
         }
-        utils::check_revocationtx_input(&psbt.inputs[0])?;
 
         Ok(UnvaultEmergencyTransaction(psbt))
     }

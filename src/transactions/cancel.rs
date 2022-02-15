@@ -142,7 +142,6 @@ impl CancelTransaction {
         if psbt.inputs.len() != 1 {
             return Err(PsbtValidationError::InvalidInputCount(psbt.inputs.len()).into());
         }
-        utils::check_revocationtx_input(&psbt.inputs[0])?;
 
         Ok(CancelTransaction(psbt))
     }

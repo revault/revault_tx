@@ -203,30 +203,6 @@ impl UnvaultTransaction {
         if input_count != 1 {
             return Err(PsbtValidationError::InvalidInputCount(input_count).into());
         }
-        let input = &psbt.inputs[0];
-        if input.final_script_witness.is_none() {
-            if input.sighash_type != Some(SigHashType::All) {
-                return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
-            }
-
-            if input.bip32_derivation.is_empty() {
-                return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
-            }
-
-            if let Some(ref ws) = input.witness_script {
-                if ws.to_v0_p2wsh()
-                    != input
-                        .witness_utxo
-                        .as_ref()
-                        .expect("Check in sanity checks")
-                        .script_pubkey
-                {
-                    return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()).into());
-                }
-            } else {
-                return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
-            }
-        }
 
         // NOTE: the Unvault transaction cannot get larger than MAX_STANDARD_TX_WEIGHT
 
