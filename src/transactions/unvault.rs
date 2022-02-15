@@ -2,9 +2,9 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, CpfpableTransaction, RevaultPresignedTransaction, RevaultTransaction, DUST_LIMIT,
-        INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_LOCKTIME, TX_VERSION, UNVAULT_CPFP_VALUE,
-        UNVAULT_TX_FEERATE,
+        utils, CpfpableTransaction, RevaultPresignedTransaction, RevaultTransaction,
+        DEPOSIT_MIN_SATS, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_LOCKTIME, TX_VERSION,
+        UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
     },
     txins::*,
     txouts::*,
@@ -120,7 +120,7 @@ impl UnvaultTransaction {
 
         // The unvault output value is then equal to the deposit value minus the fees and the CPFP.
         let deposit_value = deposit_input.txout().txout().value;
-        if fees + UNVAULT_CPFP_VALUE + DUST_LIMIT > deposit_value {
+        if fees + UNVAULT_CPFP_VALUE + DEPOSIT_MIN_SATS > deposit_value {
             return Err(TransactionCreationError::Dust);
         }
         let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE; // Arithmetic checked above

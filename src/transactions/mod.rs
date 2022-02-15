@@ -19,7 +19,11 @@ use miniscript::{
     DescriptorTrait,
 };
 
-use std::{collections::BTreeMap, convert::TryInto, fmt};
+use std::{
+    collections::{BTreeMap, HashMap},
+    convert::TryInto,
+    fmt,
+};
 
 #[macro_use]
 mod utils;
@@ -45,15 +49,14 @@ pub const UNVAULT_CPFP_VALUE: u64 = 30000;
 /// The feerate, in sat / WU, to create the unvaulting transactions with.
 pub const UNVAULT_TX_FEERATE: u64 = 6;
 
-/// The feerate, in sat / WU, to create the Cancel transaction with.
-pub const CANCEL_TX_FEERATE: u64 = 22;
-
 /// The feerate, in sat / WU, to create the Emergency transactions with.
 pub const EMER_TX_FEERATE: u64 = 250;
 
-/// We refuse to create a stakeholder-pre-signed transaction that would create an output worth
-/// less than this amount of sats. This is worth 30€ for 15k€/btc.
-pub const DUST_LIMIT: u64 = 200_000;
+/// The minimum value of a deposit UTxO for creating a transaction chain from it.
+pub const DEPOSIT_MIN_SATS: u64 = 500_000;
+
+/// The minimum value of a deposit UTxO created by a Cancel transaction.
+pub const CANCEL_DEPOSIT_MIN_SATS: u64 = 5_000;
 
 /// We can't safely error for insane fees on revaulting transactions, but we can for the unvault
 /// and the spend. This is 0.2BTC, or 3k€ currently.
@@ -587,7 +590,134 @@ impl DepositTransaction {
     }
 }
 
-/// Get the chain of pre-signed transaction out of a deposit available for a manager.
+/// A set of Cancel transactions signed at fixed feerates.
+#[derive(Debug, Clone)]
+pub struct CancelTransactionsBatch {
+    /// CancelTransaction created with a feerate of 20sats/vbyte
+    feerate_20: CancelTransaction,
+    /// CancelTransaction created with a feerate of 100sats/vbyte
+    feerate_100: CancelTransaction,
+    /// CancelTransaction created with a feerate of 200sats/vbyte
+    feerate_200: CancelTransaction,
+    /// CancelTransaction created with a feerate of 500sats/vbyte
+    feerate_500: CancelTransaction,
+    /// CancelTransaction created with a feerate of 1000sats/vbyte
+    feerate_1000: CancelTransaction,
+}
+
+impl CancelTransactionsBatch {
+    /// Create a new batch of Cancel transactions presigned with feerates of 20, 100, 200, 500 and
+    /// 1000 sats/vbyte.
+    pub fn new(
+        unvault_txin: UnvaultTxIn,
+        der_deposit_descriptor: &DerivedDepositDescriptor,
+    ) -> Result<CancelTransactionsBatch, TransactionCreationError> {
+        Ok(CancelTransactionsBatch {
+            feerate_20: CancelTransaction::new(
+                unvault_txin.clone(),
+                &der_deposit_descriptor,
+                Amount::from_sat(5), // vbytes to WU
+            )?,
+            feerate_100: CancelTransaction::new(
+                unvault_txin.clone(),
+                &der_deposit_descriptor,
+                Amount::from_sat(25), // vbytes to WU
+            )?,
+            feerate_200: CancelTransaction::new(
+                unvault_txin.clone(),
+                &der_deposit_descriptor,
+                Amount::from_sat(50), // vbytes to WU
+            )?,
+            feerate_500: CancelTransaction::new(
+                unvault_txin.clone(),
+                &der_deposit_descriptor,
+                Amount::from_sat(125), // vbytes to WU
+            )?,
+            feerate_1000: CancelTransaction::new(
+                unvault_txin,
+                &der_deposit_descriptor,
+                Amount::from_sat(250), // vbytes to WU
+            )?,
+        })
+    }
+
+    /// Get a reference to the Cancel transaction created with a feerate of 20sats/vbyte
+    pub fn feerate_20(&self) -> &CancelTransaction {
+        &self.feerate_20
+    }
+
+    /// Move out the Cancel transaction created with a feerate of 20sats/vbyte
+    pub fn into_feerate_20(self) -> CancelTransaction {
+        self.feerate_20
+    }
+
+    /// Get a reference to the Cancel transaction created with a feerate of 100sats/vbyte
+    pub fn feerate_100(&self) -> &CancelTransaction {
+        &self.feerate_100
+    }
+
+    /// Move out the Cancel transaction created with a feerate of 100sats/vbyte
+    pub fn into_feerate_100(self) -> CancelTransaction {
+        self.feerate_100
+    }
+
+    /// Get a reference to the Cancel transaction created with a feerate of 200sats/vbyte
+    pub fn feerate_200(&self) -> &CancelTransaction {
+        &self.feerate_200
+    }
+
+    /// Move out the Cancel transaction created with a feerate of 200sats/vbyte
+    pub fn into_feerate_200(self) -> CancelTransaction {
+        self.feerate_200
+    }
+
+    /// Get a reference to the Cancel transaction created with a feerate of 500sats/vbyte
+    pub fn feerate_500(&self) -> &CancelTransaction {
+        &self.feerate_500
+    }
+
+    /// Move out the Cancel transaction created with a feerate of 500sats/vbyte
+    pub fn into_feerate_500(self) -> CancelTransaction {
+        self.feerate_500
+    }
+
+    /// Get a reference to the Cancel transaction created with a feerate of 1000sats/vbyte
+    pub fn feerate_1000(&self) -> &CancelTransaction {
+        &self.feerate_1000
+    }
+
+    /// Move out the Cancel transaction created with a feerate of 1000sats/vbyte
+    pub fn into_feerate_1000(self) -> CancelTransaction {
+        self.feerate_1000
+    }
+
+    /// Get all the Cancel transactions, ordered by ascending feerate
+    pub fn all_feerates(self) -> [CancelTransaction; 5] {
+        [
+            self.feerate_20,
+            self.feerate_100,
+            self.feerate_200,
+            self.feerate_500,
+            self.feerate_1000,
+        ]
+    }
+
+    /// Get a map of feerate to Cancel tx for all available feerates
+    pub fn feerates_map(self) -> HashMap<Amount, CancelTransaction> {
+        // We can't use IntoIterator::into_iter to iter over an array by value on 1.43.
+        let mut map = HashMap::with_capacity(5);
+
+        map.insert(Amount::from_sat(20), self.feerate_20);
+        map.insert(Amount::from_sat(100), self.feerate_100);
+        map.insert(Amount::from_sat(200), self.feerate_200);
+        map.insert(Amount::from_sat(500), self.feerate_500);
+        map.insert(Amount::from_sat(1_000), self.feerate_1000);
+
+        map
+    }
+}
+
+/// Get the chain of pre-signed transactions out of a deposit available for a manager.
 #[allow(clippy::too_many_arguments)]
 pub fn transaction_chain_manager<C: secp256k1::Verification>(
     deposit_outpoint: OutPoint,
@@ -597,7 +727,7 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
     cpfp_descriptor: &CpfpDescriptor,
     derivation_index: ChildNumber,
     secp: &secp256k1::Secp256k1<C>,
-) -> Result<(UnvaultTransaction, CancelTransaction), Error> {
+) -> Result<(UnvaultTransaction, CancelTransactionsBatch), Error> {
     let (der_deposit_descriptor, der_unvault_descriptor, der_cpfp_descriptor) = (
         deposit_descriptor.derive(derivation_index, secp),
         unvault_descriptor.derive(derivation_index, secp),
@@ -611,15 +741,13 @@ pub fn transaction_chain_manager<C: secp256k1::Verification>(
     let unvault_tx =
         UnvaultTransaction::new(deposit_txin, &der_unvault_descriptor, &der_cpfp_descriptor)?;
 
-    let cancel_tx = CancelTransaction::new(
-        unvault_tx.revault_unvault_txin(&der_unvault_descriptor),
-        &der_deposit_descriptor,
-    )?;
+    let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
+    let cancel_batch = CancelTransactionsBatch::new(unvault_txin, &der_deposit_descriptor)?;
 
-    Ok((unvault_tx, cancel_tx))
+    Ok((unvault_tx, cancel_batch))
 }
 
-/// Get the entire chain of pre-signed transaction for this derivation index out of a deposit.
+/// Get the entire chain of pre-signed transactions for this derivation index out of a deposit.
 #[allow(clippy::too_many_arguments)]
 pub fn transaction_chain<C: secp256k1::Verification>(
     deposit_outpoint: OutPoint,
@@ -633,13 +761,13 @@ pub fn transaction_chain<C: secp256k1::Verification>(
 ) -> Result<
     (
         UnvaultTransaction,
-        CancelTransaction,
+        CancelTransactionsBatch,
         EmergencyTransaction,
         UnvaultEmergencyTransaction,
     ),
     Error,
 > {
-    let (unvault_tx, cancel_tx) = transaction_chain_manager(
+    let (unvault_tx, cancel_batch) = transaction_chain_manager(
         deposit_outpoint,
         deposit_amount,
         deposit_descriptor,
@@ -660,7 +788,7 @@ pub fn transaction_chain<C: secp256k1::Verification>(
     let unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
     let unvault_emergency_tx = UnvaultEmergencyTransaction::new(unvault_txin, emer_address)?;
 
-    Ok((unvault_tx, cancel_tx, emergency_tx, unvault_emergency_tx))
+    Ok((unvault_tx, cancel_batch, emergency_tx, unvault_emergency_tx))
 }
 
 /// Get a spend transaction out of a list of deposits and derivation indexes.
@@ -780,7 +908,7 @@ mod tests {
             1,
             SEQUENCE_LOCKTIME_MASK + 1,
             deposit_prevout,
-            300_000,
+            600_000,
             unvaults_spent.clone(),
             true,
             &secp,
@@ -793,15 +921,17 @@ mod tests {
             1,
             csv,
             deposit_prevout,
-            234_632,
+            534_632,
             unvaults_spent.clone(),
             true,
             &secp,
         )
-        .expect(&format!(
-            "Tx chain with 2 stakeholders, 1 manager, {} csv, 235_250 deposit",
-            csv
-        ));
+        .unwrap_or_else(|_| {
+            panic!(
+                "Tx chain with 2 stakeholders, 1 manager, {} csv, 235_250 deposit",
+                csv
+            )
+        });
         // 1 BTC
         derive_transactions(
             8,

@@ -1,7 +1,8 @@
 use super::{
     transaction_chain, CancelTransaction, CpfpTransaction, CpfpableTransaction, DepositTransaction,
     EmergencyAddress, EmergencyTransaction, RevaultPresignedTransaction, RevaultTransaction,
-    SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE, DUST_LIMIT,
+    SpendTransaction, UnvaultEmergencyTransaction, UnvaultTransaction, CPFP_MIN_CHANGE,
+    DEPOSIT_MIN_SATS,
 };
 
 use crate::{error::*, scripts::*, txins::*, txouts::*};
@@ -377,10 +378,13 @@ pub fn derive_transactions(
     // Create and sign the cancel transaction
     let rev_unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
     assert_eq!(rev_unvault_txin.txout().txout().value, unvault_value);
-    let mut cancel_tx =
-        CancelTransaction::new(rev_unvault_txin.clone(), &der_deposit_descriptor)?;
+    let mut cancel_tx = CancelTransaction::new(
+        rev_unvault_txin.clone(),
+        &der_deposit_descriptor,
+        Amount::from_sat(50),
+    )?;
     roundtrip!(cancel_tx, CancelTransaction);
-    assert_eq!(h_cancel, cancel_tx);
+    assert_eq!(h_cancel.feerate_200(), &cancel_tx);
     assert_eq!(
         cancel_tx.deposit_txin(&der_deposit_descriptor).outpoint(),
         OutPoint {
@@ -388,10 +392,10 @@ pub fn derive_transactions(
             vout: 0
         }
     );
-    // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 22 is the feerate is sat/WU
+    // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 50 is the feerate is sat/WU
     assert_eq!(
         cancel_tx.fees(),
-        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 22,
+        (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 50,
     );
     let cancel_tx_sighash = cancel_tx.sig_hash(SigHashType::All).expect("Input exists");
     roundtrip!(cancel_tx, CancelTransaction);
@@ -542,7 +546,7 @@ pub fn derive_transactions(
     let fees = 10_000;
     let (spend_txo, change_txo) = if unvault_value
         > change_value + cpfp_value + cpfp_change_overhead + fees
-        && change_value > DUST_LIMIT + fees + cpfp_change_overhead
+        && change_value > DEPOSIT_MIN_SATS + fees + cpfp_change_overhead
     {
         (
             TxOut {

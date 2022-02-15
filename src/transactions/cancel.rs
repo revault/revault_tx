@@ -2,8 +2,8 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, RevaultPresignedTransaction, RevaultTransaction, CANCEL_TX_FEERATE, INSANE_FEES,
-        MAX_STANDARD_TX_WEIGHT,
+        utils, RevaultPresignedTransaction, RevaultTransaction, CANCEL_DEPOSIT_MIN_SATS,
+        INSANE_FEES, MAX_STANDARD_TX_WEIGHT,
     },
     txins::*,
     txouts::*,
@@ -29,11 +29,13 @@ impl_revault_transaction!(
 impl RevaultPresignedTransaction for CancelTransaction {}
 impl CancelTransaction {
     /// A Cancel transaction always pays to a Deposit output and spends the Unvault output.
+    /// The `feerate` must be passsed in sats/WU.
     ///
     /// BIP174 Creator and Updater roles.
     pub fn new(
         unvault_input: UnvaultTxIn,
         deposit_descriptor: &DerivedDepositDescriptor,
+        feerate: Amount,
     ) -> Result<CancelTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness.
         let dummy_deposit_txo = DepositTxOut::new(Amount::from_sat(u64::MAX), deposit_descriptor);
@@ -48,7 +50,8 @@ impl CancelTransaction {
             .checked_add(unvault_input.txout().max_sat_weight())
             .expect("Properly computed weight won't overflow");
         let total_weight: u64 = total_weight.try_into().expect("usize in u64");
-        let fees = CANCEL_TX_FEERATE
+        let fees = feerate
+            .as_sat()
             .checked_mul(total_weight)
             .expect("Properly computed weight won't overflow");
         assert!(fees < INSANE_FEES);
@@ -62,7 +65,10 @@ impl CancelTransaction {
         let unvault_value = unvault_input.txout().txout().value;
         let revault_value = unvault_value
             .checked_sub(fees)
-            .expect("We would not create a dust unvault txo");
+            .ok_or(TransactionCreationError::FeerateTooHigh)?;
+        if revault_value < CANCEL_DEPOSIT_MIN_SATS {
+            return Err(TransactionCreationError::FeerateTooHigh);
+        }
         assert!(
             revault_value < max_money(Network::Bitcoin),
             "Checked in UnvaultTransaction constructor already"

@@ -101,6 +101,8 @@ pub enum TransactionCreationError {
     MissingCpfpTxOut,
     /// Insufficient funds (used in Cpfp)
     InsufficientFunds,
+    /// Would result in negative fees or create a too small output
+    FeerateTooHigh,
 }
 
 impl fmt::Display for TransactionCreationError {
@@ -128,6 +130,11 @@ impl fmt::Display for TransactionCreationError {
                 "Attempting to create a CPFP transaction for a tx without a CPFP output"
             ),
             Self::InsufficientFunds => write!(f, "Insufficient funds"),
+            Self::FeerateTooHigh => write!(
+                f,
+                "Feerate too high, can't afford without creating a too small \
+                 output or having negative fees"
+            ),
         }
     }
 }
