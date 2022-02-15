@@ -320,7 +320,7 @@ pub fn derive_transactions(
 
     // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 250 is the feerate is sat/WU
     assert_eq!(
-        emergency_tx.fees(),
+        emergency_tx.fees().as_sat(),
         (376 + deposit_txin.txout().max_sat_weight() as u64) * 250,
     );
     // We cannot get a sighash for a non-existing input
@@ -373,7 +373,10 @@ pub fn derive_transactions(
     let unvault_value = unvault_tx.psbt().global.unsigned_tx.output[0].value;
     // 548 is the witstrip weight of an unvault tx (1 segwit input, 2 P2WSH txouts), 6 is the
     // feerate is sat/WU, and 30_000 is the CPFP output value.
-    assert_eq!(unvault_tx.fees(), (548 + deposit_txin_sat_cost as u64) * 6);
+    assert_eq!(
+        unvault_tx.fees().as_sat(),
+        (548 + deposit_txin_sat_cost as u64) * 6
+    );
 
     // Create and sign the cancel transaction
     let rev_unvault_txin = unvault_tx.revault_unvault_txin(&der_unvault_descriptor);
@@ -394,7 +397,7 @@ pub fn derive_transactions(
     );
     // 376 is the witstrip weight of a cancel tx (1 segwit input, 1 P2WSH txout), 50 is the feerate is sat/WU
     assert_eq!(
-        cancel_tx.fees(),
+        cancel_tx.fees().as_sat(),
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 50,
     );
     let cancel_tx_sighash = cancel_tx.sig_hash(SigHashType::All).expect("Input exists");
@@ -425,7 +428,7 @@ pub fn derive_transactions(
 
     // 376 is the witstrip weight of an emer tx (1 segwit input, 1 P2WSH txout), 75 is the feerate is sat/WU
     assert_eq!(
-        unemergency_tx.fees(),
+        unemergency_tx.fees().as_sat(),
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 250,
     );
     let unemergency_tx_sighash = unemergency_tx
@@ -480,7 +483,7 @@ pub fn derive_transactions(
     let cpfp_txin = unvault_tx.cpfp_txin(&cpfp_descriptor, &secp).unwrap();
     let cpfp_txins = vec![cpfp_txin.clone(), cpfp_txin];
     let tbc_weight = unvault_tx.max_weight() * 2;
-    let tbc_fees = Amount::from_sat(unvault_tx.fees() * 2);
+    let tbc_fees = unvault_tx.fees() * 2;
     // Let's ask for a decent feerate
     let added_feerate = 6121;
     // We try to feebump two unvaults in 1 transaction
@@ -518,7 +521,7 @@ pub fn derive_transactions(
     }
     finalize_psbt(&secp, &mut psbt);
     assert!(
-        1000 * (cpfp_fees + unvault_tx.fees())
+        1000 * (cpfp_fees + unvault_tx.fees()).as_sat()
             / (psbt.global.unsigned_tx.get_weight() as u64 + unvault_tx.max_weight())
             >= unvault_tx.max_feerate() * 1000 + added_feerate
     );
@@ -676,7 +679,7 @@ pub fn derive_transactions(
         true,
     )?;
     roundtrip!(spend_tx, SpendTransaction);
-    assert_eq!(spend_tx.fees(), fees);
+    assert_eq!(spend_tx.fees().as_sat(), fees);
     let mut hash_cache = SigHashCache::new(spend_tx.tx());
     let sighashes: Vec<SigHash> = (0..n_txins)
         .into_iter()
@@ -723,7 +726,7 @@ pub fn derive_transactions(
     let cpfp_txin = spend_tx.cpfp_txin(&cpfp_descriptor, &secp).unwrap();
     let cpfp_txins = vec![cpfp_txin.clone()];
     let tbc_weight = spend_tx.max_weight();
-    let tbc_fees = Amount::from_sat(spend_tx.fees());
+    let tbc_fees = spend_tx.fees();
     let added_feerate = 6121;
     let cpfp_tx = CpfpTransaction::from_txins(
         cpfp_txins,
@@ -758,7 +761,7 @@ pub fn derive_transactions(
     }
     finalize_psbt(&secp, &mut psbt);
     assert!(
-        1000 * (cpfp_fees + spend_tx.fees())
+        1000 * (cpfp_fees + spend_tx.fees()).as_sat()
             / (psbt.global.unsigned_tx.get_weight() as u64 + spend_tx.max_weight())
             >= spend_tx.max_feerate() * 1000 + added_feerate
     );

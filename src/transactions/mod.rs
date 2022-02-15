@@ -188,8 +188,8 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
     /// Create a RevaultTransaction from a base64-encoded BIP174-serialized transaction.
     fn from_psbt_str(psbt_str: &str) -> Result<Self, TransactionSerialisationError>;
 
-    // TODO: should return an Amount
-    fn fees(&self) -> u64;
+    /// Sum of the inputs' value minus the sum of the outputs' value
+    fn fees(&self) -> Amount;
 
     /// Get the inner unsigned transaction id
     fn txid(&self) -> Txid;
@@ -482,7 +482,7 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
     }
 
     /// Return the absolute fees this transaction is paying.
-    fn fees(&self) -> u64 {
+    fn fees(&self) -> Amount {
         // We always set witness_utxo, it can only be a bug we introduced with amounts.
         utils::psbt_fees(self.psbt()).expect("Fee computation bug: overflow")
     }
@@ -555,7 +555,7 @@ pub trait CpfpableTransaction: RevaultTransaction {
     /// is already finalized, returns the exact feerate. Otherwise computes the maximum reasonable
     /// weight of a satisfaction and returns the feerate based on this estimation.
     fn max_feerate(&self) -> u64 {
-        let fees = self.fees();
+        let fees = self.fees().as_sat();
         let weight = self.max_weight();
 
         fees.checked_add(weight - 1) // Weight is never 0

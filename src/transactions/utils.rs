@@ -8,7 +8,7 @@ use crate::{
 use miniscript::bitcoin::{
     blockdata::constants::max_money,
     util::psbt::{Global as PsbtGlobal, Input as PsbtIn, PartiallySignedTransaction as Psbt},
-    Network, OutPoint, SigHashType, Transaction,
+    Amount, Network, OutPoint, SigHashType, Transaction,
 };
 
 use std::collections::{BTreeMap, HashSet};
@@ -233,15 +233,15 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
 /// Returns None if:
 /// - A witness UTxO isn't set in one of the PSBT inputs
 /// - There an overflow or underflow when computing the fees
-pub fn psbt_fees(psbt: &Psbt) -> Option<u64> {
-    let mut value_in: u64 = 0;
+pub fn psbt_fees(psbt: &Psbt) -> Option<Amount> {
+    let mut value_in = Amount::from_sat(0);
     for i in psbt.inputs.iter() {
-        value_in = value_in.checked_add(i.witness_utxo.as_ref()?.value)?;
+        value_in = value_in.checked_add(Amount::from_sat(i.witness_utxo.as_ref()?.value))?;
     }
 
-    let mut value_out: u64 = 0;
+    let mut value_out = Amount::from_sat(0);
     for o in psbt.global.unsigned_tx.output.iter() {
-        value_out = value_out.checked_add(o.value)?
+        value_out = value_out.checked_add(Amount::from_sat(o.value))?
     }
 
     value_in.checked_sub(value_out)
