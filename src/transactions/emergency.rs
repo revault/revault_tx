@@ -2,21 +2,15 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, RevaultTransaction, EMER_TX_FEERATE, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_VERSION,
+        utils, RevaultTransaction, EMER_TX_FEERATE, INSANE_FEES, MAX_STANDARD_TX_WEIGHT,
     },
     txins::*,
     txouts::*,
 };
 
 use miniscript::bitcoin::{
-    blockdata::constants::max_money,
-    consensus::encode::Decodable,
-    secp256k1,
-    util::psbt::{
-        Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
-        PartiallySignedTransaction as Psbt,
-    },
-    Amount, Network, OutPoint, SigHashType, Transaction,
+    blockdata::constants::max_money, consensus::encode::Decodable, secp256k1,
+    util::psbt::PartiallySignedTransaction as Psbt, Amount, Network, OutPoint,
 };
 
 #[cfg(feature = "use-serde")]
@@ -25,47 +19,13 @@ use {
     serde::ser::{Serialize, Serializer},
 };
 
-use std::{collections::BTreeMap, convert::TryInto};
+use std::convert::TryInto;
 
 impl_revault_transaction!(
     EmergencyTransaction,
     doc = "The transaction spending a deposit output to The Emergency Script."
 );
 impl EmergencyTransaction {
-    // Internal DRY routine for creating the inner PSBT
-    fn create_psbt(
-        deposit_txin: DepositTxIn,
-        emergency_txo: EmergencyTxOut,
-        lock_time: u32,
-    ) -> Psbt {
-        let txins = vec![deposit_txin.unsigned_txin()];
-        let psbtins = vec![PsbtIn {
-            witness_script: Some(deposit_txin.txout().witness_script().clone()),
-            bip32_derivation: deposit_txin.txout().bip32_derivation().clone(),
-            sighash_type: Some(SigHashType::All),
-            witness_utxo: Some(deposit_txin.into_txout().into_txout()),
-            ..PsbtIn::default()
-        }];
-
-        Psbt {
-            global: PsbtGlobal {
-                unsigned_tx: Transaction {
-                    version: TX_VERSION,
-                    lock_time,
-                    input: txins,
-                    output: vec![emergency_txo.into_txout()],
-                },
-                version: 0,
-                xpub: BTreeMap::new(),
-                proprietary: BTreeMap::new(),
-                unknown: BTreeMap::new(),
-            },
-            inputs: psbtins,
-            // Deposit txout
-            outputs: vec![PsbtOut::default()],
-        }
-    }
-
     /// The first emergency transaction always spends a deposit output and pays to the Emergency
     /// Script.
     /// Will error **only** when trying to spend a dust deposit.
@@ -78,10 +38,9 @@ impl EmergencyTransaction {
     ) -> Result<EmergencyTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness.
         let emer_txo = EmergencyTxOut::new(emer_address.clone(), Amount::from_sat(u64::MAX));
-        let dummy_tx =
-            EmergencyTransaction::create_psbt(deposit_input.clone(), emer_txo, lock_time)
-                .global
-                .unsigned_tx;
+        let dummy_tx = utils::create_psbt(deposit_input.clone(), emer_txo, lock_time)
+            .global
+            .unsigned_tx;
 
         // The weight of the Emergency transaction is the weight of the witness-stripped transaction
         // plus the weight required to satisfy the Deposit txin
@@ -111,7 +70,7 @@ impl EmergencyTransaction {
         }
         let emer_txo = EmergencyTxOut::new(emer_address, Amount::from_sat(emer_value));
 
-        Ok(EmergencyTransaction(EmergencyTransaction::create_psbt(
+        Ok(EmergencyTransaction(utils::create_psbt(
             deposit_input,
             emer_txo,
             lock_time,

@@ -3,21 +3,14 @@ use crate::{
     scripts::*,
     transactions::{
         utils, RevaultTransaction, CANCEL_TX_FEERATE, INSANE_FEES, MAX_STANDARD_TX_WEIGHT,
-        TX_VERSION,
     },
     txins::*,
     txouts::*,
 };
 
 use miniscript::bitcoin::{
-    blockdata::constants::max_money,
-    consensus::encode::Decodable,
-    secp256k1,
-    util::psbt::{
-        Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
-        PartiallySignedTransaction as Psbt,
-    },
-    Amount, Network, OutPoint, SigHashType, Transaction,
+    blockdata::constants::max_money, consensus::encode::Decodable, secp256k1,
+    util::psbt::PartiallySignedTransaction as Psbt, Amount, Network, OutPoint,
 };
 
 #[cfg(feature = "use-serde")]
@@ -26,46 +19,13 @@ use {
     serde::ser::{Serialize, Serializer},
 };
 
-use std::{collections::BTreeMap, convert::TryInto};
+use std::convert::TryInto;
 
 impl_revault_transaction!(
     CancelTransaction,
     doc = "The transaction \"revaulting\" a spend attempt, i.e. spending the unvaulting transaction back to a deposit txo."
 );
 impl CancelTransaction {
-    // Internal DRY routine for creating the inner PSBT
-    fn create_psbt(unvault_txin: UnvaultTxIn, deposit_txo: DepositTxOut, lock_time: u32) -> Psbt {
-        let txins = vec![unvault_txin.unsigned_txin()];
-        let psbtins = vec![PsbtIn {
-            witness_script: Some(unvault_txin.txout().witness_script().clone()),
-            bip32_derivation: unvault_txin.txout().bip32_derivation().clone(),
-            sighash_type: Some(SigHashType::All),
-            witness_utxo: Some(unvault_txin.into_txout().into_txout()),
-            ..PsbtIn::default()
-        }];
-
-        Psbt {
-            inputs: psbtins,
-            // Deposit txout
-            outputs: vec![PsbtOut {
-                bip32_derivation: deposit_txo.bip32_derivation().clone(),
-                ..PsbtOut::default()
-            }],
-            global: PsbtGlobal {
-                unsigned_tx: Transaction {
-                    version: TX_VERSION,
-                    lock_time,
-                    input: txins,
-                    output: vec![deposit_txo.into_txout()],
-                },
-                version: 0,
-                xpub: BTreeMap::new(),
-                proprietary: BTreeMap::new(),
-                unknown: BTreeMap::new(),
-            },
-        }
-    }
-
     /// A Cancel transaction always pays to a Deposit output and spends the Unvault output.
     ///
     /// BIP174 Creator and Updater roles.
@@ -76,10 +36,9 @@ impl CancelTransaction {
     ) -> Result<CancelTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness.
         let dummy_deposit_txo = DepositTxOut::new(Amount::from_sat(u64::MAX), deposit_descriptor);
-        let dummy_tx =
-            CancelTransaction::create_psbt(unvault_input.clone(), dummy_deposit_txo, lock_time)
-                .global
-                .unsigned_tx;
+        let dummy_tx = utils::create_psbt(unvault_input.clone(), dummy_deposit_txo, lock_time)
+            .global
+            .unsigned_tx;
 
         // The weight of the cancel transaction is the weight of the witness-stripped transaction
         // plus the weight required to satisfy the Unvault txin
@@ -109,7 +68,7 @@ impl CancelTransaction {
         );
         let deposit_txo = DepositTxOut::new(Amount::from_sat(revault_value), deposit_descriptor);
 
-        Ok(CancelTransaction(CancelTransaction::create_psbt(
+        Ok(CancelTransaction(utils::create_psbt(
             unvault_input,
             deposit_txo,
             lock_time,

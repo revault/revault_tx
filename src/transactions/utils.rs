@@ -1,11 +1,17 @@
-use crate::{error::*, transactions::TX_VERSION};
-
-use miniscript::bitcoin::{
-    blockdata::constants::max_money, util::psbt::PartiallySignedTransaction as Psbt, Network,
-    OutPoint, SigHashType,
+use crate::{
+    error::*,
+    transactions::TX_VERSION,
+    txins::RevaultTxIn,
+    txouts::{RevaultInternalTxOut, RevaultTxOut},
 };
 
-use std::collections::HashSet;
+use miniscript::bitcoin::{
+    blockdata::constants::max_money,
+    util::psbt::{Global as PsbtGlobal, Input as PsbtIn, PartiallySignedTransaction as Psbt},
+    Network, OutPoint, SigHashType, Transaction,
+};
+
+use std::collections::{BTreeMap, HashSet};
 
 /// Boilerplate for defining a Revault transaction as a newtype over a Psbt and implementing
 /// RevaultTransaction for it.
@@ -239,4 +245,40 @@ pub fn psbt_fees(psbt: &Psbt) -> Option<u64> {
     }
 
     value_in.checked_sub(value_out)
+}
+
+/// Create a single-input single-output PSBT.
+/// PSBT information is filled depending on the input/output type.
+pub fn create_psbt<Out: RevaultTxOut, IntOut: RevaultInternalTxOut, In: RevaultTxIn<IntOut>>(
+    txin: In,
+    txo: Out,
+    lock_time: u32,
+) -> Psbt {
+    let input = vec![txin.unsigned_txin()];
+    let psbtins = vec![PsbtIn {
+        witness_script: Some(txin.txout().witness_script().clone()),
+        bip32_derivation: txin.txout().bip32_derivation().clone(),
+        sighash_type: Some(SigHashType::All),
+        witness_utxo: Some(txin.into_txout().into_txout()),
+        ..PsbtIn::default()
+    }];
+    let psbtouts = vec![txo.psbtout()];
+    let output = vec![txo.into_txout()];
+
+    Psbt {
+        global: PsbtGlobal {
+            unsigned_tx: Transaction {
+                version: TX_VERSION,
+                lock_time,
+                input,
+                output,
+            },
+            version: 0,
+            xpub: BTreeMap::new(),
+            proprietary: BTreeMap::new(),
+            unknown: BTreeMap::new(),
+        },
+        inputs: psbtins,
+        outputs: psbtouts,
+    }
 }
