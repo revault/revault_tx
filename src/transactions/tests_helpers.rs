@@ -325,27 +325,11 @@ pub fn derive_transactions(
     );
     // We cannot get a sighash for a non-existing input
     assert_eq!(
-        emergency_tx.signature_hash(10, SigHashType::All),
+        emergency_tx.signature_hash(10),
         Err(InputSatisfactionError::OutOfBounds)
     );
     // But for an existing one, all good
-    let emergency_tx_sighash_vault = emergency_tx
-        .sig_hash(SigHashType::All)
-        .expect("Input exists");
-    // We can't force it to accept another signature type
-    let emer_sighash_all = emergency_tx
-        .sig_hash(SigHashType::AllPlusAnyoneCanPay)
-        .unwrap();
-    let err = satisfy_transaction_input(
-        &secp,
-        &mut emergency_tx,
-        0,
-        &emer_sighash_all,
-        &stakeholders_priv,
-        child_number,
-    );
-    assert!(err.unwrap_err().to_string().contains("Invalid signature"),);
-    // Now, that's the right SIGHASH
+    let emergency_tx_sighash_vault = emergency_tx.sig_hash().expect("Input exists");
     roundtrip!(emergency_tx, EmergencyTransaction);
     satisfy_transaction_input(
         &secp,
@@ -400,7 +384,7 @@ pub fn derive_transactions(
         cancel_tx.fees().as_sat(),
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 50,
     );
-    let cancel_tx_sighash = cancel_tx.sig_hash(SigHashType::All).expect("Input exists");
+    let cancel_tx_sighash = cancel_tx.sig_hash().expect("Input exists");
     roundtrip!(cancel_tx, CancelTransaction);
     satisfy_transaction_input(
         &secp,
@@ -431,9 +415,7 @@ pub fn derive_transactions(
         unemergency_tx.fees().as_sat(),
         (376 + rev_unvault_txin.txout().max_sat_weight() as u64) * 250,
     );
-    let unemergency_tx_sighash = unemergency_tx
-        .sig_hash(SigHashType::All)
-        .expect("Input exists");
+    let unemergency_tx_sighash = unemergency_tx.sig_hash().expect("Input exists");
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
     satisfy_transaction_input(
         &secp,
@@ -448,7 +430,7 @@ pub fn derive_transactions(
     roundtrip!(unemergency_tx, UnvaultEmergencyTransaction);
 
     // Now we can sign the unvault
-    let unvault_tx_sighash = unvault_tx.sig_hash(SigHashType::All).expect("Input exists");
+    let unvault_tx_sighash = unvault_tx.sig_hash().expect("Input exists");
     satisfy_transaction_input(
         &secp,
         &mut unvault_tx,
@@ -580,9 +562,7 @@ pub fn derive_transactions(
     )
     .expect("Amounts ok");
     roundtrip!(spend_tx, SpendTransaction);
-    let spend_tx_sighash = spend_tx
-        .signature_hash(0, SigHashType::All)
-        .expect("Input exists");
+    let spend_tx_sighash = spend_tx.signature_hash(0).expect("Input exists");
     satisfy_transaction_input(
         &secp,
         &mut spend_tx,
@@ -685,7 +665,7 @@ pub fn derive_transactions(
         .into_iter()
         .map(|i| {
             spend_tx
-                .signature_hash_cached(i, SigHashType::All, &mut hash_cache)
+                .signature_hash_cached(i, &mut hash_cache)
                 .expect("Input exists")
         })
         .collect();

@@ -117,20 +117,17 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Get the sighash for an input of a Revault transaction. Will deduce the scriptCode from
     /// the previous witness script.
+    /// NOTE: transactions are always signed with the SIGHASH_ALL flag.
     ///
-    /// Will error if the input is out of bounds or the PSBT input is insane (eg a P2WSH that
-    /// does not contain a Witness Script (ie was already finalized)).
-    fn signature_hash(
-        &self,
-        input_index: usize,
-        sighash_type: SigHashType,
-    ) -> Result<SigHash, InputSatisfactionError>;
+    /// ## Errors
+    /// - if the input is out of bounds
+    /// - if the RevaultTransaction was already finalized
+    fn signature_hash(&self, input_index: usize) -> Result<SigHash, InputSatisfactionError>;
 
     /// Cached version of [RevaultTransaction::signature_hash]
     fn signature_hash_cached(
         &self,
         input_index: usize,
-        sighash_type: SigHashType,
         cache: &mut SigHashCache<&Transaction>,
     ) -> Result<SigHash, InputSatisfactionError>;
 
@@ -213,19 +210,18 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 /// Contains a single transaction input.
 pub trait RevaultPresignedTransaction: RevaultTransaction {
     /// Get the sighash for the single input of a presigned Revault transaction.
-    fn sig_hash(&self, sighash_type: SigHashType) -> Result<SigHash, InputSatisfactionError> {
+    fn sig_hash(&self) -> Result<SigHash, InputSatisfactionError> {
         debug_assert_eq!(
             self.psbt().inputs.len(),
             1,
             "Presigned transactions are always created with a single input"
         );
-        RevaultTransaction::signature_hash(self, 0, sighash_type)
+        RevaultTransaction::signature_hash(self, 0)
     }
 
     /// Cached version of [RevaultPresignedTransaction::signature_hash]
     fn sig_hash_cached(
         &self,
-        sighash_type: SigHashType,
         cache: &mut SigHashCache<&Transaction>,
     ) -> Result<SigHash, InputSatisfactionError> {
         debug_assert_eq!(
@@ -233,7 +229,7 @@ pub trait RevaultPresignedTransaction: RevaultTransaction {
             1,
             "Presigned transactions are always created with a single input"
         );
-        RevaultTransaction::signature_hash_cached(self, 0, sighash_type, cache)
+        RevaultTransaction::signature_hash_cached(self, 0, cache)
     }
 
     /// Add a signature to the single input of a presigned Revault transaction.
@@ -269,19 +265,14 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
         inner_mut::PrivateInnerMut::into_psbt(self)
     }
 
-    fn signature_hash(
-        &self,
-        input_index: usize,
-        sighash_type: SigHashType,
-    ) -> Result<SigHash, InputSatisfactionError> {
+    fn signature_hash(&self, input_index: usize) -> Result<SigHash, InputSatisfactionError> {
         let mut cache = SigHashCache::new(self.tx());
-        self.signature_hash_cached(input_index, sighash_type, &mut cache)
+        self.signature_hash_cached(input_index, &mut cache)
     }
 
     fn signature_hash_cached(
         &self,
         input_index: usize,
-        sighash_type: SigHashType,
         cache: &mut SigHashCache<&Transaction>,
     ) -> Result<SigHash, InputSatisfactionError> {
         let psbt = self.psbt();
@@ -299,7 +290,7 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
             .witness_script
             .as_ref()
             .ok_or(InputSatisfactionError::MissingWitnessScript)?;
-        Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, sighash_type))
+        Ok(cache.signature_hash(input_index, &witscript, prev_txo.value, SigHashType::All))
     }
 
     fn add_signature<C: secp256k1::Verification>(
@@ -351,7 +342,7 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
         let expected_sighash_type = psbtin
             .sighash_type
             .expect("We always set the SigHashType in the constructor.");
-        let sighash = self.signature_hash(input_index, expected_sighash_type)?;
+        let sighash = self.signature_hash(input_index)?;
         let sighash = secp256k1::Message::from_slice(&sighash).expect("sighash is 32 a bytes hash");
         secp.verify(&sighash, &signature, &pubkey)
             .map_err(|_| InputSatisfactionError::InvalidSignature(signature, pubkey, sighash))?;

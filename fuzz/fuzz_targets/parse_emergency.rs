@@ -2,10 +2,7 @@
 use libfuzzer_sys::fuzz_target;
 
 use revault_tx::{
-    miniscript::bitcoin::{
-        secp256k1::{Signature, SECP256K1},
-        SigHashType,
-    },
+    miniscript::bitcoin::secp256k1::{Signature, SECP256K1},
     transactions::{EmergencyTransaction, RevaultPresignedTransaction, RevaultTransaction},
 };
 
@@ -25,22 +22,12 @@ fuzz_target!(|data: &[u8]| {
         .unwrap();
         let dummy_sig = Signature::from_str("3045022100e6ffa6cc76339944fa428bcd058a27d0e660d0554a418a79620d7e14cda4cbde022045ba1bcec9fbbdcb4b70328dc7efae7ee59ff496aa8139c81a10b898911b8b52").unwrap();
 
-        let deposit_in_index = tx
-            .psbt()
-            .inputs
-            .iter()
-            .position(|i| i.witness_utxo.as_ref().unwrap().script_pubkey.is_v0_p2wsh())
-            .unwrap();
-
         if !tx.is_finalized() {
             // Derivation paths must always be set
-            assert!(!tx.psbt().inputs[deposit_in_index]
-                .bip32_derivation
-                .is_empty());
+            assert!(!tx.psbt().inputs[0].bip32_derivation.is_empty());
 
             // We can compute the sighash for the unvault input
-            tx.signature_hash(deposit_in_index, SigHashType::AllPlusAnyoneCanPay)
-                .expect("Must be in bound as it was parsed!");
+            tx.sig_hash().expect("Must be in bound as it was parsed!");
 
             // We can add a signature, it just is invalid
             assert!(tx
@@ -51,7 +38,7 @@ fuzz_target!(|data: &[u8]| {
         } else {
             // But not if it's final
             assert!(tx
-                .signature_hash(deposit_in_index, SigHashType::AllPlusAnyoneCanPay)
+                .sig_hash()
                 .unwrap_err()
                 .to_string()
                 .contains("Missing witness_script"));
