@@ -8,7 +8,7 @@ use crate::{
 use miniscript::bitcoin::{
     blockdata::constants::max_money,
     util::psbt::{Global as PsbtGlobal, Input as PsbtIn, PartiallySignedTransaction as Psbt},
-    Amount, Network, OutPoint, SigHashType, Transaction,
+    Amount, Network, OutPoint, Transaction,
 };
 
 use std::collections::{BTreeMap, HashSet};
@@ -187,11 +187,6 @@ pub fn psbt_common_sanity_checks(psbt: Psbt) -> Result<Psbt, PsbtValidationError
             continue;
         }
 
-        // We always presign transactions with SIGHASH_ALL
-        if input.sighash_type != Some(SigHashType::All) {
-            return Err(PsbtValidationError::InvalidSighashType(input.clone()));
-        }
-
         // It must have derivation paths set since it must have a witscript
         if input.bip32_derivation.is_empty() {
             return Err(PsbtValidationError::InvalidInputField(input.clone()));
@@ -257,7 +252,6 @@ pub fn create_psbt<Out: RevaultTxOut, IntOut: RevaultInternalTxOut, In: RevaultT
     let psbtins = vec![PsbtIn {
         witness_script: Some(txin.txout().witness_script().clone()),
         bip32_derivation: txin.txout().bip32_derivation().clone(),
-        sighash_type: Some(SigHashType::All),
         witness_utxo: Some(txin.into_txout().into_txout()),
         ..PsbtIn::default()
     }];

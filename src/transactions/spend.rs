@@ -17,7 +17,7 @@ use miniscript::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        Amount, Network, OutPoint, SigHashType, Transaction,
+        Amount, Network, OutPoint, Transaction,
     },
     DescriptorTrait,
 };
@@ -146,7 +146,6 @@ impl SpendTransaction {
                     PsbtIn {
                         witness_script: Some(prev_txout.witness_script().clone()),
                         bip32_derivation: prev_txout.bip32_derivation().clone(),
-                        sighash_type: Some(SigHashType::All), // Unvault spends are always signed with ALL
                         witness_utxo: Some(prev_txout.into_txout()),
                         ..PsbtIn::default()
                     }
@@ -257,10 +256,6 @@ impl SpendTransaction {
 
             if input.final_script_witness.is_some() {
                 continue;
-            }
-
-            if input.sighash_type != Some(SigHashType::All) {
-                return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
             }
 
             // The Unvault input must contain a valid witness script

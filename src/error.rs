@@ -193,7 +193,6 @@ pub enum PsbtValidationError {
     InvalidInWitnessScript(PsbtInput),
     MissingOutWitnessScript(PsbtOutput),
     InvalidOutWitnessScript(PsbtOutput),
-    InvalidSighashType(PsbtInput),
     InvalidInputField(PsbtInput),
     InvalidOutputField(PsbtOutput),
     InvalidPrevoutType(PsbtInput),
@@ -236,7 +235,6 @@ impl fmt::Display for PsbtValidationError {
             Self::InvalidOutWitnessScript(o) => {
                 write!(f, "Invalid witness script for output '{:#?}'", o)
             }
-            Self::InvalidSighashType(i) => write!(f, "Invalid sighash type for input: '{:#?}'", i),
             Self::InvalidInputField(i) => write!(f, "Invalid field in input: '{:#?}'", i),
             Self::InvalidOutputField(o) => write!(f, "Invalid field in output: '{:#?}'", o),
             Self::InvalidPrevoutType(i) => write!(

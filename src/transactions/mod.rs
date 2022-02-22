@@ -133,7 +133,7 @@ pub trait RevaultTransaction: fmt::Debug + Clone + PartialEq {
 
     /// Add a signature in order to eventually satisfy this input.
     ///
-    /// Checks the signature according to the specified expected sighash type in the PSBT input.
+    /// NOTE: this checks the signature. The expected signature type is ALL.
     ///
     /// The BIP174 Signer role.
     fn add_signature<C: secp256k1::Verification>(
@@ -234,8 +234,7 @@ pub trait RevaultPresignedTransaction: RevaultTransaction {
 
     /// Add a signature to the single input of a presigned Revault transaction.
     ///
-    /// Note this checks the signature according to the specified expected sighash type in
-    /// the PSBT input.
+    /// NOTE: this checks the signature. The expected signature type is ALL.
     fn add_sig<C: secp256k1::Verification>(
         &mut self,
         pubkey: secp256k1::PublicKey,
@@ -339,9 +338,6 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
             "We never create Psbt input with legacy txos."
         );
 
-        let expected_sighash_type = psbtin
-            .sighash_type
-            .expect("We always set the SigHashType in the constructor.");
         let sighash = self.signature_hash(input_index)?;
         let sighash = secp256k1::Message::from_slice(&sighash).expect("sighash is 32 a bytes hash");
         secp.verify(&sighash, &signature, &pubkey)
@@ -352,7 +348,7 @@ impl<T: inner_mut::PrivateInnerMut + fmt::Debug + Clone + PartialEq> RevaultTran
             key: pubkey,
         };
         let mut rawsig = signature.serialize_der().to_vec();
-        rawsig.push(expected_sighash_type.as_u32() as u8);
+        rawsig.push(SigHashType::All.as_u32() as u8);
 
         let psbtin = self
             .psbt_mut()
@@ -995,7 +991,7 @@ mod tests {
         };
         use crate::bitcoin::consensus::encode::serialize_hex;
 
-        let emergency_psbt_str = "\"cHNidP8BAF4CAAAAAblxjSMtT1NW43OtU7paIqVl/6bzTw5Q5xX7lsGErjsMAAAAAAD9////ARh29QUAAAAAIgAgAN1LRNfR4lsBogehEY+O7NXSAWcKOvb431xEMNY3QDYAAAAAAAEBKwDh9QUAAAAAIgAgAN1LRNfR4lsBogehEY+O7NXSAWcKOvb431xEMNY3QDYBAwQBAAAAAQX9EwFYIQLJUxp3Fo5x3aoj8UdGwmuO222fSH2nKFLzrTH3s282ryECTqBpz6AwqP8iGkUMotFmzYTgcI1vfirsktLV8zQzl2ohA4SBKbr3IDiGDd8LwRULNE35murbypW/eFvNHVAM674DIQIyQpOv8Rz1f83HShJqpAAFUJrlwMlVWuI19TxvliGIDyEDUcybOAjIAQ1lppsHgi3/DqqCzZ3BELMxVmduWqmDhHEhA7VxupJpHc27CxSMW9sdIhS1aJAQMmk4qcJ+R3aVN+P/IQLYgezBZb+blwQwV7ovbU4LuqrGtjQZWuA2NRuRsrrgdyED3fHFMSEvvJ4jEliv+QV3wbQnWbDzB3NTaQL8fNGXY0BYriIGAjJCk6/xHPV/zcdKEmqkAAVQmuXAyVVa4jX1PG+WIYgPCEKIVc8KAAAAIgYCTqBpz6AwqP8iGkUMotFmzYTgcI1vfirsktLV8zQzl2oIjteG5woAAAAiBgLJUxp3Fo5x3aoj8UdGwmuO222fSH2nKFLzrTH3s282rwjhFg2RCgAAACIGAtiB7MFlv5uXBDBXui9tTgu6qsa2NBla4DY1G5GyuuB3CAA0c/AKAAAAIgYDUcybOAjIAQ1lppsHgi3/DqqCzZ3BELMxVmduWqmDhHEIvdwvZAoAAAAiBgOEgSm69yA4hg3fC8EVCzRN+Zrq28qVv3hbzR1QDOu+AwgXSLA2CgAAACIGA7VxupJpHc27CxSMW9sdIhS1aJAQMmk4qcJ+R3aVN+P/CKJxD7kKAAAAIgYD3fHFMSEvvJ4jEliv+QV3wbQnWbDzB3NTaQL8fNGXY0AIp6sGPwoAAAAAAA==\"";
+        let emergency_psbt_str = "\"cHNidP8BAF4CAAAAAblxjSMtT1NW43OtU7paIqVl/6bzTw5Q5xX7lsGErjsMAAAAAAD9////ARh29QUAAAAAIgAgAN1LRNfR4lsBogehEY+O7NXSAWcKOvb431xEMNY3QDYAAAAAAAEBKwDh9QUAAAAAIgAgAN1LRNfR4lsBogehEY+O7NXSAWcKOvb431xEMNY3QDYBBf0TAVghAslTGncWjnHdqiPxR0bCa47bbZ9IfacoUvOtMfezbzavIQJOoGnPoDCo/yIaRQyi0WbNhOBwjW9+KuyS0tXzNDOXaiEDhIEpuvcgOIYN3wvBFQs0Tfma6tvKlb94W80dUAzrvgMhAjJCk6/xHPV/zcdKEmqkAAVQmuXAyVVa4jX1PG+WIYgPIQNRzJs4CMgBDWWmmweCLf8OqoLNncEQszFWZ25aqYOEcSEDtXG6kmkdzbsLFIxb2x0iFLVokBAyaTipwn5HdpU34/8hAtiB7MFlv5uXBDBXui9tTgu6qsa2NBla4DY1G5GyuuB3IQPd8cUxIS+8niMSWK/5BXfBtCdZsPMHc1NpAvx80ZdjQFiuIgYCMkKTr/Ec9X/Nx0oSaqQABVCa5cDJVVriNfU8b5YhiA8IQohVzwoAAAAiBgJOoGnPoDCo/yIaRQyi0WbNhOBwjW9+KuyS0tXzNDOXagiO14bnCgAAACIGAslTGncWjnHdqiPxR0bCa47bbZ9IfacoUvOtMfezbzavCOEWDZEKAAAAIgYC2IHswWW/m5cEMFe6L21OC7qqxrY0GVrgNjUbkbK64HcIADRz8AoAAAAiBgNRzJs4CMgBDWWmmweCLf8OqoLNncEQszFWZ25aqYOEcQi93C9kCgAAACIGA4SBKbr3IDiGDd8LwRULNE35murbypW/eFvNHVAM674DCBdIsDYKAAAAIgYDtXG6kmkdzbsLFIxb2x0iFLVokBAyaTipwn5HdpU34/8IonEPuQoAAAAiBgPd8cUxIS+8niMSWK/5BXfBtCdZsPMHc1NpAvx80ZdjQAinqwY/CgAAAAAA\"";
         let emergency_tx: EmergencyTransaction = serde_json::from_str(&emergency_psbt_str).unwrap();
         assert_eq!(serialize_hex(emergency_tx.tx()), "0200000001b9718d232d4f5356e373ad53ba5a22a565ffa6f34f0e50e715fb96c184ae3b0c0000000000fdffffff011876f5050000000022002000dd4b44d7d1e25b01a207a1118f8eecd5d201670a3af6f8df5c4430d637403600000000");
 
@@ -1007,12 +1003,12 @@ mod tests {
         let cancel_tx: CancelTransaction = serde_json::from_str(&cancel_psbt_str).unwrap();
         assert_eq!(serialize_hex(cancel_tx.tx()), "020000000106bd9b170bc56925d787095ffb219d6e9e3548abadb7b6f3742ce8951f2efe730000000000fdffffff01e8ca0200000000002200204a72ecb2cce46b23bf7f38049aa9761572c73a02f7ab2741b28dfcf978c85a9200000000");
 
-        let unemergency_psbt_str = "\"cHNidP8BAF4CAAAAAfeVYT6dSrDTzQekeDseTQmpQChdIx9Fm/7yvPBvdu7HAAAAAAD9////AdLKAgAAAAAAIgAgojUvLaQJe+wXmRaaDIAaYfa2HbdfCBsgMdGjuwed2F4AAAAAAAEBK0ANAwAAAAAAIgAgXA0s+qynDjinXOmpJ/Qhuj87xEB7YcLEVdz7OX5B+l8iAgI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezEcwRAIgP5ZgDmwPn1fh7jKgweTU+K0Os/vsY+kKYnScOYewCVgCIG+KZrvbn8DPDrvJQwsbMz8PF208zO2W6hIeTGswSJOYgSICAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/RzBEAiBV9TTu0tVLMTlIlBSg/Pr21pqpehOIHduNDC7NB7ewPwIgF4p8WgqEN+haJCEG0jwmmCOjiQz7EzN2H3ps6CE7yh2BAQMEAQAAAAEFqyEDN1gQkDMYX8sPp3LA6kaTYEYXNUtyeRNnmZMq2pn/8mKsUYdkdqkU/DfzgGhXuGsHR/0kayVmwnW7IKyIrGt2qRTPOnrWokpCwG9WBJL3wYhj4W9F2YisbJNSh2dSIQLyP9W+zR9ez6DaS52NgS2EwUBTOwyUXhLHpcG615JyWiECGJkKA33vMvzFF+aGvDdoNhnjx1yj+fqJQQY1x4LELhdSrwO1hACyaCIGAhiZCgN97zL8xRfmhrw3aDYZ48dco/n6iUEGNceCxC4XCMMf0ygKAAAAIgYCPk36mDgeQLxi2TtgtzljXqT7QdjF5bZaLycvWjRFHswIeMYQoQoAAAAiBgLZP7Ix2AeYL+51Eq9JNuVJZngp/u87a4pQ+WigWITmfwgbQV1zCgAAACIGAvI/1b7NH17PoNpLnY2BLYTBQFM7DJReEselwbrXknJaCNQFyFQKAAAAIgYDN1gQkDMYX8sPp3LA6kaTYEYXNUtyeRNnmZMq2pn/8mII0HhwJwoAAAAAAA==\"";
+        let unemergency_psbt_str = "\"cHNidP8BAF4CAAAAAfeVYT6dSrDTzQekeDseTQmpQChdIx9Fm/7yvPBvdu7HAAAAAAD9////AdLKAgAAAAAAIgAgojUvLaQJe+wXmRaaDIAaYfa2HbdfCBsgMdGjuwed2F4AAAAAAAEBK0ANAwAAAAAAIgAgXA0s+qynDjinXOmpJ/Qhuj87xEB7YcLEVdz7OX5B+l8iAgI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezEcwRAIgP5ZgDmwPn1fh7jKgweTU+K0Os/vsY+kKYnScOYewCVgCIG+KZrvbn8DPDrvJQwsbMz8PF208zO2W6hIeTGswSJOYgSICAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/RzBEAiBV9TTu0tVLMTlIlBSg/Pr21pqpehOIHduNDC7NB7ewPwIgF4p8WgqEN+haJCEG0jwmmCOjiQz7EzN2H3ps6CE7yh2BAQWrIQM3WBCQMxhfyw+ncsDqRpNgRhc1S3J5E2eZkyramf/yYqxRh2R2qRT8N/OAaFe4awdH/SRrJWbCdbsgrIisa3apFM86etaiSkLAb1YEkvfBiGPhb0XZiKxsk1KHZ1IhAvI/1b7NH17PoNpLnY2BLYTBQFM7DJReEselwbrXknJaIQIYmQoDfe8y/MUX5oa8N2g2GePHXKP5+olBBjXHgsQuF1KvA7WEALJoIgYCGJkKA33vMvzFF+aGvDdoNhnjx1yj+fqJQQY1x4LELhcIwx/TKAoAAAAiBgI+TfqYOB5AvGLZO2C3OWNepPtB2MXltlovJy9aNEUezAh4xhChCgAAACIGAtk/sjHYB5gv7nUSr0k25UlmeCn+7ztrilD5aKBYhOZ/CBtBXXMKAAAAIgYC8j/Vvs0fXs+g2kudjYEthMFAUzsMlF4Sx6XButeScloI1AXIVAoAAAAiBgM3WBCQMxhfyw+ncsDqRpNgRhc1S3J5E2eZkyramf/yYgjQeHAnCgAAAAAA\"";
         let unemergency_tx: UnvaultEmergencyTransaction =
             serde_json::from_str(&unemergency_psbt_str).unwrap();
         assert_eq!(serialize_hex(unemergency_tx.tx()), "0200000001f795613e9d4ab0d3cd07a4783b1e4d09a940285d231f459bfef2bcf06f76eec70000000000fdffffff01d2ca020000000000220020a2352f2da4097bec1799169a0c801a61f6b61db75f081b2031d1a3bb079dd85e00000000");
 
-        let spend_psbt_str = "\"cHNidP8BAIkCAAAAAdKM0NH1IfB5EqCmcrExViMrYq0YCHkfmZvTSzFoVNmJAAAAAAD9////AkANAwAAAAAAIgAgWfVjq6I2IH//GE9+5VT1A85InZCfKg9BfxCTDKdmEFUwdQAAAAAAACIAIPkvfw7mDhcLjDoAv/ciWdH+adf8/RRqXZEu2BCe9ZsUAAAAAAABASuIlAMAAAAAACIAIFyKAdGPlWYmCg7Lut2cL8DgFJiAKJItdJTyaYGQbCNWAQjbBABHMEQCIFmUwt4fnJL3eRAWqklyV3Aikc8TYwv7CrhxPRicUbU5AiB8g+ASYSGglLZleMFDh9Pi2W/FqQYwEWesor9Bv/EiQQFIMEUCIQCGvJsPxgFZtpsNRQ3VETEkDB78gcsgB4W9hkrkBXCMBgIgIDIbqQtHakOcqtl14jpPjiMVz0KO0HVJB51tvGDU/4wBR1IhAwl6ytUyWFcjWXapo8WMj2sasbgUCRx5K+F2jeGXb8d/IQJM5T/F+uoP2b/xce+xNoDZ9+6ocbz/8PSVoayx6TJnrlKuACICAkzlP8X66g/Zv/Fx77E2gNn37qhxvP/w9JWhrLHpMmeuCLhkVBQKAAAAIgICjlU/HP1v6DJ8m2Z5ANX5jZeC9cJ/Z0eakLYfzX5gX6YISNmuZwoAAAAiAgMJesrVMlhXI1l2qaPFjI9rGrG4FAkceSvhdo3hl2/HfwiILvO9CgAAACICAzkvyp9Q3knkMYAWBKeo5xcgiaoOwUdF/SQVMdYU3QtdCBxghxwKAAAAIgIDmeAIO+xbMz8grQfSwjY97Vgl7NHkVth6Z0JfrPpBaMAIsVo/DgoAAAAAIgIC640I7MqUC5FxRyF6yE8OB2aK8YojzUiyDmWrvnjn6lgIo2rccQoAAAAAcHNidP8BAGcCAAAAAVYetH70pzOUyZwutTULwN97mzGRBqx2K/u/qMstAMuxAAAAAAB6GwAAAoAyAAAAAAAAIgAg+S9/DuYOFwuMOgC/9yJZ0f5p1/z9FGpdkS7YEJ71mxSwswIAAAAAAAAAAAAAAAEBK0ANAwAAAAAAIgAgWfVjq6I2IH//GE9+5VT1A85InZCfKg9BfxCTDKdmEFUBAwQBAAAAAQWqIQM5L8qfUN5J5DGAFgSnqOcXIImqDsFHRf0kFTHWFN0LXaxRh2R2qRSLYmchXl+UoOeURf6sOKVrNpQlfIisa3apFOlaWTA4VwFVjhhA7wAx6l1dCbTKiKxsk1KHZ1IhA5ngCDvsWzM/IK0H0sI2Pe1YJezR5FbYemdCX6z6QWjAIQKOVT8c/W/oMnybZnkA1fmNl4L1wn9nR5qQth/NfmBfplKvAnobsmgiBgJM5T/F+uoP2b/xce+xNoDZ9+6ocbz/8PSVoayx6TJnrgi4ZFQUCgAAACIGAo5VPxz9b+gyfJtmeQDV+Y2XgvXCf2dHmpC2H81+YF+mCEjZrmcKAAAAIgYDCXrK1TJYVyNZdqmjxYyPaxqxuBQJHHkr4XaN4Zdvx38IiC7zvQoAAAAiBgM5L8qfUN5J5DGAFgSnqOcXIImqDsFHRf0kFTHWFN0LXQgcYIccCgAAACIGA5ngCDvsWzM/IK0H0sI2Pe1YJezR5FbYemdCX6z6QWjACLFaPw4KAAAAACICAuuNCOzKlAuRcUcheshPDgdmivGKI81Isg5lq7545+pYCKNq3HEKAAAAAAA=\"";
+        let spend_psbt_str = "\"cHNidP8BAIkCAAAAAdKM0NH1IfB5EqCmcrExViMrYq0YCHkfmZvTSzFoVNmJAAAAAAD9////AkANAwAAAAAAIgAgWfVjq6I2IH//GE9+5VT1A85InZCfKg9BfxCTDKdmEFUwdQAAAAAAACIAIPkvfw7mDhcLjDoAv/ciWdH+adf8/RRqXZEu2BCe9ZsUAAAAAAABASuIlAMAAAAAACIAIFyKAdGPlWYmCg7Lut2cL8DgFJiAKJItdJTyaYGQbCNWAQjbBABHMEQCIFmUwt4fnJL3eRAWqklyV3Aikc8TYwv7CrhxPRicUbU5AiB8g+ASYSGglLZleMFDh9Pi2W/FqQYwEWesor9Bv/EiQQFIMEUCIQCGvJsPxgFZtpsNRQ3VETEkDB78gcsgB4W9hkrkBXCMBgIgIDIbqQtHakOcqtl14jpPjiMVz0KO0HVJB51tvGDU/4wBR1IhAwl6ytUyWFcjWXapo8WMj2sasbgUCRx5K+F2jeGXb8d/IQJM5T/F+uoP2b/xce+xNoDZ9+6ocbz/8PSVoayx6TJnrlKuACICAkzlP8X66g/Zv/Fx77E2gNn37qhxvP/w9JWhrLHpMmeuCLhkVBQKAAAAIgICjlU/HP1v6DJ8m2Z5ANX5jZeC9cJ/Z0eakLYfzX5gX6YISNmuZwoAAAAiAgMJesrVMlhXI1l2qaPFjI9rGrG4FAkceSvhdo3hl2/HfwiILvO9CgAAACICAzkvyp9Q3knkMYAWBKeo5xcgiaoOwUdF/SQVMdYU3QtdCBxghxwKAAAAIgIDmeAIO+xbMz8grQfSwjY97Vgl7NHkVth6Z0JfrPpBaMAIsVo/DgoAAAAAIgIC640I7MqUC5FxRyF6yE8OB2aK8YojzUiyDmWrvnjn6lgIo2rccQoAAAAAcHNidP8BAGcCAAAAAVYetH70pzOUyZwutTULwN97mzGRBqx2K/u/qMstAMuxAAAAAAB6GwAAAoAyAAAAAAAAIgAg+S9/DuYOFwuMOgC/9yJZ0f5p1/z9FGpdkS7YEJ71mxSwswIAAAAAAAAAAAAAAAEBK0ANAwAAAAAAIgAgWfVjq6I2IH//GE9+5VT1A85InZCfKg9BfxCTDKdmEFUBAwQBAAAAAQWqIQM5L8qfUN5J5DGAFgSnqOcXIImqDsFHRf0kFTHWFN0LXaxRh2R2qRSLYmchXl+UoOeURf6sOKVrNpQlfIisa3apFOlaWTA4VwFVjhhA7wAx6l1dCbTKiKxsk1KHZ1IhA5ngCDvsWzM/IK0H0sI2Pe1YJezR5FbYemdCX6z6QWjAIQKOVT8c/W/oMnybZnkA1fmNl4L1wn9nR5qQth/NfmBfplKvAnobsmgiBgJM5T/F+uoP2b/xce+xNoDZ9+6ocbz/8PSVoayx6TJnrgi4ZFQUCgAAACIGAo5VPxz9b+gyfJtmeQDV+Y2XgvXCf2dHmpC2H81+YF+mCEjZrmcKAAAAIgYDCXrK1TJYVyNZdqmjxYyPaxqxuBQJHHkr4XaN4Zdvx38IiC7zvQoAAAAiBgM5L8qfUN5J5DGAFgSnqOcXIImqDsFHRf0kFTHWFN0LXQgcYIccCgAAACIGA5ngCDvsWzM/IK0H0sI2Pe1YJezR5FbYemdCX6z6QWjACLFaPw4KAAAAACICAuuNCOzKlAuRcUcheshPDgdmivGKI81Isg5lq7545+pYCKNq3HEKAAAAAAA\"";
         let spend_tx: SpendTransaction = serde_json::from_str(&spend_psbt_str).unwrap();
         assert_eq!(serialize_hex(&spend_tx.into_tx()), "02000000000101d28cd0d1f521f07912a0a672b13156232b62ad1808791f999bd34b316854d9890000000000fdffffff02400d03000000000022002059f563aba236207fff184f7ee554f503ce489d909f2a0f417f10930ca76610553075000000000000220020f92f7f0ee60e170b8c3a00bff72259d1fe69d7fcfd146a5d912ed8109ef59b14040047304402205994c2de1f9c92f7791016aa497257702291cf13630bfb0ab8713d189c51b53902207c83e0126121a094b66578c14387d3e2d96fc5a906301167aca2bf41bff122410148304502210086bc9b0fc60159b69b0d450dd51131240c1efc81cb200785bd864ae405708c06022020321ba90b476a439caad975e23a4f8e2315cf428ed07549079d6dbc60d4ff8c0147522103097acad5325857235976a9a3c58c8f6b1ab1b814091c792be1768de1976fc77f21024ce53fc5faea0fd9bff171efb13680d9f7eea871bcfff0f495a1acb1e93267ae52ae00000000");
     }
