@@ -827,7 +827,7 @@ mod tests {
         ));
         // 100 BTC
         derive_transactions(
-            38,
+            MAX_STAKEHOLDERS,
             5,
             csv,
             deposit_prevout,
@@ -839,12 +839,12 @@ mod tests {
             &secp,
         )
         .expect(&format!(
-            "Tx chain with 38 stakeholders, 5 manager, {} csv, 100_000_000_000 deposit",
-            csv
+            "Tx chain with {} stakeholders, 5 manager, {} csv, 100_000_000_000 deposit",
+            MAX_STAKEHOLDERS, csv
         ));
         // 100 BTC, no cosigning server
         derive_transactions(
-            38,
+            MAX_STAKEHOLDERS,
             5,
             csv,
             deposit_prevout,
@@ -856,8 +856,8 @@ mod tests {
             &secp,
         )
         .expect(&format!(
-            "Tx chain with 38 stakeholders, 5 manager, {} csv, 100_000_000_000 deposit, no cosig",
-            csv
+            "Tx chain with {} stakeholders, 5 manager, {} csv, 100_000_000_000 deposit, no cosig",
+            MAX_STAKEHOLDERS, csv
         ));
     }
 

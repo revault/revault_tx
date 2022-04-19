@@ -57,6 +57,13 @@ impl From<miniscript::Error> for ScriptCreationError {
     }
 }
 
+// TODO: Remove this manual implementation of PartialEq once the trait is derivable for miniscript crate type fields.
+impl PartialEq for ScriptCreationError {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
 impl error::Error for ScriptCreationError {}
 
 /// Error when creating a Revault Bitcoin transaction output

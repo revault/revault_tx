@@ -26,9 +26,7 @@ use miniscript::{
         iter::PkPkh,
         limits::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG},
     },
-    policy::{
-        compiler::CompilerError, concrete::Policy, semantic::Policy as SemanticPolicy, Liftable,
-    },
+    policy::{concrete::Policy, semantic::Policy as SemanticPolicy, Liftable},
     Descriptor, ForEachKey, Miniscript, MiniscriptKey, Segwitv0, Terminal, ToPublicKey,
     TranslatePk2,
 };
@@ -46,6 +44,12 @@ use serde::de;
 ///
 /// <https://github.com/bitcoin/bitcoin/blob/4a540683ec40393d6369da1a9e02e45614db936d/src/primitives/transaction.h#L87-L89>
 pub const SEQUENCE_LOCKTIME_MASK: u32 = 0x00_00_ff_ff;
+
+// Limiting the number of managers and stakeholders to 20 allows us to use a multi() descriptor for both
+// the deposit and CPFP descriptor, greatly simplifying the implementation of revaultd until bitcoind supports Miniscript.
+// Further, these bounds simplify the task of testing most deployment parameters.
+pub const MAX_STAKEHOLDERS: usize = 20;
+pub const MAX_MANAGERS: usize = 20;
 
 /// A public key used in derived descriptors
 #[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash)]
@@ -271,7 +275,7 @@ impl_descriptor_newtype!(
 
 macro_rules! deposit_desc_checks {
     ($stakeholders:ident) => {
-        if $stakeholders.len() < 2 {
+        if $stakeholders.len() < 2 || $stakeholders.len() > MAX_STAKEHOLDERS {
             return Err(ScriptCreationError::BadParameters);
         }
     };
@@ -302,6 +306,10 @@ macro_rules! unvault_desc_checks {
         }
 
         if $managers_threshold > $managers.len() {
+            return Err(ScriptCreationError::BadParameters);
+        }
+
+        if $stakeholders.len() > MAX_STAKEHOLDERS || $managers.len() > MAX_MANAGERS {
             return Err(ScriptCreationError::BadParameters);
         }
 
@@ -823,14 +831,8 @@ impl FromStr for DerivedUnvaultDescriptor {
 
 macro_rules! cpfp_descriptor {
     ($managers: ident) => {{
-        // FIXME: doing this manually as sanity_check() doesn't really do this check :(
-        // Obviously returning rust-miniscript's error here is really ugly, but hopefully
-        // this is just a temporary solution (see
-        // https://github.com/rust-bitcoin/rust-miniscript/pull/282)
-        if $managers.len() > 20 {
-            return Err(ScriptCreationError::PolicyCompilation(
-                CompilerError::LimitsExceeded,
-            ));
+        if $managers.len() > MAX_MANAGERS {
+            return Err(ScriptCreationError::BadParameters);
         }
 
         let desc = Descriptor::new_wsh(Miniscript::from_ast(Terminal::Multi(1, $managers))?)?;
@@ -994,12 +996,12 @@ mod tests {
     use super::{
         CpfpDescriptor, DepositDescriptor, DerivedCpfpDescriptor, DerivedDepositDescriptor,
         DerivedPublicKey, DerivedUnvaultDescriptor, ScriptCreationError, UnvaultDescriptor,
+        MAX_MANAGERS, MAX_STAKEHOLDERS,
     };
 
     use miniscript::{
         bitcoin::{secp256k1, util::bip32, Network},
         descriptor::{DescriptorPublicKey, DescriptorXKey, Wildcard},
-        policy::compiler::CompilerError,
     };
     use std::{iter::repeat_with, str::FromStr};
 
@@ -1472,10 +1474,9 @@ mod tests {
             ((2, 3), 8),
             // Huge configurations
             ((15, 15), 5),
-            ((20, 20), 5),
             ((7, 7), 13),
             ((8, 8), 12),
-            ((3, 3), 18),
+            ((3, 3), 17),
         ];
         let secp = secp256k1::Secp256k1::signing_only();
 
@@ -1568,62 +1569,58 @@ mod tests {
         );
 
         // Maximum N-of-N
-        let participants = (0..99)
+        let participants = (0..MAX_STAKEHOLDERS)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         DepositDescriptor::new(participants).expect("Should be OK: max allowed value");
         // Now hit the limit
-        let participants = (0..100)
+        let participants = (0..MAX_STAKEHOLDERS + 1)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            DepositDescriptor::new(participants)
-                .unwrap_err()
-                .to_string(),
-            ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
+            DepositDescriptor::new(participants).unwrap_err(),
+            ScriptCreationError::BadParameters
         );
 
         // Maximum 1-of-N
-        let managers = (0..20)
+        let managers = (0..MAX_MANAGERS)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         CpfpDescriptor::new(managers).expect("Should be OK, that's the maximum allowed value");
         // Hit the limit
-        let managers = (0..21)
+        let managers = (0..MAX_MANAGERS + 1)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            CpfpDescriptor::new(managers).unwrap_err().to_string(),
-            ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
+            CpfpDescriptor::new(managers).unwrap_err(),
+            ScriptCreationError::BadParameters
         );
 
         // Maximum non-managers for 2 managers
-        let stakeholders = (0..38)
+        let stakeholders = (0..MAX_STAKEHOLDERS)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         let managers = (0..2)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
-        let cosigners = (0..38)
+        let cosigners = (0..MAX_STAKEHOLDERS)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         UnvaultDescriptor::new(stakeholders, managers, 2, cosigners, 145).unwrap();
 
         // Now hit the limit
-        let stakeholders = (0..39)
+        let stakeholders = (0..MAX_STAKEHOLDERS + 1)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         let managers = (0..2)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
-        let cosigners = (0..39)
+        let cosigners = (0..MAX_STAKEHOLDERS + 1)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect::<Vec<DescriptorPublicKey>>();
         assert_eq!(
-            UnvaultDescriptor::new(stakeholders, managers, 2, cosigners, 32)
-                .unwrap_err()
-                .to_string(),
-            ScriptCreationError::PolicyCompilation(CompilerError::LimitsExceeded).to_string()
+            UnvaultDescriptor::new(stakeholders, managers, 2, cosigners, 32).unwrap_err(),
+            ScriptCreationError::BadParameters
         );
     }
 
@@ -1731,7 +1728,7 @@ mod tests {
         }
 
         // Awkward setups
-        let n_stks = 22;
+        let n_stks = 20;
         let stakes: Vec<DescriptorPublicKey> = (0..n_stks)
             .map(|_| get_random_pubkey(&mut rng, &secp))
             .collect();
