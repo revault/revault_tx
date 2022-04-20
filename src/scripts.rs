@@ -1463,13 +1463,12 @@ mod tests {
         // Policy compilation takes time, so just test some remarkable ones
         let configurations = [
             // Single-manager configurations
-            ((1, 1), 1),
             ((1, 1), 2),
             ((1, 1), 5),
             // Multiple-manager configurations (with threshold)
             ((2, 2), 3),
             ((3, 4), 2),
-            ((7, 7), 1),
+            ((7, 7), 2),
             ((2, 3), 8),
             // Huge configurations
             ((15, 15), 5),
@@ -1503,15 +1502,7 @@ mod tests {
                 "Unvault descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders,
             ));
-            DepositDescriptor::new(
-                managers
-                    .clone()
-                    .iter()
-                    .chain(stakeholders.iter())
-                    .cloned()
-                    .collect::<Vec<DescriptorPublicKey>>(),
-            )
-            .expect(&format!(
+            DepositDescriptor::new(stakeholders.clone()).expect(&format!(
                 "Deposit descriptors creation error with ({}, {})",
                 n_managers, n_stakeholders
             ));
