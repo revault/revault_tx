@@ -8,7 +8,7 @@ Revault-specific transactions.
 
 # Minimum Supported Rust Version
 
-This library should always compile with any combination of features on **Rust 1.43**.
+This library should always compile with any combination of features on **Rust 1.48**.
 
 
 # Contributing
