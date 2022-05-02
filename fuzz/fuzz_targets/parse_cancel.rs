@@ -50,43 +50,6 @@ fuzz_target!(|data: &[u8]| {
                 .contains("already finalized"));
         }
 
-        if tx.tx().input.len() > 1 {
-            let fb_in_index = tx
-                .psbt()
-                .inputs
-                .iter()
-                .position(|i| {
-                    i.witness_utxo
-                        .as_ref()
-                        .unwrap()
-                        .script_pubkey
-                        .is_v0_p2wpkh()
-                })
-                .unwrap();
-
-            tx.add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1)
-                .expect_err("Invalid signature"); // Invalid sighash
-            if !tx.is_finalized() {
-                assert!(tx
-                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid signature"));
-            } else {
-                assert!(tx
-                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("already finalized"));
-            }
-        } else {
-            assert!(tx
-                .add_signature(1, dummykey, dummy_sig, &SECP256K1)
-                .unwrap_err()
-                .to_string()
-                .contains("out of bounds"));
-        }
-
         // And verify the input without crashing (will likely fail though)
         tx.verify_inputs().unwrap_or_else(|_| ());
 

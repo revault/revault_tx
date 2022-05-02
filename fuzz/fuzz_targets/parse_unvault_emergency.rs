@@ -43,45 +43,10 @@ fuzz_target!(|data: &[u8]| {
                 .to_string()
                 .contains("Missing witness_script"));
             assert!(tx
-                .add_signature(unvault_in_index, dummykey, dummy_sig, &SECP256K1,)
+                .add_sig(dummykey, dummy_sig, &SECP256K1,)
                 .unwrap_err()
                 .to_string()
                 .contains("already finalized"));
-        }
-
-        if tx.tx().input.len() > 1 {
-            let fb_in_index = tx
-                .psbt()
-                .inputs
-                .iter()
-                .position(|i| {
-                    i.witness_utxo
-                        .as_ref()
-                        .unwrap()
-                        .script_pubkey
-                        .is_v0_p2wpkh()
-                })
-                .unwrap();
-
-            if !tx.is_finalized() {
-                assert!(tx
-                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Invalid signature"));
-            } else {
-                assert!(tx
-                    .add_signature(fb_in_index, dummykey, dummy_sig, &SECP256K1,)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("already finalized"));
-            }
-        } else {
-            assert!(tx
-                .add_signature(1, dummykey, dummy_sig, &SECP256K1)
-                .unwrap_err()
-                .to_string()
-                .contains("out of bounds"));
         }
 
         // And verify the input without crashing (will likely fail though)
