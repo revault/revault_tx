@@ -55,7 +55,7 @@ fixes.
 
 ## MSRV
 
-Each commit must (usually) build and pass the test on Rust `1.43`.
+Each commit must (usually) build and pass the test on Rust `1.48`.
 
 
 ## Style
