@@ -2,11 +2,8 @@
 use libfuzzer_sys::fuzz_target;
 
 use revault_tx::{
-    miniscript::bitcoin::{
-        secp256k1::{Signature, SECP256K1},
-        SigHashType,
-    },
-    transactions::{RevaultTransaction, UnvaultTransaction},
+    miniscript::bitcoin::secp256k1::{Signature, SECP256K1},
+    transactions::{RevaultPresignedTransaction, RevaultTransaction, UnvaultTransaction},
 };
 
 use std::str::FromStr;
@@ -32,8 +29,7 @@ fuzz_target!(|data: &[u8]| {
             assert!(!tx.psbt().outputs[1].bip32_derivation.is_empty());
 
             // We can compute the sighash for the first unvault input
-            tx.signature_hash(0, SigHashType::All)
-                .expect("Must be in bound as it was parsed!");
+            tx.sig_hash().expect("Must be in bound as it was parsed!");
 
             // And add a signature
             assert!(tx
@@ -44,7 +40,7 @@ fuzz_target!(|data: &[u8]| {
         } else {
             // But not if it's final
             assert!(tx
-                .signature_hash(0, SigHashType::All)
+                .sig_hash()
                 .unwrap_err()
                 .to_string()
                 .contains("Missing witness_script"));

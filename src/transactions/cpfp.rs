@@ -216,7 +216,7 @@ impl CpfpTransaction {
         &self.psbt().global.unsigned_tx
     }
 
-    pub fn fees(&self) -> u64 {
+    pub fn fees(&self) -> Amount {
         // We always set a witness_utxo in our PSBT inputs.
         utils::psbt_fees(self.psbt()).expect("Fee computation bug: overflow")
     }

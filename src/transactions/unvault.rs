@@ -2,8 +2,9 @@ use crate::{
     error::*,
     scripts::*,
     transactions::{
-        utils, CpfpableTransaction, RevaultTransaction, DUST_LIMIT, INSANE_FEES,
-        MAX_STANDARD_TX_WEIGHT, TX_VERSION, UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
+        utils, CpfpableTransaction, RevaultPresignedTransaction, RevaultTransaction,
+        DEPOSIT_MIN_SATS, INSANE_FEES, MAX_STANDARD_TX_WEIGHT, TX_LOCKTIME, TX_VERSION,
+        UNVAULT_CPFP_VALUE, UNVAULT_TX_FEERATE,
     },
     txins::*,
     txouts::*,
@@ -13,12 +14,11 @@ use miniscript::{
     bitcoin::{
         blockdata::constants::max_money,
         consensus::encode::Decodable,
-        secp256k1,
         util::psbt::{
             Global as PsbtGlobal, Input as PsbtIn, Output as PsbtOut,
             PartiallySignedTransaction as Psbt,
         },
-        Amount, Network, OutPoint, SigHashType, Transaction,
+        Amount, Network, OutPoint, Transaction,
     },
     DescriptorTrait,
 };
@@ -35,13 +35,13 @@ impl_revault_transaction!(
     UnvaultTransaction,
     doc = "The unvaulting transaction, spending a deposit and being eventually spent by a spend transaction (if not revaulted)."
 );
+impl RevaultPresignedTransaction for UnvaultTransaction {}
 impl UnvaultTransaction {
     // Internal DRY routine for creating the inner PSBT
     fn create_psbt(
         deposit_txin: DepositTxIn,
         unvault_txout: UnvaultTxOut,
         cpfp_txout: CpfpTxOut,
-        lock_time: u32,
     ) -> Psbt {
         Psbt {
             // 1 Unvault, 1 CPFP
@@ -58,7 +58,7 @@ impl UnvaultTransaction {
             global: PsbtGlobal {
                 unsigned_tx: Transaction {
                     version: TX_VERSION,
-                    lock_time,
+                    lock_time: TX_LOCKTIME,
                     input: vec![deposit_txin.unsigned_txin()],
                     output: vec![unvault_txout.into_txout(), cpfp_txout.into_txout()],
                 },
@@ -70,7 +70,6 @@ impl UnvaultTransaction {
             inputs: vec![PsbtIn {
                 witness_script: Some(deposit_txin.txout().witness_script().clone()),
                 bip32_derivation: deposit_txin.txout().bip32_derivation().clone(),
-                sighash_type: Some(SigHashType::All),
                 witness_utxo: Some(deposit_txin.into_txout().into_txout()),
                 ..PsbtIn::default()
             }],
@@ -86,7 +85,6 @@ impl UnvaultTransaction {
         deposit_input: DepositTxIn,
         unvault_descriptor: &DerivedUnvaultDescriptor,
         cpfp_descriptor: &DerivedCpfpDescriptor,
-        lock_time: u32,
     ) -> Result<UnvaultTransaction, TransactionCreationError> {
         // First, create a dummy transaction to get its weight without Witness
         let dummy_unvault_txout = UnvaultTxOut::new(Amount::from_sat(u64::MAX), unvault_descriptor);
@@ -95,7 +93,6 @@ impl UnvaultTransaction {
             deposit_input.clone(),
             dummy_unvault_txout,
             dummy_cpfp_txout,
-            lock_time,
         )
         .global
         .unsigned_tx;
@@ -122,7 +119,7 @@ impl UnvaultTransaction {
 
         // The unvault output value is then equal to the deposit value minus the fees and the CPFP.
         let deposit_value = deposit_input.txout().txout().value;
-        if fees + UNVAULT_CPFP_VALUE + DUST_LIMIT > deposit_value {
+        if fees + UNVAULT_CPFP_VALUE + DEPOSIT_MIN_SATS > deposit_value {
             return Err(TransactionCreationError::Dust);
         }
         let unvault_value = deposit_value - fees - UNVAULT_CPFP_VALUE; // Arithmetic checked above
@@ -136,7 +133,6 @@ impl UnvaultTransaction {
             deposit_input,
             unvault_txout,
             cpfp_txout,
-            lock_time,
         )))
     }
 
@@ -203,46 +199,10 @@ impl UnvaultTransaction {
         if input_count != 1 {
             return Err(PsbtValidationError::InvalidInputCount(input_count).into());
         }
-        let input = &psbt.inputs[0];
-        if input.final_script_witness.is_none() {
-            if input.sighash_type != Some(SigHashType::All) {
-                return Err(PsbtValidationError::InvalidSighashType(input.clone()).into());
-            }
-
-            if input.bip32_derivation.is_empty() {
-                return Err(PsbtValidationError::InvalidInputField(input.clone()).into());
-            }
-
-            if let Some(ref ws) = input.witness_script {
-                if ws.to_v0_p2wsh()
-                    != input
-                        .witness_utxo
-                        .as_ref()
-                        .expect("Check in sanity checks")
-                        .script_pubkey
-                {
-                    return Err(PsbtValidationError::InvalidInWitnessScript(input.clone()).into());
-                }
-            } else {
-                return Err(PsbtValidationError::MissingInWitnessScript(input.clone()).into());
-            }
-        }
 
         // NOTE: the Unvault transaction cannot get larger than MAX_STANDARD_TX_WEIGHT
 
         Ok(UnvaultTransaction(psbt))
-    }
-
-    /// Add a signature for the (single) input spending the Deposit transaction
-    pub fn add_sig<C: secp256k1::Verification>(
-        &mut self,
-        pubkey: secp256k1::PublicKey,
-        signature: secp256k1::Signature,
-        secp: &secp256k1::Secp256k1<C>,
-    ) -> Result<Option<Vec<u8>>, InputSatisfactionError> {
-        // We are only ever created with a single input
-        let input_index = 0;
-        RevaultTransaction::add_signature(self, input_index, pubkey, signature, secp)
     }
 }
 

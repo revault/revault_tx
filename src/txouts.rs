@@ -3,15 +3,15 @@
 //! Wrappers around bitcoin's TxOut to statically check Revault transactions creation and ease
 //! their PSBT management.
 
-use crate::{
-    error::TxoutCreationError,
-    scripts::{
-        DerivedCpfpDescriptor, DerivedDepositDescriptor, DerivedUnvaultDescriptor, EmergencyAddress,
-    },
+use crate::scripts::{
+    DerivedCpfpDescriptor, DerivedDepositDescriptor, DerivedUnvaultDescriptor, EmergencyAddress,
 };
 
 use miniscript::{
-    bitcoin::{util::bip32, Amount, PublicKey, Script, TxOut},
+    bitcoin::{
+        util::{bip32, psbt::Output as PsbtOut},
+        Amount, PublicKey, Script, TxOut,
+    },
     DescriptorTrait,
 };
 
@@ -27,6 +27,9 @@ pub trait RevaultTxOut: fmt::Debug + Clone + PartialEq {
 
     /// Get the actual inner txout
     fn into_txout(self) -> TxOut;
+
+    /// Create a Psbt output for this txout
+    fn psbtout(&self) -> PsbtOut;
 }
 
 /// An output of a Revault transaction that we manage "internally", ie for which we have the
@@ -73,6 +76,13 @@ macro_rules! implem_revault_txout {
 
             fn into_txout(self) -> TxOut {
                 self.txout
+            }
+
+            fn psbtout(&self) -> PsbtOut {
+                PsbtOut {
+                    bip32_derivation: self.bip32_derivation().clone(),
+                    ..PsbtOut::default()
+                }
             }
         }
 
@@ -170,6 +180,10 @@ impl RevaultTxOut for EmergencyTxOut {
     fn into_txout(self) -> TxOut {
         self.0
     }
+
+    fn psbtout(&self) -> PsbtOut {
+        PsbtOut::default()
+    }
 }
 
 implem_revault_txout!(
@@ -200,31 +214,6 @@ impl CpfpTxOut {
     }
 }
 
-/// The output spent by the revocation transactions to bump their feerate
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct FeeBumpTxOut(TxOut);
-impl FeeBumpTxOut {
-    /// Create a new FeeBumpTxOut, note that it's managed externally so we don't need a witness
-    /// Script.
-    pub fn new(txout: TxOut) -> Result<FeeBumpTxOut, TxoutCreationError> {
-        if !txout.script_pubkey.is_v0_p2wpkh() {
-            return Err(TxoutCreationError::InvalidScriptPubkeyType);
-        }
-
-        Ok(FeeBumpTxOut(txout))
-    }
-}
-
-impl RevaultTxOut for FeeBumpTxOut {
-    fn txout(&self) -> &TxOut {
-        &self.0
-    }
-
-    fn into_txout(self) -> TxOut {
-        self.0
-    }
-}
-
 /// A [Spend](crate::transactions::SpendTransaction) output can be either a change one (DepositTxOut)
 /// or a payee-controlled one (ExternalTxOut).
 #[derive(Debug, Clone, PartialEq)]
@@ -243,5 +232,9 @@ impl RevaultTxOut for SpendTxOut {
 
     fn into_txout(self) -> TxOut {
         self.0
+    }
+
+    fn psbtout(&self) -> PsbtOut {
+        PsbtOut::default()
     }
 }

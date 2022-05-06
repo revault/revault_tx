@@ -101,6 +101,8 @@ pub enum TransactionCreationError {
     MissingCpfpTxOut,
     /// Insufficient funds (used in Cpfp)
     InsufficientFunds,
+    /// Would result in negative fees or create a too small output
+    FeerateTooHigh,
 }
 
 impl fmt::Display for TransactionCreationError {
@@ -128,6 +130,11 @@ impl fmt::Display for TransactionCreationError {
                 "Attempting to create a CPFP transaction for a tx without a CPFP output"
             ),
             Self::InsufficientFunds => write!(f, "Insufficient funds"),
+            Self::FeerateTooHigh => write!(
+                f,
+                "Feerate too high, can't afford without creating a too small \
+                 output or having negative fees"
+            ),
         }
     }
 }
@@ -181,13 +188,11 @@ pub enum PsbtValidationError {
     InvalidOutputCount(usize),
     DuplicatedInput,
     MissingRevocationInput,
-    MissingFeeBumpingInput,
     MissingWitnessUtxo(PsbtInput),
     MissingInWitnessScript(PsbtInput),
     InvalidInWitnessScript(PsbtInput),
     MissingOutWitnessScript(PsbtOutput),
     InvalidOutWitnessScript(PsbtOutput),
-    InvalidSighashType(PsbtInput),
     InvalidInputField(PsbtInput),
     InvalidOutputField(PsbtOutput),
     InvalidPrevoutType(PsbtInput),
@@ -217,9 +222,6 @@ impl fmt::Display for PsbtValidationError {
             Self::MissingRevocationInput => {
                 write!(f, "Missing P2WSH input for revocation transaction")
             }
-            Self::MissingFeeBumpingInput => {
-                write!(f, "Missing P2WSH input for feebumping transaction")
-            }
             Self::MissingWitnessUtxo(i) => write!(f, "Missing witness utxo for input '{:#?}'", i),
             Self::MissingInWitnessScript(i) => {
                 write!(f, "Missing witness script for input '{:#?}'", i)
@@ -233,7 +235,6 @@ impl fmt::Display for PsbtValidationError {
             Self::InvalidOutWitnessScript(o) => {
                 write!(f, "Invalid witness script for output '{:#?}'", o)
             }
-            Self::InvalidSighashType(i) => write!(f, "Invalid sighash type for input: '{:#?}'", i),
             Self::InvalidInputField(i) => write!(f, "Invalid field in input: '{:#?}'", i),
             Self::InvalidOutputField(o) => write!(f, "Invalid field in output: '{:#?}'", o),
             Self::InvalidPrevoutType(i) => write!(
