@@ -1,6 +1,6 @@
 [package]
 name = "revault_tx"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["Antoine Poinsot <darosior@protonmail.com>"]
 edition = "2018"
 rust-version = "1.48"
